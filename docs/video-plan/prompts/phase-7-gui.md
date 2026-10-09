@@ -22,11 +22,18 @@ analysis/explain commands) with live logs and cancel.
    combinations selectable (extend `desktop/config.py` rules); temporal
    sampling, augmentation, test clips, optical flow options; validation
    scheme (holdout / k-fold / bootstrap). Equivalent CLI command shown, as
-   today.
+   today. Also: motion source (Farneback / codec motion vectors / RAFT),
+   motion-guided sampling, "extract snippet features" step with progress and
+   cache status, and a **localisation** task (CtxPL head on cached features)
+   with its context-prototype / HNCP options explained in plain language
+   ("learns what the background of each action looks like so it is not
+   mistaken for the action"). Show the device (GPU name or CPU).
 3. **New "Analyse video" page:** pick a trained run + a (long) video →
    run timeline analysis → video player with a **timeline bar** coloured by
    predicted class, confidence and expected-error band underneath; click a
-   segment to jump there; list of detected events; export CSV/JSON.
+   segment to jump there; list of detected events; export CSV/JSON. Works for
+   both the sliding-window timeline and the localisation model (CAS curve per
+   class, detected action segments with scores).
    Toggle saliency overlay playback and the temporal-importance curve
    (from Phase 6 outputs).
 4. **Embedding explorer:** 2D PCA/LDA scatter of clip embeddings coloured by

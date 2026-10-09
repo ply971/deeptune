@@ -27,6 +27,17 @@ the explanation is meaningful rather than decorative.
    the temporal importance curve. CLI: `infer.py ... --explain --explain_out DIR`
    and an `explain` call on the timeline (top events only, to limit cost).
 4. Write explanations next to predictions (paths in `predictions.csv`).
+5. **Background-reliance score** (`explain/background_reliance.py`) — does the
+   model use the action or the context?
+   - pixel level: fraction of saliency mass inside the ground-truth action
+     mask vs its area fraction (Phase 2 JSON masks);
+   - temporal level (localisation): fraction of CAS / attention mass inside
+     the true segments vs outside, on the Phase 2 `untrimmed` task;
+   - scene-bias test: accuracy gap between the biased and unbiased splits of
+     `scene_bias`.
+   Report all three for: a plain classifier, the CtxPL head with context
+   prototypes, and with `--no_context_protos`. This is the measured answer to
+   "does modelling context make the model rely less on background?".
 
 ## Tests / assurance checks
 - **Localisation check on the Phase 2 benchmark:** using the ground-truth blob
@@ -40,6 +51,9 @@ the explanation is meaningful rather than decorative.
   4–6 gives peak importance exactly there.
 - Shapes/ranges: maps in [0,1], same T/H/W as the input; rendering produces a
   readable video with the right frame count.
+- Background-reliance score unit tests: a saliency map exactly equal to the
+  mask scores the maximum, a uniform map scores the area fraction, a map on
+  the background only scores 0; same for CAS vs segments.
 
 ## Assurance
 Check your work, finish it completely, add all relevant assurance checks, and

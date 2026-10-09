@@ -36,6 +36,20 @@ well it will do on data it has never seen — overall *and* per prediction.
    label (+ group) as a df-analyze-ready CSV with consistent split
    identifiers, so classical models, feature selection and stacking can be run
    on video embeddings. Document the command to run df-analyze on it.
+6. **Localisation metrics** (`evaluators/video/localization_report.py`):
+   ActivityNet-style detection mAP at tIoU 0.1–0.9 (report avg 0.1–0.5,
+   0.1–0.7, all — the THUMOS'14 convention CtxPL uses), per-class AP,
+   classification mAP over video-level scores, and mean boundary error.
+   Must agree with the ActivityNet reference implementation
+   (`compute_average_precision_detection` + `interpolated_prec_rec`, as used
+   in CtxPL `eval/eval_detection.py`) on fixtures. Replaces the minimal
+   version from Phase 4 if one was added.
+7. **Evidential uncertainty as an error estimate:** CtxPL produces a Dirichlet
+   uncertainty per snippet and per video. Validate it like the error model in
+   task 4: does stated uncertainty track observed error (video-level label
+   errors, and segment false positives) per decile on held-out data? Report
+   honestly whether it is calibrated, and feed it into `expected_error` for
+   localisation outputs if it is.
 
 ## Tests
 - Metrics match scikit-learn exactly on fixed hand-made predictions
@@ -48,6 +62,10 @@ well it will do on data it has never seen — overall *and* per prediction.
 - Error model: on synthetic data where true error rate depends on confidence,
   stated vs observed error per decile within tolerance.
 - Old runs without these files still render in Results (no crash).
+- Localisation mAP: matches the ActivityNet reference on hand-made
+  prediction/ground-truth tables, including duplicate detections (only one
+  TP per ground truth), predictions in videos with no ground truth, empty
+  prediction sets, and segments that touch but do not overlap.
 
 ## Assurance
 Check your work, finish it completely, add all relevant assurance checks, and

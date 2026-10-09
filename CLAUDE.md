@@ -12,10 +12,26 @@ r2plus1d_18, mvit_v2_s, swin3d_t/s/b), PEFT/LoRA, embeddings, inference, and a
 desktop GUI with MP4 import and preview.
 
 The term project turns this into a **video analysis platform**: scalable video
-data handling, the full temporal-fusion taxonomy (single frame / late / early /
-slow fusion, two-stream with optical flow, CNN+RNN, temporal transformer),
-long-video timeline analysis, unsupervised analysis, rigorous evaluation,
-explainability, and a GUI to drive all of it.
+data handling (decode once, extract features once, codec motion vectors), the
+full temporal-fusion taxonomy (single frame / late / early / slow fusion, TSM,
+two-stream, CNN+RNN, temporal transformer), long-video timeline analysis,
+**weakly-supervised action localisation with context (background) prototypes
+— a DeepTune port of CtxPL** (`github.com/moayadeldin/CtxPL`), unsupervised
+analysis, rigorous evaluation, explainability, and a GUI to drive all of it.
+
+## Hardware
+Development machine: NVIDIA RTX 5060 Laptop GPU, 8 GB (Blackwell — needs a
+CUDA ≥ 12.8 torch build; see PROGRESS.md for the exact install command once
+Phase 0 records it). Use the GPU for all training, feature extraction and
+experiments. **Unit tests and CI must still pass on CPU only**: never require
+CUDA in a test; skip GPU-only paths cleanly with a reason.
+
+## CtxPL port rules
+- Re-implement, don't vendor. Credit Hussain & Gondra (CRV 2026, MIT) in
+  docstrings and README.
+- Keep module names/shapes compatible with the released checkpoint.
+- Every deviation from the public code goes in `docs/video-plan/ctxpl-port.md`
+  with the reason.
 
 ## How we work (non-negotiable)
 1. **One phase per session.** Work only on the phase you were given. If you
@@ -46,6 +62,7 @@ explainability, and a GUI to drive all of it.
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --manifest
 .venv\Scripts\python.exe scripts\smoke_video.py --model r3d_18
 .venv\Scripts\python.exe desktop\app.py                 # GUI
+.venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"  # GPU check
 ```
 Once Phase 0 adds it, `scripts\check.ps1` runs all of the above in one go.
 
