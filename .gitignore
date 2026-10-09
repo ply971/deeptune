@@ -40,3 +40,9 @@ deeptune/
 # version-specific, never meant to be committed.
 packaging/installer-dist/
 packaging/build.log
+
+# Sphinx build output -- Read the Docs builds the docs itself (readthedocs.yaml).
+docs/_build/
+docs/build/
+docs/source/_build/
+docs/source/build/
