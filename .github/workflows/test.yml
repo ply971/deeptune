@@ -2,9 +2,9 @@ name: deeptune test
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, GUI, development, video-analysis ]
   pull_request:
-    branches: [ main ]
+    branches: [ master, GUI, development, video-analysis ]
   workflow_dispatch:
 
 jobs:
@@ -13,26 +13,36 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v7
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v7
       with:
         python-version: '3.12'
+        cache: pip
+        cache-dependency-path: requirements.txt
 
     - name: Install dependencies
+      # CPU-only torch wheels (same versions as requirements.txt) are far
+      # smaller than the default CUDA builds and are all CI needs.
       run: |
         python -m pip install --upgrade pip
+        pip install torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
         pip install -r requirements.txt
         pip install pytest
 
-    - name: Run tests
+    - name: Check (pip check + full test suite)
       env:
         OMP_NUM_THREADS: '2'
         MKL_NUM_THREADS: '2'
-      run: |
-        python -m pip check
-        python -m pytest tests --disable-warnings -q
+      run: bash scripts/check.sh --quick
+
+    - name: Upload test report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: junit
+        path: .artifacts/check/
 
     - name: Build package
       run: python -m pip wheel . --no-deps --wheel-dir dist

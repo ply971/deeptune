@@ -1,6 +1,6 @@
 # *DeepTune*
 
-[![deeptune tests](https://github.com/moayadeldin/deeptune/actions/workflows/test.yml/badge.svg)](https://github.com/moayadeldin/deeptune/actions/workflows/test.yml)
+[![deeptune tests](https://github.com/ply971/deeptune/actions/workflows/test.yml/badge.svg)](https://github.com/ply971/deeptune/actions/workflows/test.yml)
 [![Documentation Status](https://readthedocs.org/projects/deeptune/badge/?version=latest)](https://deeptune.readthedocs.io/en/latest/)
 
 ***DeepTune*** is a full compatible library to automate Computer Vision, Natural Language Processing, Tabular, Time Series, and Video state-of-the-art deep learning algorithms for cross-modal applications on image, text, tabular, time series, and video datasets. The library is designed for use in different applied machine learning domains, including but not limited to medical imaging, natural language understanding, time series analysis, providing users with powerful, ready-to-use CLI tool that unlock the full potential of their case studies through just a one simple command.
