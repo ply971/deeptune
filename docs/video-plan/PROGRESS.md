@@ -61,6 +61,12 @@ Keep entries short and factual. This is the handoff between sessions.
     (G15: `options.py` sets `NUM_WORKERS = min(8, cpu/2)` on CUDA; Windows spawns
     each worker and re-imports torch). Same run passes on CPU (`NUM_WORKERS = 0`).
     Not fixed here (Phase 0 = no behaviour changes) → Phase 1 task.
+    Confirmed slow, not broken: re-run with `--timeout 1800` (and
+    `PYTHONIOENCODING=utf-8`) → **passed in 811 s with 33 worker-process
+    start-ups** (train, eval, embed all ok). Side note: running a smoke script
+    with stdout redirected to a file under the default cp1252 encoding crashes on
+    tqdm's block characters (`UnicodeEncodeError`) — set `PYTHONIOENCODING=utf-8`
+    when capturing output (check.ps1 itself was unaffected).
   - 3 warnings (both platforms): `torch.jit.script` deprecation; pandas
     mixed-type column names in `test_desktop_config` (×2).
 - Audit (G1–G15 in PLAN.md): G1–G7, G9–G13 confirmed. G8 corrected: grouped
