@@ -20,9 +20,12 @@ two-stream, CNN+RNN, temporal transformer), long-video timeline analysis,
 analysis, rigorous evaluation, explainability, and a GUI to drive all of it.
 
 ## Hardware
-Development machine: NVIDIA RTX 5060 Laptop GPU, 8 GB (Blackwell — needs a
-CUDA ≥ 12.8 torch build; see PROGRESS.md for the exact install command once
-Phase 0 records it). Use the GPU for all training, feature extraction and
+Development machine: NVIDIA RTX 5060 Laptop GPU, 8 GB (Blackwell, sm_120).
+`.venv` has `torch 2.14.0+cu130` / `torchvision 0.29.0+cu130` (installed in
+Phase 0; the PyPI default on Windows is CPU-only). Reinstall with:
+`.venv\Scripts\python.exe -m pip install "torch==2.14.0+cu130" "torchvision==0.29.0+cu130" --index-url https://download.pytorch.org/whl/cu130`
+`options.get_device()` picks CUDA automatically; with CUDA it also enables
+DataLoader workers (`NUM_WORKERS = min(8, cpu/2)`) and pinned memory. Use the GPU for all training, feature extraction and
 experiments. **Unit tests and CI must still pass on CPU only**: never require
 CUDA in a test; skip GPU-only paths cleanly with a reason.
 
@@ -64,7 +67,10 @@ CUDA in a test; skip GPU-only paths cleanly with a reason.
 .venv\Scripts\python.exe desktop\app.py                 # GUI
 .venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"  # GPU check
 ```
-Once Phase 0 adds it, `scripts\check.ps1` runs all of the above in one go.
+`scripts\check.ps1` (Linux/CI: `scripts/check.sh`) runs pip check → full pytest
+(JUnit in `.artifacts\check\`) → both video smoke scripts, and prints one
+`CHECK PASS|FAIL | ...` line. `-Quick` / `--quick` skips the smoke runs.
+To mimic CI on this machine, hide the GPU: `$env:CUDA_VISIBLE_DEVICES=''`.
 
 ## Architecture rules
 - Video clips flow through the code as tensors shaped **[B, T, C, H, W]**.

@@ -6,7 +6,7 @@ Keep entries short and factual. This is the handoff between sessions.
 ## Status board
 | Phase | Status | Tests (passed/total) | Commit |
 |---|---|---|---|
-| 0 Foundation & GPU setup | not started | baseline: ? | |
+| 0 Foundation & GPU setup | done (1 known GPU smoke timeout → Phase 1) | 173/173 CPU and GPU | `video-analysis` |
 | 1 Data layer + MVs + feature cache | not started | | |
 | 2 Motion / untrimmed / scene-bias benchmarks | not started | | |
 | 3 Temporal models | not started | | |
@@ -26,6 +26,54 @@ Keep entries short and factual. This is the handoff between sessions.
 - Problems / open questions:
 - Next step:
 -->
+
+### 2026-10-10 — Phase 0, foundation & GPU setup
+- Done (branch `video-analysis` from `GUI`):
+  - CI: triggers on master/GUI/development/video-analysis + manual; checkout,
+    setup-python and upload-artifact v7; pip cache; CPU-only torch 2.14.0 /
+    torchvision 0.29.0 from the PyTorch CPU index; runs `scripts/check.sh --quick`;
+    uploads the JUnit report; wheel build kept. README badge → ply971/deeptune.
+    YAML validated with PyYAML; `act` not installed, so the first real run is on push.
+  - Hygiene: 424 tracked build files untracked (`docs/_build` 92, `docs/build` 117,
+    `docs/source/_build` 118, `docs/source/build` 97) and ignored. Nothing linked
+    into them; demo videos stay in `docs/source/_static`.
+  - `scripts/check.ps1` / `scripts/check.sh`: pip check → pytest (JUnit in
+    `.artifacts/check/`, `--durations=10`) → two video smoke runs (`-Quick` /
+    `--quick` skips) → one `CHECK PASS|FAIL | …` line with the device.
+  - GPU: `.venv` switched from `torch 2.14.0+cpu` to `torch 2.14.0+cu130`,
+    `torchvision 0.29.0+cu130` (index `https://download.pytorch.org/whl/cu130`).
+    Verified: RTX 5060 Laptop GPU, capability (12, 0), arch list includes sm_120,
+    8.5 GB, cuDNN 92400; 2048² matmul max |GPU−CPU| = 5.0e-4; conv fwd/bwd finite;
+    r3d_18 fwd/bwd; bf16 autocast. `pip check` clean.
+- Baseline (Python 3.12.10, torch 2.14.0, torchvision 0.29.0):
+  - CPU (`+cpu`, unchanged code): **173 passed, 3 warnings in 433.51s**.
+    Slowest: test_vit peft init 115.7s, vit init 52.9s, vit peft reg 52.7s,
+    vit reg 27.9s, densenet peft 14.8s, vgg peft 12.8s, vgg peft reg 8.8s,
+    swin 8.2s, swin peft 7.6s, densenet peft reg 7.2s.
+  - CPU `check.ps1` (full): CHECK PASS — pytest 173 passed; smoke resnet18
+    --manifest ok; smoke r3d_18 ok. That pytest took 5049s because one test
+    (`test_vit_peft_model_regression_mode_initialization`, dummy ViT, no network)
+    took 4766s vs ~53s elsewhere — most likely the laptop slept; not reproduced.
+  - GPU (`+cu130`) `check.ps1` (full): **CHECK FAIL** — pip check ok; pytest
+    **173 passed, 3 warnings in 431.14s**; smoke resnet18 --manifest ok;
+    **smoke r3d_18 FAIL: TimeoutError, exceeded 600 s** during the eval/embed
+    step. The log shows a new DataLoader worker process starting every 15–40 s
+    (G15: `options.py` sets `NUM_WORKERS = min(8, cpu/2)` on CUDA; Windows spawns
+    each worker and re-imports torch). Same run passes on CPU (`NUM_WORKERS = 0`).
+    Not fixed here (Phase 0 = no behaviour changes) → Phase 1 task.
+  - 3 warnings (both platforms): `torch.jit.script` deprecation; pandas
+    mixed-type column names in `test_desktop_config` (×2).
+- Audit (G1–G15 in PLAN.md): G1–G7, G9–G13 confirmed. G8 corrected: grouped
+  holdout splits already exist (`--grouper` → StratifiedGroupKFold, also for
+  video). New: G14 fixed `Resize((224,224))` (no augmentation, aspect squashed),
+  G15 worker processes on Windows + CUDA. Device is picked automatically
+  (`options.get_device()`: cuda → mps → cpu). `desktop.app` imports without torch
+  (checked: `'torch' in sys.modules` is False).
+- Decisions: CI uses CPU wheels; local dev uses cu130; no library code touched.
+- Problems / open: GPU r3d_18 smoke timeout (above). First CI run happens on the
+  first push (not pushed yet — needs approval).
+- Next step: Phase 1 in a fresh session; include fixing G15 (worker defaults on
+  Windows / persistent workers) so `check.ps1` passes on the GPU.
 
 ### 2026-10-10 — Planning (before Phase 0)
 - Done: plan copied into the repo (commit `docs: add video analysis term plan`),

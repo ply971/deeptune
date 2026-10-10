@@ -24,6 +24,16 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[test]"
 ```
 
+On Windows, the default `torch` wheel is CPU-only. To train on an NVIDIA GPU, replace
+it with the CUDA build of the same versions (CUDA 13.0 also covers RTX 50-series / Blackwell cards):
+
+```powershell
+.venv\Scripts\python.exe -m pip install "torch==2.14.0+cu130" "torchvision==0.29.0+cu130" --index-url https://download.pytorch.org/whl/cu130
+.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+DeepTune picks the GPU automatically when one is available.
+
 Prefer a graphical interface over the command line? Run:
 
 ```powershell
@@ -33,7 +43,8 @@ Prefer a graphical interface over the command line? Run:
 to pick a modality and dataset, choose a model and its hyperparameters, launch the run, and browse results, all without typing CLI flags. The desktop app includes saved settings, automatic full logs, bounded background previews, cancellation, and metrics CSV export. See [desktop/README.md](desktop/README.md) for details and repeatable video checks.
 
 The installed commands are `deeptune` and `deeptune-desktop`. Run automated checks
-with `.venv\Scripts\python.exe -m pytest tests -q`.
+with `.venv\Scripts\python.exe -m pytest tests -q`, or everything at once (pip check,
+tests, video smoke runs) with `scripts\check.ps1` (`-Quick` skips the smoke runs).
 
 Don't want to set up Python at all? See [packaging/README.md](packaging/README.md)
 for building `DeepTune-Setup.exe`, a standalone Windows installer of the desktop

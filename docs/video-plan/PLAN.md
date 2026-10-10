@@ -38,12 +38,14 @@ Blackwell). All training/experiments use it. CI and unit tests stay CPU-only.
 | G5 | Attention pooling weights **class logits**, not embeddings; embeddings are always mean-pooled | Attention can't learn much; temporal information is discarded |
 | G6 | Only 2 of the 4 fusion strategies on the *Learning from Video* slide exist in practice (frame pooling ≈ late fusion of predictions; 3D ≈ slow fusion). No single-frame baseline, early fusion, two-stream/optical flow, or recurrent/transformer temporal head | The core idea of the slide — *what you predict is in the motion* — isn't testable yet |
 | G7 | Task = whole-clip label only | No timeline, event detection, action localisation, anomaly detection or clustering of videos |
-| G8 | Evaluation is a single 70/10/20 holdout | No k-fold / bootstrap / per-prediction error estimate; no group-aware splits for "many clips from the same source video/person" (leakage) |
+| G8 | Evaluation is a single 70/10/20 holdout. *(Phase 0 audit: grouped holdout splits already exist via `--grouper` → `StratifiedGroupKFold` in `handlers/split_dataset.py`, including for video.)* | No k-fold / bootstrap / per-prediction error estimate |
 | G9 | No explainability for video | Can't show *where* and *when* the model looked |
 | G10 | Verification of video so far is on random generated clips ("execution, not accuracy") | Nothing yet proves a model actually learns motion |
 | G11 | The project `.venv` has `torch 2.14.0+cpu` although the machine has an RTX 5060 GPU | Every run so far is CPU-only; GPU is unused |
 | G12 | Every epoch decodes pixels again; there is no "extract features once" path and no cheap motion source (optical flow would be computed per sample) | Training cost is dominated by decoding/flow, not learning |
 | G13 | Nothing measures whether a model uses the **action** or the **background/scene** | Video models are known to classify by scene context; results could be right for the wrong reason |
+| G14 | 2D frame path uses one fixed transform `Resize((224,224))` (helpers.py): no augmentation at all, and non-square/portrait video is squashed | Distorted inputs; nothing to regularise training |
+| G15 | On CUDA, `options.py` turns on `NUM_WORKERS = min(8, cpu/2)`; on Windows each worker process gets a copy of a dataset that holds every clip's bytes | RAM multiplies with workers once the GPU is used |
 
 ---
 

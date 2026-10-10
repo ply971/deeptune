@@ -71,8 +71,14 @@ each to a temp file per `__getitem__`, and seeks with OpenCV
 10. **Robustness:** clear errors for unreadable files, zero-length videos,
     variable-fps clips, very short clips (pad by repeating last frame,
     logged), mixed resolutions, portrait videos.
-11. **GPU-aware loading:** `pin_memory` + `non_blocking` transfers when CUDA is
-    used; worker count default sensible on Windows.
+11. **GPU-aware loading (fixes G15):** `pin_memory` + `non_blocking` transfers
+    when CUDA is used. Phase 0 found that on Windows + CUDA, `options.py` starts
+    `min(8, cpu/2)` DataLoader workers, each spawned process re-imports torch
+    (15–40 s each), and the r3d_18 smoke run times out at 600 s in eval/embed
+    (passes on CPU). Make worker count configurable (`--num_workers`), choose a
+    Windows-sensible default from the benchmark, keep workers alive across
+    epochs/loaders where possible, and make sure workers don't receive a copy of
+    every clip's bytes. Done when `scripts\check.ps1` passes on the GPU.
 12. Save every new option via `args.save_args` so inference and the GUI Test
     page rebuild the same pipeline.
 
