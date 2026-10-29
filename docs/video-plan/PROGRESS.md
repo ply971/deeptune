@@ -27,6 +27,24 @@ Keep entries short and factual. This is the handoff between sessions.
 - Next step:
 -->
 
+### 2026-10-21 — Project update 1: slides + demo (no phase work, no code changes)
+- Done: a 16-slide deck for the first in-class update (GUI-branch video work, ML theory,
+  results, roadmap). A class demo kit outside the repo in `C:\Users\Ahmed Magdy\deeptune-demo`:
+  the UCF101 10-class subset (HF `sayakpaul/ucf101-subset`, 405 clips), a manifest with
+  a `group` column (class + UCF101 gNN), 75 test clips whose class-groups never appear in training,
+  and an R3D-18 run trained through `deeptune.py` (frozen backbone, 16 frames, 5 epochs,
+  lr 1e-3, `--grouper group`, CPU, 11 min).
+- Results (first real-data run): grouped split with 155/21/44 groups and no group shared between splits;
+  holdout 66/66; unseen test via the Test-page code path (`desktop.config` + `runner.start_infer_run`)
+  74/75 = 98.7 %, the only error ApplyEyeMakeup→ApplyLipstick at 0.57 confidence. These classes
+  overlap Kinetics-400 and are mostly single-frame separable, so this shows transfer works,
+  not motion understanding (Phase 2's job).
+- Problem found: in Windows PowerShell 5.1, `$env:CUDA_VISIBLE_DEVICES=''` removes the
+  variable, so the GPU stays visible and 8 workers spawn (G15). Use `'-1'`. CLAUDE.md's
+  "mimic CI" tip still shows `''`; it should be corrected.
+- Tests: suite not run (no code touched).
+- Next step: Phase 1, unchanged.
+
 ### 2026-10-10 — Phase 0, foundation & GPU setup
 - Done (branch `video-analysis` from `GUI`):
   - CI: triggers on master/GUI/development/video-analysis + manual; checkout,
