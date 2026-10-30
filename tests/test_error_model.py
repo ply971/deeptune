@@ -89,8 +89,8 @@ def test_stated_error_matches_observed_per_decile_on_held_out_data():
     order = np.argsort(stated, kind='mergesort')
     truth_gaps = np.array([abs(stated[idx].mean() - test_oracle[idx].mean())
                            for idx in np.array_split(order, 10)])
-    assert truth_gaps.max() < 0.06, truth_gaps
-    assert truth_gaps.mean() < 0.02, truth_gaps
+    assert truth_gaps.max() < 0.04, truth_gaps
+    assert truth_gaps.mean() < 0.015, truth_gaps
     # Against observed outcomes, it may lose only a little calibration
     # relative to the oracle itself on the same held-out draws.
     oracle = calibration_table(test_oracle, test_wrong, n_bins=10)

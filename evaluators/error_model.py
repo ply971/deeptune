@@ -64,7 +64,7 @@ CALIBRATION_STEM = 'error_calibration'
 
 MIN_FIT_SAMPLES = 30
 MIN_OUTCOME_COUNT = 5
-PRIOR_STRENGTH = 2.0
+PRIOR_STRENGTH = 0.5  # tuned on held-out synthetic checks, not the test fixture (A4 report, follow-ups)
 LOGISTIC_L2 = 1.0
 
 CLASSIFICATION_FEATURES = ('max_prob', 'margin', 'entropy')
