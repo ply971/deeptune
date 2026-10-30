@@ -70,7 +70,7 @@ CUDA in a test; skip GPU-only paths cleanly with a reason.
 `scripts\check.ps1` (Linux/CI: `scripts/check.sh`) runs pip check → full pytest
 (JUnit in `.artifacts\check\`) → both video smoke scripts, and prints one
 `CHECK PASS|FAIL | ...` line. `-Quick` / `--quick` skips the smoke runs.
-To mimic CI on this machine, hide the GPU: `$env:CUDA_VISIBLE_DEVICES=''`.
+To mimic CI on this machine, hide the GPU: `$env:CUDA_VISIBLE_DEVICES='-1'` (on PowerShell 5.1, `''` deletes the variable and leaves the GPU visible).
 
 ## Architecture rules
 - Video clips flow through the code as tensors shaped **[B, T, C, H, W]**.

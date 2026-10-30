@@ -8,7 +8,7 @@ Keep entries short and factual. This is the handoff between sessions.
 |---|---|---|---|
 | 0 Foundation & GPU setup | done (1 known GPU smoke timeout → Phase 1) | 173/173 CPU and GPU | `video-analysis` |
 | 1 Data layer + MVs + feature cache | tasks 1–6, 9–12 merged (A2); 7–8 feature cache = B1 (Wave 2) | 414 passed, 3 skipped (targeted, CPU) | `966a5c1` |
-| 2 Motion / untrimmed / scene-bias benchmarks | merged (A3); GPU checks pending (fine-tuned single_frame, lossless codec) | full suite 506 passed, 3 skipped | `5bf2588` |
+| 2 Motion / untrimmed / scene-bias benchmarks | merged (A3); fine-tuned single_frame and lossless checks done on the GPU (one seed) | full suite 506 passed, 3 skipped (CPU) | `5bf2588` |
 | + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
 | 3 Temporal models | not started | | |
 | 4 Timeline + CtxPL localisation + unsupervised | not started | | |
@@ -18,6 +18,28 @@ Keep entries short and factual. This is the handoff between sessions.
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
 
 ## Session log
+
+### 2026-10-30 — Wave 2 start: GPU checks
+- **`scripts\check.ps1` on the GPU: `CHECK FAIL`.**
+  - pip check ok. All three smoke runs ok. Total 353 s. The old r3d_18 smoke timeout (G15) is gone.
+  - pytest: `1 failed, 505 passed, 3 skipped, 30 warnings in 295.66s`.
+  - The failure is `tests/test_video_followups.py::test_trainer_fits_the_error_model_on_multi_clip_probabilities`. After `Trainer` moves the model to `cuda:0`, the test's hand refit passes CPU tensors. It fails with the GPU visible and passes on CPU.
+  - The test is unchanged, per CLAUDE.md, and awaits the user's OK. A scratch copy with `model.cpu().eval()` passes on the GPU (`1 passed`), so the production fit is unaffected.
+- **`scripts\bench_video_io.py --clips 200 --nvdec`** (generated clips: H.264, 112 px, 64 frames):
+  - 8 frames, uniform: PyAV 60.9 clips/s, OpenCV 54.0. Real 1080p files: PyAV 1.8 clips/s, OpenCV 1.0.
+  - PyAV + NVDEC, all 64 frames: 10.4 clips/s. There is no software all-frames row, so this says nothing about an NVDEC speed-up. TorchCodec is not installed.
+  - Dataset `__getitem__`: old 42.3 clips/s, new bytes 77.5, new paths 75.3. Worker pickle: 2.92 MB falls to 4.6 kB.
+  - Motion field, 8 frames: codec 12.8 ms/clip vs Farneback 21.7 (H.264); 11.1 vs 17.8 (MPEG-4).
+  - DataLoader epoch, 200 clips: workers 0 / 1 / 2 = 2.68 / 4.69 / 4.28 s. On clips this cheap, worker start-up costs more than it saves.
+- **`scripts\smoke_track.py --save_video` on the GPU: PASS.** Grounding DINO and OWLv2 each gave `red square=1, blue circle=1`, each track covering all 48 frames, in 28.5 s and 9.6 s excluding model loading and download. This is a two-shape synthetic clip, so it proves plumbing, not real-video accuracy.
+- **Fine-tuned single-frame adversary (V-022, V-038): at chance on all three tasks**, with and without codec artefacts. The table, the controls and the limits are in `docs/video-plan/benchmark.md`, and `scripts/check_single_frame_adversary.py` reproduces them.
+- **Bugs found, assigned to B2:**
+  - OpenCV silently writes H.264 for FourCCs it can't encode (seen with FFV1, ffv1, `png `, HFYU, I420, RGBA), while `dataset.json` records the requested codec.
+  - The runner's `flow_probe` uses mean flow on classification tasks, so it can't separate periodic (0.5175), although the flow summary reaches 1.000 in the honesty table.
+- **Decisions:**
+  - `trackers` is not installed: the user's go-ahead covered the GPU checks and Wave 2, and this was a separate OK.
+  - New user request: an Analyse Video workspace (PLAN.md 4b, steps V1a–V1e). V1a joins Wave 2.
+- **Next:** builders T1, B1, B2, then V1a, B3, R1, R2, P-105, P-106, P-108 as slots free; the Scout also picks V1d's model.
 
 ### 2026-10-30 — Wave 1 CLOSED
 - **Merged:**

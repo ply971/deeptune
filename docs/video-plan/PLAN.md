@@ -243,6 +243,23 @@ pose estimation, detection and segmentation beyond classification.
 Stretch (cut first if time is short): token merging, RAFT,
 SAM 3 backend, the DeepTune-feature THUMOS run.
 
+### Analyse Video workspace (user request, 2026-10-30)
+In the desktop app, the user picks a model they trained, gives it a video, and
+can ask about it, track, count and segment. A clip classifier can only answer
+with its own classes, so each action uses the model able to do it. The page
+says which model produced each result. The GUI stays torch-free and launches
+each action as a subprocess.
+| Step | What the user gets | Model used | Depends on | Placement |
+|---|---|---|---|---|
+| V1a | Pick a trained run + a video: prediction and `expected_error`. Type a prompt: tracked overlay video and per-prompt counts | the trained run through `infer.py`; Grounding DINO / OWLv2 + ByteTrack through `track.py` | `smoke_track.py` passing on the GPU | Wave 2 |
+| V1b | "What happens when": the trained classifier over a sliding window | the trained run | C1 timeline | with Wave 3 |
+| V1c | Click or prompt an object: masks through the video, plus mask area and count over time | SAM 2 propagation (the S2 inference part only) | S2, pulled ahead of S2 fine-tuning | after V1a |
+| V1d | Ask a free-form question about the video, with the sampled frames shown as evidence | a local vision-language model; the Scout picks one that fits 8 GB with an acceptable licence | Scout finding, user approval of the download | after V1c |
+| V1e | Use a detector the user trained for tracking and counting | S1 fine-tuned detector through `track.py` | S1 | with S1 |
+
+Answers from V1d are model output, not measured results, and the page labels
+them that way. Real-data gate: each step runs once on a real video on the GPU.
+
 ### Priority for the end-of-term deadline (Dec 2026)
 1. Waves 1–2 as planned (A1, A2, A3, A4; B1, B2, B3).
 2. Spatial core: S0 → S1 → S3 → S5, with zero-shot detection + tracking

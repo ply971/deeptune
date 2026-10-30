@@ -6,7 +6,7 @@ checks one claim:
 - **direction, speed, periodic** check that a model *learns motion*. On these tasks the
   rendered single frame is class-independent by construction (torus world, centred
   trajectories). Linear pixel probes confirm it on the encoded clips for all three tasks, and a frozen
-  `single_frame:resnet18` does on direction only. A fine-tuned single-frame check is pending (see "Is the data honest?").
+  `single_frame:resnet18` does on direction only. A fine-tuned `single_frame:resnet18` also stays at chance on all three, with and without codec artefacts (one seed; see "Is the data honest?").
 - **untrimmed** checks that a model can *find where an action is* when it is trained only on
   video-level labels. Phase 4 (timeline, CtxPL localisation) uses it.
 - **scene_bias** checks that a model *ignores the background*. Phases 4 and 6 use it to measure
@@ -182,12 +182,28 @@ least 200 balanced held-out clips (s.d. ≈ 0.035).
 
 **Scope of the "no single-frame signal" result.** It is shown for *linear probes on raw pixels*
 (and FFT texture features) on direction, speed and periodic, and for a *frozen*
-`single_frame:resnet18` on direction only. A fine-tuned
-`single_frame:resnet18` is the strongest single-frame adversary, and it has not been run yet. Nor
-has a lossless-codec variant, which would rule out direction-asymmetric MPEG-4 artefacts as a
-leak channel. Both are pending a GPU run by the coordinator (700/400). Until then, do not state
-"a single frame carries no signal" without this qualifier. One codec channel has been checked:
+`single_frame:resnet18` on direction only. One codec channel was also checked:
 middle-frame sharpness versus speed gives Spearman |r| ≤ 0.01 (Critic, V-022).
+
+**Fine-tuned adversary (GPU, 2026-10-30).** `scripts/check_single_frame_adversary.py` fine-tunes a
+pretrained `single_frame:resnet18` at 64 px with 700 train / 200 val / 400 test clips, 5 epochs,
+lr 1e-3, seed 0. The default codec here is `mp4v`. The lossless clips are FFV1, and each one was
+decoded back and matched its source frames exactly.
+
+| Task | Metric | Adversary, `mp4v` | Adversary, lossless | Positive control, `mp4v` / lossless |
+|---|---|---|---|---|
+| direction | test accuracy | 0.505 | 0.515 | `flow_probe` 0.9925 / 0.9675 |
+| speed | test R² | −0.02 | −0.39 | `flow_probe` 0.874 / 0.828 |
+| periodic | test accuracy | 0.500 | 0.510 | `r3d_18` 0.995 / 0.9725 |
+
+The same adversary does learn when a frame carries signal: on `scene_bias` it reaches 0.875 on the
+biased split and 0.5125 on the unbiased test split, so these chance scores are not a training
+failure. Limits: one seed and 5 epochs. Training accuracy stayed near 51 %, so a much longer run
+could still find a weak leak. With two clips per scene, the 400 test clips hold fewer independent
+scenes, so the usual ±0.05 interval at n = 400 is a lower bound. `flow_probe` uses mean flow on
+classification tasks and cannot separate periodic (0.5175 / 0.51), which is why `r3d_18` is the
+control there. State the result as "no signal found by these probes and this adversary", not as a
+proof that a single frame carries none.
 
 `scripts/check_benchmark_honesty.py` prints the same numbers at any size. The table below shows
 them at CI size (32×32, 12 frames, seed 0, `mp4v`; train 300 / test 200, speed and periodic
