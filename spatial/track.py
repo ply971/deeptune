@@ -314,8 +314,10 @@ class ByteTracker:
     track_buffer: how many steps a lost track may be re-found (reference 30 at 30 fps).
     frame_rate: steps per second seen by the tracker; ``max_time_lost =
         max(1, int(frame_rate / 30 * track_buffer))`` (reference: no floor).
-    fuse_score: multiply IoU by the detection score in the first association
-        (reference behaviour for MOT17; off for MOT20).
+    fuse_score: multiply IoU by the detection score in the first association and
+        when confirming a new track (reference behaviour for MOT17; off for MOT20).
+        Confirming then needs ``IoU * score > 0.3``, so a box scoring under 0.3 can
+        never confirm: ``track.py`` turns it off for zero-shot detectors.
     class_agnostic: ignore labels when matching (label = majority vote).
     motion_compensator: optional ``frame -> 2x3 affine`` (see module docstring).
     """
