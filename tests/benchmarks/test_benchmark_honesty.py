@@ -9,7 +9,7 @@ splits show *what information the clips carry*:
   distribution and at chance on the unbiased test split, while motion stays
   reliable on both.
 
-Thresholds were set before the first full run and carry margin; they were not
+Thresholds were set (per the author) before the first full run and carry margin; they were not
 fixed in advance of every result (probe/generator fixes after failures are listed in
 docs/video-plan/reports/A3-phase2-benchmarks.md). Chance-level checks use
 <= 0.60 accuracy for two balanced classes on >= 200 held-out clips (chance =

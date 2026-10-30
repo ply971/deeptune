@@ -1,12 +1,14 @@
 """Train and evaluate a list of video models on a Phase 2 synthetic benchmark
-and write a results table (accuracy, ROC AUC, time, device).
+and write a results table (accuracy and ROC AUC, or R^2 and MAE for the speed
+regression task; time; device).
 
 Models are given as specs:
   single_frame:<backbone>   Karpathy single-frame baseline (middle frame only)
   mean:<backbone>           frame pooling, mean over frames (late fusion)
   attention:<backbone>      frame pooling, learned attention over frames
   <native 3D name>          e.g. r3d_18, mc3_18, r2plus1d_18 (slow fusion)
-  flow_logreg               reference probe: mean horizontal Farneback flow -> logistic regression
+  flow_logreg / flow_probe  reference probe: mean horizontal Farneback flow -> logistic regression
+                            (speed: flow summary -> ridge regression)
 <backbone> is any 2D model version DeepTune knows (resnet18, efficientnet_b0, ...).
 "dummy" (an untrained resnet18) and "dummy_video3d" (an untrained r3d_18) exist
 for quick CPU smoke runs only.
@@ -36,8 +38,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-TASKS = ("direction", "scene_bias", "periodic")
-EVAL_SPLITS = {"direction": ("test",), "periodic": ("test",), "scene_bias": ("val", "test")}
+TASKS = ("direction", "scene_bias", "periodic", "speed")
+EVAL_SPLITS = {"direction": ("test",), "periodic": ("test",), "speed": ("test",), "scene_bias": ("val", "test")}
+REGRESSION_TASKS = {"speed"}  # mode=reg: label = speed in px/frame; metrics R^2 and MAE
+
+
+def task_mode(task: str) -> str:
+    return "reg" if task in REGRESSION_TASKS else "cls"
 
 
 def parse_args(argv=None):
@@ -70,7 +77,7 @@ def parse_args(argv=None):
 
 def generate_or_load(args):
     from benchmarks.synthetic_motion import (
-        BenchmarkDataset, make_direction_dataset, make_periodic_dataset, make_scene_bias_dataset)
+        BenchmarkDataset, make_direction_dataset, make_periodic_dataset, make_scene_bias_dataset, make_speed_dataset)
     if args.data is not None:
         root = args.data.resolve()
         meta = json.loads((root / "dataset.json").read_text(encoding="utf-8"))
@@ -92,12 +99,14 @@ def generate_or_load(args):
         return make_direction_dataset(root, num_frames=args.num_frames or 12, **common)
     if args.task == "periodic":
         return make_periodic_dataset(root, num_frames=args.num_frames or 16, **common)
+    if args.task == "speed":
+        return make_speed_dataset(root, num_frames=args.num_frames or 12, **common)
     return make_scene_bias_dataset(root, num_frames=args.num_frames or 12, **common)
 
 
 def parse_spec(spec: str):
     """'single_frame:resnet18' -> ('single_frame', 'resnet18'); 'r3d_18' -> ('native', 'r3d_18')."""
-    if spec == "flow_logreg":
+    if spec in ("flow_logreg", "flow_probe"):
         return "probe", spec
     if ":" in spec:
         pooling, version = spec.split(":", 1)
@@ -107,7 +116,7 @@ def parse_spec(spec: str):
     return "native", spec
 
 
-def build_model(kind, version, num_classes, args):
+def build_model(kind, version, num_classes, args, mode="cls"):
     from src.video.frame_pool import VideoFramePoolClassifier
     from src.video.single_frame import VideoSingleFrameClassifier
     from utils import build_video_model, is_native_video_architecture
@@ -120,11 +129,11 @@ def build_model(kind, version, num_classes, args):
         backbone = adjustedPeftResNet if args.use_peft else adjustedResNet
         if kind == "single_frame":
             return VideoSingleFrameClassifier(backbone, "dummy", num_classes, args.added_layers, args.embed_size,
-                                              args.freeze_backbone)
+                                              args.freeze_backbone, task_type=mode)
         return VideoFramePoolClassifier(backbone, "dummy", num_classes, args.added_layers, args.embed_size,
-                                        args.freeze_backbone, pooling=kind)
+                                        args.freeze_backbone, task_type=mode, pooling=kind)
     return build_video_model(model_version=version, num_classes=num_classes, added_layers=args.added_layers,
-                             embed_size=args.embed_size, freeze_backbone=args.freeze_backbone, mode="cls",
+                             embed_size=args.embed_size, freeze_backbone=args.freeze_backbone, mode=mode,
                              use_peft=args.use_peft, pooling="mean" if kind == "native" else kind)
 
 
@@ -159,7 +168,10 @@ def make_loaders(ds, kind, version, num_frames, args):
     loaders = {}
     for split, path in ds.splits.items():
         frame = load_video_manifest(path)
-        frame["labels"] = frame["label_idx"].astype(int)
+        if task_mode(args.task) == "reg":
+            frame["labels"] = frame["labels"].astype(float)
+        else:
+            frame["labels"] = frame["label_idx"].astype(int)
         dataset = ParquetVideoDataset(frame[["videos", "labels"]], transform=frame_transform,
                                       num_frames=num_frames, clip_transform=clip_transform)
         if split == "train" and args.hflip:
@@ -169,45 +181,58 @@ def make_loaders(ds, kind, version, num_frames, args):
     return loaders
 
 
-def evaluate(model, loader):
+def evaluate(model, loader, mode="cls"):
+    """Class probabilities [N, C] (cls) or predictions [N] (reg), and the labels."""
     import torch
     from options import DEVICE
 
     model.eval()
-    probs, labels = [], []
+    outputs, labels = [], []
     with torch.no_grad():
         for clips, y, *_ in loader:
-            probs.append(torch.softmax(model(clips.to(DEVICE)), dim=1).cpu().numpy())
+            out = model(clips.to(DEVICE))
+            outputs.append((torch.softmax(out, dim=1) if mode == "cls" else out.reshape(-1)).cpu().numpy())
             labels.append(y.numpy())
-    return np.concatenate(probs), np.concatenate(labels)
+    return np.concatenate(outputs), np.concatenate(labels)
 
 
-def scores(probs, labels):
-    from sklearn.metrics import roc_auc_score
-    acc = float((probs.argmax(1) == labels).mean())
+def scores(outputs, labels, mode="cls"):
+    """{"acc", "auc"} for classification, {"r2", "mae"} for regression."""
+    from sklearn.metrics import mean_absolute_error, r2_score, roc_auc_score
+    if mode == "reg":
+        return {"r2": float(r2_score(labels, outputs)), "mae": float(mean_absolute_error(labels, outputs))}
+    acc = float((outputs.argmax(1) == labels).mean())
     try:
-        auc = float(roc_auc_score(labels, probs[:, 1]) if probs.shape[1] == 2
-                    else roc_auc_score(labels, probs, multi_class="ovr"))
+        auc = float(roc_auc_score(labels, outputs[:, 1]) if outputs.shape[1] == 2
+                    else roc_auc_score(labels, outputs, multi_class="ovr"))
     except ValueError:  # a split with a single class
         auc = float("nan")
-    return acc, auc
+    return {"acc": acc, "auc": auc}
 
 
 def run_probe(ds, args):
-    from sklearn.linear_model import LogisticRegression
+    """Flow reference: mean horizontal Farneback flow -> logistic regression
+    (classification), or the flow summary -> ridge regression (speed)."""
+    from sklearn.linear_model import LogisticRegression, RidgeCV
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
-    from benchmarks.motion_features import mean_flow_features, read_frames
+    from benchmarks.motion_features import flow_summary_features, mean_flow_features, read_frames
 
+    mode = task_mode(args.task)
+    featurize = flow_summary_features if mode == "reg" else mean_flow_features
+    target = "labels" if mode == "reg" else "label_idx"
     start = time.perf_counter()
-    feats = {s: (np.stack([mean_flow_features(read_frames(ds.root / p)) for p in pd.read_csv(path)["videos"]]),
-                 pd.read_csv(path)["label_idx"].values) for s, path in ds.splits.items()}
-    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=5000)).fit(*feats["train"])
-    train_s = time.perf_counter() - start
-    out = {"train_seconds": round(train_s, 1)}
+    feats = {}
+    for split, path in ds.splits.items():
+        frame = pd.read_csv(path)
+        feats[split] = (np.stack([featurize(read_frames(ds.root / p)) for p in frame["videos"]]),
+                        frame[target].values)
+    estimator = RidgeCV(alphas=np.logspace(-3, 3, 13)) if mode == "reg" else LogisticRegression(max_iter=5000)
+    model = make_pipeline(StandardScaler(), estimator).fit(*feats["train"])
+    out = {"train_seconds": round(time.perf_counter() - start, 1)}
     for split in EVAL_SPLITS[args.task]:
         x, y = feats[split]
-        out[split] = scores(model.predict_proba(x), y)
+        out[split] = scores(model.predict(x) if mode == "reg" else model.predict_proba(x), y, mode)
     return out
 
 
@@ -219,17 +244,18 @@ def run_model(ds, kind, version, args, run_dir):
     meta = ds.load_metadata()
     num_frames = next(iter(meta["videos"].values()))["num_frames"]
     torch.manual_seed(args.seed)
-    model = build_model(kind, version, len(meta["classes"]), args)
+    mode = task_mode(args.task)
+    model = build_model(kind, version, 1 if mode == "reg" else len(meta["classes"]), args, mode=mode)
     loaders = make_loaders(ds, kind, version, num_frames, args)
     val_loader = loaders["val"]  # never test: the Trainer logs on it and fits error_model.json on it
     run_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    Trainer(model, loaders["train"], val_loader, learning_rate=args.lr, mode="cls", num_epochs=args.epochs,
+    Trainer(model, loaders["train"], val_loader, learning_rate=args.lr, mode=mode, num_epochs=args.epochs,
             output_dir=run_dir).train()
     out = {"train_seconds": round(time.perf_counter() - start, 1), "device": str(DEVICE)}
     for split in EVAL_SPLITS[args.task]:
         start = time.perf_counter()
-        out[split] = scores(*evaluate(model, loaders[split]))
+        out[split] = scores(*evaluate(model, loaders[split], mode), mode)
         out[f"{split}_eval_seconds"] = round(time.perf_counter() - start, 1)
     return out
 
@@ -261,10 +287,9 @@ def main(argv=None):
             result = run_model(ds, kind, version, args, out_dir / spec.replace(":", "_"))
         row = {"model": spec, "family": kind, "device": result["device"], "train_s": result["train_seconds"]}
         for split in EVAL_SPLITS[args.task]:
-            acc, auc = result[split]
             label = {"val": "biased_val", "test": "unbiased_test"}[split] if args.task == "scene_bias" else split
-            row[f"{label}_acc"] = round(acc, 4)
-            row[f"{label}_auc"] = round(auc, 4)
+            for metric, value in result[split].items():
+                row[f"{label}_{metric}"] = round(value, 4)
         rows.append(row)
         print(json.dumps(row), flush=True)
     table = pd.DataFrame(rows)

@@ -252,6 +252,18 @@ def test_flip_guard_blocks_direction_tasks_only(tmp_path):
     assert any("unsafe" in str(w.message) for w in caught)
 
 
+@pytest.mark.parametrize("content", ["[1, 2, 3]", "{not json", '{"name": "my data", "classes": ["a"]}',
+                                     '{"task": "mine"}', '"just a string"'])
+def test_flip_guard_ignores_foreign_dataset_json(tmp_path, content):
+    """A user's own dataset.json (list, invalid JSON, or a dict without the
+    benchmark keys) is ordinary data: flips are allowed, nothing crashes."""
+    (tmp_path / "dataset.json").write_text(content, encoding="utf-8")
+    (tmp_path / "clips.csv").write_text("videos,labels\n", encoding="utf-8")
+    for source in (tmp_path, tmp_path / "clips.csv", tmp_path / "dataset.json"):
+        check_flip_augmentation(source, hflip=True, vflip=True)
+    check_flip_augmentation({"task": "mine"}, hflip=True)
+
+
 def test_resolve_codec():
     assert resolve_codec("mp4v") == "mp4v"
     with pytest.raises(ValueError):

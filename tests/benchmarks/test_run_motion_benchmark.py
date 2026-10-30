@@ -72,3 +72,13 @@ def test_bad_specs_are_rejected():
         bench.parse_spec("max:resnet18")
     assert bench.parse_spec("r3d_18") == ("native", "r3d_18")
     assert bench.parse_spec("single_frame:resnet18") == ("single_frame", "resnet18")
+
+
+def test_speed_regression_task(tmp_path):
+    out = bench.main(["--task", "speed", "--out", str(tmp_path), "--models", "single_frame:dummy", "flow_probe", *TINY])
+    table = pd.read_csv(out / "results.csv")
+    assert table["model"].tolist() == ["single_frame:dummy", "flow_probe"]
+    assert {"test_r2", "test_mae"} <= set(table.columns) and "test_acc" not in table.columns
+    assert (table["test_mae"] >= 0).all()
+    fit = json.loads((out / "single_frame_dummy" / "error_model_fit.json").read_text())
+    assert fit["split"] == "validation" and fit["val_dataset_size"] == 3

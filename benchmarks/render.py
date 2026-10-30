@@ -6,8 +6,8 @@ and uint8 RGB when written.
 
 The world is a torus: a blob that leaves the right edge re-enters on the left
 (and likewise vertically). That makes the blob position in *any* single frame
-uniformly distributed whatever its velocity, so a single frame carries no
-information about the direction of motion (see ``synthetic_motion``).
+uniformly distributed whatever its velocity, so a rendered frame carries no
+information about the direction of motion (encoded frames: see the honesty probes) (see ``synthetic_motion``).
 """
 from __future__ import annotations
 

@@ -5,8 +5,8 @@ checks one claim:
 
 - **direction, speed, periodic** check that a model *learns motion*. On these tasks the
   rendered single frame is class-independent by construction (torus world, centred
-  trajectories). Linear pixel probes and a frozen resnet18 confirm it on the encoded clips; a
-  fine-tuned single-frame check is pending (see "Is the data honest?").
+  trajectories). Linear pixel probes confirm it on the encoded clips for all three tasks, and a frozen
+  `single_frame:resnet18` does on direction only. A fine-tuned single-frame check is pending (see "Is the data honest?").
 - **untrimmed** checks that a model can *find where an action is* when it is trained only on
   video-level labels. Phase 4 (timeline, CtxPL localisation) uses it.
 - **scene_bias** checks that a model *ignores the background*. Phases 4 and 6 use it to measure
@@ -172,8 +172,8 @@ segments.
 ## Is the data honest? (the test oracle)
 
 `tests/benchmarks/test_benchmark_honesty.py` fits simple scikit-learn probes from
-`benchmarks/probes.py` on the train split and scores them on held-out clips. The thresholds were set before the
-first full run of the probes. They were not fixed in advance of every result, and the probes and generator were
+`benchmarks/probes.py` on the train split and scores them on held-out clips. The thresholds were set, per the author
+(A3), before the first full run of the probes. They were not fixed in advance of every result, and the probes and generator were
 adjusted after failures: the speed statistic was gated on changing pixels (R² 0.33 → 0.80), the
 blob got a high-contrast texture, a uint8 overflow in the codec motion-vector feature was fixed,
 and the motion-vector probe moved from 32×32 to 48×48 (0.81 → 0.985). The thresholds themselves
@@ -181,7 +181,8 @@ were not changed. Chance-level checks use an accuracy of 0.60 or less, on at
 least 200 balanced held-out clips (s.d. ≈ 0.035).
 
 **Scope of the "no single-frame signal" result.** It is shown for *linear probes on raw pixels*
-(and FFT texture features) and for a *frozen* resnet18 single-frame model. A fine-tuned
+(and FFT texture features) on direction, speed and periodic, and for a *frozen*
+`single_frame:resnet18` on direction only. A fine-tuned
 `single_frame:resnet18` is the strongest single-frame adversary, and it has not been run yet. Nor
 has a lossless-codec variant, which would rule out direction-asymmetric MPEG-4 artefacts as a
 leak channel. Both are pending a GPU run by the coordinator (700/400). Until then, do not state
@@ -230,7 +231,9 @@ without PEFT) sees only the middle frame (`src/video/single_frame.py`). It is bu
   --n_train 700 --n_test 400 --size 64 --epochs 5
 ```
 
-`--task scene_bias` reports `biased_val_*` and `unbiased_test_*` columns. `--hflip` adds a random
+`--task scene_bias` reports `biased_val_*` and `unbiased_test_*` columns. `--task speed` is a
+regression task (`mode=reg`) and reports `test_r2` and `test_mae`; its flow reference is the
+flow summary fed to ridge regression (`flow_probe`, alias `flow_logreg`). `--hflip` adds a random
 clip-level horizontal flip, and `benchmarks.guards.check_flip_augmentation` refuses it on
 direction-labelled data (`direction`, `scene_bias`, `untrimmed`). Any future augmentation code
 should call the same guard.

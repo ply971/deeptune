@@ -17,14 +17,29 @@ class UnsafeAugmentationError(ValueError):
     """Raised when an augmentation would change the meaning of the labels."""
 
 
+def _is_benchmark_metadata(meta) -> bool:
+    """Only Phase 2 benchmark metadata (a dict with ``task`` and the flip flags)
+    counts; a user's own ``dataset.json`` with other content does not."""
+    return isinstance(meta, dict) and "task" in meta and ("hflip_safe" in meta or "vflip_safe" in meta)
+
+
 def _find_metadata(source: Path | str | dict) -> dict | None:
+    """Benchmark metadata for ``source``, or ``None`` for ordinary data. A
+    ``dataset.json`` that is unreadable, not JSON, or not benchmark metadata is
+    treated as ordinary data, never as an error."""
     if isinstance(source, dict):
-        return source
+        return source if _is_benchmark_metadata(source) else None
     path = Path(source)
     candidates = [path] if path.suffix == ".json" else [path / "dataset.json", path.parent / "dataset.json"]
     for candidate in candidates:
-        if candidate.is_file():
-            return json.loads(candidate.read_text(encoding="utf-8"))
+        try:
+            if not candidate.is_file():
+                continue
+            meta = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # unreadable / invalid JSON / bad encoding
+            continue
+        if _is_benchmark_metadata(meta):
+            return meta
     return None
 
 

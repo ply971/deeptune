@@ -140,12 +140,13 @@ suite was not run, per the coordinator's rule.
 ## Honesty-check numbers
 
 Seed 0, `mp4v`, 12 frames (periodic 16). Held-out accuracy unless R² is stated. The thresholds
-were set before the first full run of the probes. They were **not fixed in advance of every result** (the honesty
+were set, per the author (A3), before the first full run of the probes. They were **not fixed in advance of every result** (the honesty
 test file has a single commit, made after the generator), and the post-failure adjustments to the
 probes and the generator are listed under Decisions. The thresholds themselves were not changed.
 
 **Scope:** "a single frame carries no signal" is shown only for linear probes on pixels (and FFT
-texture features) and for a frozen resnet18. A fine-tuned `single_frame:resnet18` at 700/400 and
+texture features) on direction, speed and periodic, and for a frozen `single_frame:resnet18` on
+**direction only**. A fine-tuned `single_frame:resnet18` at 700/400 and
 a lossless-codec variant (to exclude direction-asymmetric MPEG-4 artefacts) are **pending a GPU
 run by the coordinator** (Critic V-022). No slide should make the claim before that.
 
@@ -216,7 +217,7 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
 
 - **Torus world, with trajectories centred on the middle frame.** This makes every *rendered*
   single frame and the frame average class-independent exactly. On the encoded clips this is
-  checked only with linear probes and a frozen resnet18; codec artefacts remain a possible
+  checked only with linear probes (all tasks) and a frozen resnet18 (direction only); codec artefacts remain a possible
   channel until the lossless and fine-tuned checks run. Clips are grouped by scene: two clips per shared background, one per class, so the
   background can never carry the label.
 - **The blob is red-dominant and the background is muted.** The untrimmed "blob present ⇔ in
@@ -255,8 +256,10 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
 - **The 2D models were only run frozen.** The fine-tuned single-frame and frame-pooling rows,
   and the 700/400 sizes, still need the GPU run (command above). On frozen features every model
   except flow is at chance.
-- **The desktop GUI has no widget for `single_frame` yet.** That is Phase 7 work. Its config
-  validation already accepts it (fixed in the follow-up below).
+- **The desktop GUI has no widget for `single_frame` yet.** The pooling radio
+  (`desktop/app.py` ~l.1570) offers only mean and attention, so `single_frame` cannot be selected
+  in the GUI. That is Phase 7 work. Its config validation already accepts it (fixed in the
+  follow-up below).
 - **The flip guard is wired only in `deeptune.py`**, where the raw dataset path is known (see the
   follow-up below). A direct `trainers/video/train.py` call on parquet splits has no
   `dataset.json` to check, so the guard cannot run there.
@@ -298,7 +301,7 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
     on val. A test checks `error_model_fit.json` reports `val_dataset_size` = n_val, which
     differs from n_test.
   - The r3d_18 "validation" sentence above is corrected.
-- **V-022:** the claim is scoped and the thresholds are described as set before the first full run, with the later adjustments listed (above
+- **V-022:** the claim is scoped and the thresholds are described as set (per the author) before the first full run, with the later adjustments listed (above
   and in `benchmark.md`). Fine-tuned single-frame (direction, speed, periodic at 700/400) and a
   lossless-codec variant are pending the coordinator's GPU run.
 - **Flip guard wired:** `deeptune.py` calls `benchmarks.guards.check_flip_augmentation(args.df,
@@ -308,3 +311,21 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
     refused. A flip-safe benchmark (periodic) and ordinary data without `dataset.json` pass the
     guard.
   - The trainers only see parquet splits, so the check happens where the raw path is known.
+
+### Second follow-up round (Critic re-check, V-036)
+
+- **Flip guard robustness:** `benchmarks/guards.py` no longer crashes on a user's own
+  `dataset.json`.
+  - JSON that is a list, a string or invalid, an unreadable file, or a dict without `task` plus
+    `hflip_safe`/`vflip_safe` all count as ordinary data, so the flip is allowed.
+  - Tests are parametrised over list JSON, invalid JSON, a foreign dict, `{"task": ...}` without
+    flip flags, and a JSON string. The Critic's `critic2/ds` repro now passes.
+- **Speed added to the runner:** `scripts/run_motion_benchmark.py --task speed` is a regression
+  task (`mode=reg`, one output).
+  - It reports `test_r2` and `test_mae`. Its reference probe is `flow_probe` (alias
+    `flow_logreg`), which is the flow summary fed to `RidgeCV`.
+  - A smoke test checks the regression columns and that the error model is fitted on val.
+  - **The pending GPU job can therefore cover direction, speed and periodic**, for example
+    `--task speed --models flow_probe single_frame:resnet18 r3d_18 --n_train 700 --n_test 400`.
+- **Wording:** the frozen-resnet18 evidence is scoped to direction only. Thresholds are now
+  "set, per the author, before the first full run". `render.py` says "a rendered frame".
