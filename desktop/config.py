@@ -493,6 +493,17 @@ class InferenceConfig:
     max_encoder_length: int = 30
     group_ids: list[str] = field(default_factory=list)
     history_df_paths: list[Path] = field(default_factory=list)
+    # video only: the run's recorded test-time data-layer flags (sampling,
+    # decoder, --test_clips, workers), passed back to infer.py unchanged.
+    video_options: dict = field(default_factory=dict)
+
+
+# Video flags that change how test clips are built; their defaults are not
+# passed on, so old runs (which lack them) keep the original argv.
+INFER_VIDEO_OPTION_DEFAULTS = {
+    'video_backend': 'auto', 'temporal_sampling': 'uniform', 'clip_stride': None, 'clip_duration_sec': None,
+    'motion_source': 'auto', 'test_clips': 1, 'num_workers': 'auto',
+}
 
 
 def find_history_paths(run_dir: Path) -> list[Path]:
@@ -541,6 +552,8 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
         time_idx_column=cli_args.get('time_idx_column') or 'labels',
         max_encoder_length=int(cli_args.get('max_encoder_length') or 30),
         group_ids=list(cli_args.get('group_ids') or []) if isinstance(cli_args.get('group_ids'), list) else [],
+        video_options={key: cli_args[key] for key, default in INFER_VIDEO_OPTION_DEFAULTS.items()
+                       if cli_args.get(key) not in (None, default)} if modality == 'video' else {},
     )
     label_mapping_path = _first_glob(results.run_dir, 'data_splits_*/label_mapping.json') if results.run_dir else None
     cfg.label_mapping_path = label_mapping_path
@@ -576,6 +589,9 @@ def build_infer_argv(cfg: InferenceConfig) -> list[str]:
             argv.append('--use-peft')
         if cfg.modality == 'video':
             argv += ['--num_frames', str(cfg.num_frames), '--pooling', cfg.pooling]
+            for key, value in (cfg.video_options or {}).items():
+                if key in INFER_VIDEO_OPTION_DEFAULTS and value not in (None, INFER_VIDEO_OPTION_DEFAULTS[key]):
+                    argv += [f'--{key}', str(value)]
     if cfg.modality == 'text':
         argv += ['--model_str', cfg.model_str]
     if cfg.modality == 'tabular':

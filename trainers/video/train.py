@@ -3,8 +3,8 @@ from torch.utils.data import DataLoader
 
 from helpers import transformations
 from trainers.vision.trainer import Trainer
-from options import UNIQUE_ID, DEVICE, NUM_WORKERS, PERSIST_WORK, PIN_MEM
-from datasets.video_datasets import ParquetVideoDataset, native_video_transform
+from options import UNIQUE_ID, DEVICE
+from datasets.video_datasets import ParquetVideoDataset, native_video_transform, video_loader_kwargs, video_options_from_args
 from cli import DeepTuneVisionOptions
 from utils import RunType, set_seed, build_video_model
 from trainers.param_budget import build_with_budget
@@ -101,26 +101,18 @@ def train(
 
     TRAINVAL_OUTPUT_DIR = (out / f"trainval_output_{model_str}_{UNIQUE_ID}")
 
+    # Either storage format (file paths or clip bytes) is detected by from_parquet.
+    # Training samples randomly (--temporal_sampling, --video_augment); validation
+    # uses the deterministic evaluation sampling with one clip per video.
+    video_options = video_options_from_args(args)
     clip_transform = native_video_transform(model_version)
-    train_dataset = ParquetVideoDataset.from_parquet(parquet_file=train_df, transform=transformations, num_frames=num_frames, clip_transform=clip_transform)
-    val_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames, clip_transform=clip_transform)
+    train_dataset = ParquetVideoDataset.from_parquet(parquet_file=train_df, transform=transformations, num_frames=num_frames,
+                                                     clip_transform=clip_transform, train=True, options=video_options)
+    val_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames,
+                                                   clip_transform=clip_transform, train=False, options=video_options)
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=NUM_WORKERS,
-        pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
-    )
+    train_loader = DataLoader(train_dataset, **video_loader_kwargs(train_dataset, batch_size, True, video_options.num_workers))
+    val_loader = DataLoader(val_dataset, **video_loader_kwargs(val_dataset, batch_size, False, video_options.num_workers))
 
     if trainable_params is None:
         model = build_video_model(

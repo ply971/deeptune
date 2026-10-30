@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 from utils import UseCase, RunType, get_model_architecture, set_seed
 from trainers.param_count import parse_param_count
+from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
 import json
 import os, shutil
 class DeepTuneVisionOptions:
@@ -41,6 +42,7 @@ class DeepTuneVisionOptions:
         self.batch_size: Optional[int] = parsed_args.batch_size
         self.num_frames: int = parsed_args.num_frames
         self.pooling: str = parsed_args.pooling
+        self._parse_video_data_args(parsed_args)
         self.mode : Optional[str] = parsed_args.mode
         self.grouper: Optional[str] = parsed_args.grouper
         self.fixed_seed: bool = parsed_args.fixed_seed
@@ -216,11 +218,20 @@ class DeepTuneVisionOptions:
         # Video-modality args (ignored for other modalities)
         p.add_argument('--num_frames', type=int, default=8, help='Number of frames to uniformly sample per video clip (video modality only).')
         p.add_argument('--pooling', type=str, choices=['mean', 'attention'], default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). Ignored for DeepTune's native video architectures.")
+        self._add_video_data_args()
 
         # Per-prediction error estimate (images/video). On by default.
         p.add_argument('--no_error_model', action='store_true',
                        help='Do not fit the per-prediction error model (error_model.json) on the validation split after '
                             'training. Without it, eval/inference outputs have no expected_error column.')
+
+    # --- video data layer (Phase 1): decoding, sampling, augmentation, TTA, workers ---
+    def _add_video_data_args(self):
+        add_video_data_arguments(self.parser)
+
+    def _parse_video_data_args(self, parsed_args):
+        for name in VIDEO_DATA_ARG_NAMES:
+            setattr(self, name, getattr(parsed_args, name))
 
     def _add_tabpfn_train_args(self):
         p = self.parser

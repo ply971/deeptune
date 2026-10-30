@@ -8,7 +8,7 @@ from sklearn.metrics import classification_report, roc_auc_score
 from tqdm.auto import tqdm
 import time
 
-from options import DEVICE
+from options import DEVICE, PIN_MEM
 
 
 class TestTrainer:
@@ -68,7 +68,7 @@ class TestTrainer:
         all_labels, all_predictions, all_probs = [], [], []
         with torch.no_grad():
             for inputs, labels, *_ in tqdm(self.test_loader):
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                inputs, labels = inputs.to(self.device, non_blocking=PIN_MEM), labels.to(self.device, non_blocking=PIN_MEM)
                 if self.mode == 'reg':
                     labels = labels.view(-1, 1).float()
                 outputs = self.model(inputs)

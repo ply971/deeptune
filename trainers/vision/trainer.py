@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import sys
 import logging
 from helpers import PerformanceLogger
-from options import DEVICE, TRAINVAL_OUTPUT_DIR
+from options import DEVICE, PIN_MEM, TRAINVAL_OUTPUT_DIR
 import time
 from utils import save_process_times
 import functools
@@ -114,10 +114,10 @@ class Trainer:
                 # make sure the inputs and labels on GPU
                 
                 if isinstance(self.criterion, nn.MSELoss): # if regression then we must rehape the target tensor    
-                    inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+                    inputs, labels = inputs.to(DEVICE, non_blocking=PIN_MEM), labels.to(DEVICE, non_blocking=PIN_MEM)
                     labels = labels.view(-1,1).float() # [batch_size,1]
                 else:
-                    inputs,labels = inputs.to(DEVICE),labels.to(DEVICE)
+                    inputs,labels = inputs.to(DEVICE, non_blocking=PIN_MEM),labels.to(DEVICE, non_blocking=PIN_MEM)
                     
 
                 # null the gradient
@@ -247,7 +247,7 @@ class Trainer:
             self.model.eval()
             with torch.no_grad():
                 for inputs, batch_labels, *_ in self.val_loader:
-                    outputs.append(self.model(inputs.to(DEVICE)).detach().float().cpu())
+                    outputs.append(self.model(inputs.to(DEVICE, non_blocking=PIN_MEM)).detach().float().cpu())
                     labels.append(batch_labels.detach().cpu())
                     n_batches += 1
         finally:
@@ -305,7 +305,7 @@ class Trainer:
                 # set the model to evaluation mode
                 self.model.eval()
                 
-                input, labels = input.to(DEVICE), labels.to(DEVICE)
+                input, labels = input.to(DEVICE, non_blocking=PIN_MEM), labels.to(DEVICE, non_blocking=PIN_MEM)
                 if self.mode == 'reg':
                     labels = labels.view(-1, 1).float()
                                 

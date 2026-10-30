@@ -51,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Video only.
     p.add_argument('--num_frames', type=int, default=8)
     p.add_argument('--pooling', choices=['mean', 'attention'], default='mean')
+    # Video data layer: the run's recorded sampling/decoding settings (cli_arguments.json).
+    from handlers.video_args import add_video_data_arguments
+    add_video_data_arguments(p, training=False)
 
     # Tabular only.
     p.add_argument('--target', default='labels')
@@ -75,11 +78,12 @@ def _load_new_data(args: argparse.Namespace):
         raise ValueError('Images inference needs a folder of image files, or a single image file.')
     if args.modality == 'video':
         if args.data.is_dir():
-            return load_labeled_or_flat_files(args.data, VIDEO_EXTENSIONS, 'videos')
+            # File paths, not bytes: clips are decoded lazily and never all held in memory.
+            return load_labeled_or_flat_files(args.data, VIDEO_EXTENSIONS, 'videos', read_bytes=False)
         if args.data.suffix.lower() in ('.csv', '.xlsx'):
-            return load_video_manifest_for_inference(args.data)
+            return load_video_manifest_for_inference(args.data, read_bytes=False)
         if args.data.is_file() and args.data.suffix.lower() in VIDEO_EXTENSIONS:
-            return load_single_file(args.data, 'videos'), False
+            return load_single_file(args.data, 'videos', read_bytes=False), False
         raise ValueError('Video inference needs a folder of clips, a single clip, or a CSV/XLSX list of video paths.')
     df = load_tabular_like(args.data)
     if args.modality == 'text':
@@ -110,10 +114,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.modality == 'video':
         from inference.video import predict_video
+        from datasets.video_datasets import video_options_from_args
         predictions = predict_video(
             df, args.checkpoint, args.model_version, args.num_classes, args.added_layers,
             args.embed_size, args.freeze_backbone, args.mode, args.use_peft, args.batch_size,
-            args.num_frames, args.pooling, label_mapping,
+            args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
         )
     elif args.modality == 'text':
         from inference.text import predict_text

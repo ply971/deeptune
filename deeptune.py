@@ -71,7 +71,14 @@ def main(argv=None):
         dataset_dir=args.df,
         out=Path(args.out)/parent_dir,
         modality=args.modality,
+        video_storage=args.video_storage,
     )
+    if args.modality == 'video':
+        # A 'group' column (e.g. one source video per group) keeps related clips
+        # in one split; recorded in args so embeddings carry the column too.
+        from handlers.split_dataset import resolve_grouper
+        import pyarrow.parquet as pq
+        GROUPER = args.grouper = resolve_grouper(pq.read_schema(df_path).names, GROUPER, args.modality)
 
     train_data_path, val_data_path, test_data_path = split_dataset(
         train_size=defaults['train_size'],

@@ -1,10 +1,11 @@
 from pathlib import Path
 from torch.utils.data import DataLoader
 
-from datasets.video_datasets import ParquetVideoDataset, native_video_transform
+from datasets.video_datasets import ParquetVideoDataset, native_video_transform, video_loader_kwargs, video_options_from_args
 from evaluators.vision.evaluator import TestTrainer
 from helpers import transformations
-from options import UNIQUE_ID, DEVICE, NUM_WORKERS, PERSIST_WORK, PIN_MEM
+from options import UNIQUE_ID, DEVICE
+from src.video.multi_clip import wrap_for_test_clips
 
 from cli import DeepTuneVisionOptions
 from utils import RunType, build_video_model
@@ -77,17 +78,14 @@ def evaluate(eval_df, out, model_weights, num_classes, model_version, mode, adde
         pooling=pooling,
     )
 
+    # --test_clips N: N clips per video, softmax probabilities averaged (src/video/multi_clip.py).
+    video_options = video_options_from_args(args)
+    MODEL = wrap_for_test_clips(MODEL, video_options.test_clips, mode)
     test_dataset = ParquetVideoDataset.from_parquet(eval_df, transform=transformations, num_frames=num_frames,
-                                                   clip_transform=native_video_transform(model_version))
+                                                   clip_transform=native_video_transform(model_version),
+                                                   options=video_options, num_clips=video_options.test_clips)
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
-    )
+    test_loader = DataLoader(test_dataset, **video_loader_kwargs(test_dataset, batch_size, False, video_options.num_workers))
 
     test_trainer = TestTrainer(
         model=MODEL,
