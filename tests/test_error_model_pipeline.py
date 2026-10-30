@@ -18,13 +18,6 @@ from evaluators.vision.evaluator import TestTrainer as Evaluator
 from trainers.vision.trainer import Trainer
 
 
-@pytest.fixture(autouse=True)
-def _restore_error_model_default():
-    previous = em.fit_by_default()
-    yield
-    em.set_fit_by_default(previous)
-
-
 class CountingDataset(Dataset):
     """Records how often each split is read, to prove which data the error
     model was fitted on."""
@@ -100,23 +93,128 @@ def test_regression_trainer_writes_constant_error_model(tmp_path):
     assert model.fit_info['n_samples'] == len(val_ds)
 
 
-def test_no_error_model_flag_is_parsed_recorded_and_honoured(tmp_path):
+class _TinyNet(nn.Module):
+    """Stands in for build_video_model / the images model class so the real
+    train.py -> Trainer path runs in about a second on CPU."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.net = nn.Sequential(nn.Flatten(), nn.Linear(4, 3))
+
+    def forward(self, x, extract_embed=False):
+        return self.net(x)
+
+
+@pytest.mark.parametrize('modality', ['video', 'images'])
+@pytest.mark.parametrize('flag', [False, True])
+def test_no_error_model_flag_is_parsed_recorded_and_honoured(tmp_path, monkeypatch, modality, flag):
+    """--no_error_model goes CLI -> DeepTuneVisionOptions -> train.py ->
+    Trainer.fit_error_model, with no process-wide state: the real train()
+    and Trainer run end to end; only data and model are tiny stand-ins."""
     from cli import DeepTuneVisionOptions
     from utils import RunType
-    opts = DeepTuneVisionOptions(RunType.TRAIN, ['--out', str(tmp_path), '--model_version', 'resnet18'])
-    assert opts.no_error_model is False and em.fit_by_default() is True
-    opts = DeepTuneVisionOptions(RunType.TRAIN, ['--out', str(tmp_path), '--model_version', 'resnet18',
-                                                 '--no_error_model'])
-    assert opts.to_dict()['no_error_model'] is True
-    assert em.fit_by_default() is False
-    onecall = DeepTuneVisionOptions(RunType.ONECALL, ['--out', str(tmp_path), '--modality', 'video',
-                                                      '--df', str(tmp_path / 'x.parquet'), '--no_error_model'])
-    assert onecall.no_error_model is True
+    if modality == 'video':
+        import trainers.video.train as train_module
+        monkeypatch.setattr(train_module, 'build_video_model', lambda **kw: _TinyNet())
+        dataset_attr = 'ParquetVideoDataset'
+    else:
+        import trainers.vision.train as train_module
+        monkeypatch.setattr(train_module, 'get_model_cls', lambda **kw: _TinyNet)
+        dataset_attr = 'ParquetImageDataset'
+    splits = {'train': _blobs(12, 1), 'val': _blobs(9, 2)}
+
+    class _FakeDataset:
+        @staticmethod
+        def from_parquet(parquet_file, **kwargs):
+            return TensorDataset(*splits[Path(parquet_file).stem])
+
+    monkeypatch.setattr(train_module, dataset_attr, _FakeDataset)
+    extra = ['--no_error_model'] if flag else []
+    args = DeepTuneVisionOptions(RunType.TRAIN, ['--out', str(tmp_path), '--model_version', 'resnet18'] + extra)
+    assert args.no_error_model is flag
+    onecall = DeepTuneVisionOptions(RunType.ONECALL, ['--out', str(tmp_path), '--modality', modality,
+                                                      '--df', str(tmp_path / 'x.parquet')] + extra)
+    assert onecall.no_error_model is flag
+    # A later parse with the opposite setting must not leak into this run.
+    DeepTuneVisionOptions(RunType.TRAIN, ['--out', str(tmp_path)] + ([] if flag else ['--no_error_model']))
+
+    weights = Path(train_module.train(
+        train_df=tmp_path / 'train.parquet', val_df=tmp_path / 'val.parquet', out=tmp_path,
+        freeze_backbone=False, use_peft=False, fixed_seed=0, mode='cls', model_version='resnet18',
+        batch_size=4, num_epochs=1, learning_rate=0.01, added_layers=1, num_classes=3, embed_size=8,
+        model_str='tiny', args=args))
+    run_dir = weights.parent if weights.suffix == '.pth' else weights
+    assert (run_dir / 'training_log.csv').is_file()
+    recorded = json.loads((run_dir / 'cli_arguments.json').read_text(encoding='utf-8-sig'))
+    assert recorded['no_error_model'] is flag
+    assert (run_dir / 'error_model.json').exists() is (not flag)
+    assert (run_dir / 'error_model_fit.json').exists() is (not flag)
+    if not flag:
+        fit = json.loads((run_dir / 'error_model_fit.json').read_text())
+        assert fit['n_samples'] == 9 and fit['split'] == 'validation'
+        # The fingerprint matches the weights train.py saved afterwards.
+        saved = torch.load(run_dir / 'model_weights.pth', map_location='cpu', weights_only=True)
+        assert fit['weights_sha256'] == em.weights_fingerprint(saved)
+
+
+def test_trainer_default_fits_and_explicit_false_skips(tmp_path):
+    on, off = tmp_path / 'on', tmp_path / 'off'
+    on.mkdir()
+    off.mkdir()
+    _tiny_trainer(on)[0].train()
+    trainer = _tiny_trainer(off)[0]
+    trainer.fit_error_model = False
+    trainer.train()
+    assert (on / 'error_model.json').is_file()
+    assert not (off / 'error_model.json').exists() and not (off / 'error_model_fit.json').exists()
+    assert (off / 'training_log.csv').is_file()
+
+
+def test_eval_and_inference_refuse_error_model_fitted_on_other_weights(tmp_path, caplog):
+    import logging
+    from inference.common import attach_expected_error
     trainer, _, _ = _tiny_trainer(tmp_path)
     trainer.train()
-    assert not (tmp_path / 'error_model.json').exists()
-    assert not (tmp_path / 'error_model_fit.json').exists()
-    assert (tmp_path / 'training_log.csv').is_file()
+    ckpt = tmp_path / 'model_weights.pth'
+    trainer.saveModel(ckpt)
+    x, y = _blobs(30, 5)
+    loader = DataLoader(TensorDataset(x, y), batch_size=8)
+    good = Evaluator(trainer.model, 8, loader, 'cls', tmp_path / 'eval_good', device='cpu').test(ckpt)
+    assert 'error_estimate' in good
+    fitted = {k: v.clone() for k, v in trainer.model.state_dict().items()}
+    # Same folder, different weights (e.g. a later checkpoint): refused, loudly.
+    changed = {k: v + 0.01 if v.is_floating_point() else v for k, v in trainer.model.state_dict().items()}
+    other = tmp_path / 'other_weights.pth'
+    torch.save(changed, other)
+    with caplog.at_level(logging.WARNING):
+        bad = Evaluator(trainer.model, 8, loader, 'cls', tmp_path / 'eval_bad', device='cpu').test(other)
+    assert 'error_estimate' not in bad
+    assert 'expected_error' not in pd.read_csv(tmp_path / 'eval_bad' / 'predictions.csv').columns
+    assert any('different weights' in r.getMessage() for r in caplog.records)
+    warnings = []
+    refused = em.load_error_model_near(ckpt, 'cls', num_outputs=3, warn=warnings.append,
+                                       weights_sha256=em.weights_fingerprint(changed))
+    assert refused is None and 'different weights' in warnings[0]
+    probs = np.array([[0.8, 0.1, 0.1], [0.4, 0.3, 0.3]])
+    matching = pd.DataFrame({'sample_id': range(2)})
+    assert attach_expected_error(matching, 'cls', ckpt, probs, fitted) is True
+    assert matching['expected_error'].between(0, 1).all()
+    mismatched = pd.DataFrame({'sample_id': range(2)})
+    assert attach_expected_error(mismatched, 'cls', ckpt, probs, changed) is False
+    assert 'expected_error' not in mismatched.columns
+
+
+def test_weights_fingerprint_is_content_based():
+    a = nn.Linear(3, 2).state_dict()
+    same = {k: v.clone() for k, v in a.items()}
+    assert em.weights_fingerprint(a) == em.weights_fingerprint(same)
+    assert em.weights_fingerprint(a) == em.weights_fingerprint({k: v.numpy() for k, v in a.items()})
+    bumped = {k: v.clone() for k, v in a.items()}
+    bumped['bias'][0] += 1e-3
+    assert em.weights_fingerprint(a) != em.weights_fingerprint(bumped)
+    renamed = {('x' + k): v for k, v in a.items()}
+    assert em.weights_fingerprint(a) != em.weights_fingerprint(renamed)
+    assert len(em.weights_fingerprint({'w': torch.ones(2, dtype=torch.bfloat16)})) == 64
 
 
 def _identity_eval(tmp_path, ckpt_dir):
@@ -225,6 +323,7 @@ def test_video_end_to_end_train_eval_infer_with_expected_error(tmp_path, monkeyp
     trainer.saveModel(ckpt)
     fit = json.loads((run_dir / 'error_model_fit.json').read_text())
     assert fit['n_samples'] == 4 and fit['split'] == 'validation'
+    assert fit['weights_sha256'] == em.weights_fingerprint(torch.load(ckpt, map_location='cpu', weights_only=True))
     fitted_json = (run_dir / 'error_model.json').read_text()
 
     metrics = video_eval.evaluate(eval_df=test_pq, out=tmp_path, model_weights=ckpt, num_classes=2,

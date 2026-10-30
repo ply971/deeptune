@@ -25,19 +25,23 @@ def summarize_predictions(predictions: pd.DataFrame, mode: str) -> Optional[dict
 
 
 # --- per-prediction error estimate (A4) ---
-def attach_expected_error(result: pd.DataFrame, mode: str, checkpoint_path, scores) -> bool:
+def attach_expected_error(result: pd.DataFrame, mode: str, checkpoint_path, scores,
+                          state_dict=None) -> bool:
     """Adds an ``expected_error`` column to `result` (P(wrong) for
     classification, expected |error| for regression) when the run has an
     ``error_model.json`` next to `checkpoint_path`. `scores` are the class
     probabilities [N, K] (cls) or raw outputs [N] / [N, D] (reg), in the
-    same row order as `result`. Old runs without the file: no column, no
-    error. Returns whether the column was added. Torch-free."""
+    same row order as `result`. `state_dict` (the loaded weights) is
+    fingerprinted so an error model fitted on other weights is refused with
+    a warning. Old runs without the file: no column, no error. Returns
+    whether the column was added. Torch-free."""
     import numpy as np
-    from evaluators.error_model import load_error_model_near, prediction_features
+    from evaluators.error_model import load_error_model_near, prediction_features, weights_fingerprint
     scores = np.asarray(scores, dtype=np.float64)
     if len(scores) != len(result) or not len(scores):
         return False
-    model = load_error_model_near(checkpoint_path, mode, num_outputs=scores.reshape(len(scores), -1).shape[1])
+    model = load_error_model_near(checkpoint_path, mode, num_outputs=scores.reshape(len(scores), -1).shape[1],
+                                  weights_sha256=None if state_dict is None else weights_fingerprint(state_dict))
     if model is None:
         return False
     result['expected_error'] = model.predict(prediction_features(scores, mode))
