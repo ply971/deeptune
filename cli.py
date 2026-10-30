@@ -46,11 +46,9 @@ class DeepTuneVisionOptions:
         self.mode : Optional[str] = parsed_args.mode
         self.grouper: Optional[str] = parsed_args.grouper
         self.fixed_seed: bool = parsed_args.fixed_seed
-        # Per-prediction error model (A4): recorded in cli_arguments.json and
-        # applied process-wide so the shared Trainer honours it.
+        # Per-prediction error model (A4): recorded in cli_arguments.json;
+        # trainers/*/train.py pass it to the Trainer as fit_error_model.
         self.no_error_model: bool = parsed_args.no_error_model
-        from evaluators.error_model import set_fit_by_default
-        set_fit_by_default(not self.no_error_model)
 
         if run_type == RunType.TabPFNTRAIN:
             self.target_column: Optional[str] = parsed_args.target_column

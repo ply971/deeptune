@@ -216,14 +216,16 @@ class Trainer:
         # --- per-prediction error model (A4) ---
         # One extra pass over the VALIDATION loader (never test data) with the
         # final weights -- the ones train.py saves as model_weights.pth -- fits
-        # error_model.json next to them. Opt out with --no_error_model (or
-        # trainer.fit_error_model = False). RNG state and train/eval mode are
-        # restored, so training results are unchanged.
-        enabled = getattr(self, 'fit_error_model', None)
-        if enabled is None:
-            from evaluators.error_model import fit_by_default
-            enabled = fit_by_default()
-        if enabled and self.output_dir:
+        # error_model.json next to them. On by default; trainers/*/train.py
+        # set trainer.fit_error_model = not args.no_error_model. RNG state and
+        # train/eval mode are restored, so training results are unchanged.
+        # TODO(T1, V-011): once early stopping / best-checkpoint selection
+        # lands, validation becomes a selection set: reload the BEST weights
+        # here before fitting, and fit on a separate calibration split or on
+        # out-of-fold predictions instead of val_loader. The weights
+        # fingerprint recorded in error_model_fit.json already makes eval /
+        # inference refuse an error model fitted on other weights.
+        if getattr(self, 'fit_error_model', True) and self.output_dir:
             try:
                 self._fit_error_model()
             except Exception as exc:  # never let the auxiliary estimate break a finished training run
@@ -245,7 +247,8 @@ class Trainer:
         import random
         import numpy as np
         from evaluators.error_model import (
-            ERROR_MODEL_FILENAME, ERROR_MODEL_FIT_FILENAME, ErrorModel, error_targets, prediction_features,
+            ERROR_MODEL_FILENAME, ERROR_MODEL_FIT_FILENAME, FINGERPRINT_METHOD, ErrorModel, error_targets,
+            prediction_features, weights_fingerprint,
         )
 
         rng_state = (random.getstate(), np.random.get_state(), torch.get_rng_state(),
@@ -283,6 +286,11 @@ class Trainer:
         error_model.fit_info.update({
             'split': 'validation', 'n_batches': n_batches,
             'val_dataset_size': len(fit_loader.dataset) if hasattr(fit_loader, 'dataset') else None,
+            # The weights this model was fitted on (== what train.py saves as
+            # model_weights.pth right after train()). Hash the inner model, not
+            # a multi-clip wrapper, so it never depends on state_dict pass-through.
+            'weights_sha256': weights_fingerprint(self.model.state_dict()),
+            'weights_fingerprint_method': FINGERPRINT_METHOD,
         })
         error_model.fit_info.update(getattr(self, 'error_fit_info', None) or {})
         out_dir = Path(self.output_dir)

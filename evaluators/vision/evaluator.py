@@ -104,7 +104,8 @@ class TestTrainer:
         scores = probabilities if self.mode == 'cls' else predictions
         per_sample = _per_sample_predictions(labels, predictions, scores, self.mode)
         estimate = _attach_error_estimate(per_sample, scores, self.mode, self.output_dir,
-                                          best_model_weights_path, error_model_path, self.logger)
+                                          best_model_weights_path, error_model_path, self.logger,
+                                          self.model.state_dict())
         if estimate is not None:
             metrics['error_estimate'] = estimate
         per_sample.to_csv(self.output_dir / PREDICTIONS_FILENAME, index=False)
@@ -147,19 +148,24 @@ def _per_sample_predictions(labels, predictions, scores, mode):
     return frame
 
 
-def _attach_error_estimate(per_sample, scores, mode, output_dir, checkpoint_path, error_model_path, logger):
+def _attach_error_estimate(per_sample, scores, mode, output_dir, checkpoint_path, error_model_path, logger,
+                           state_dict=None):
     """Adds ``expected_error`` and writes error_calibration.json/.csv when the
     run has an error model; returns the summary for full_metrics.json (or
     None for old runs without one)."""
     from evaluators.error_model import (
         CALIBRATION_STEM, calibration_table, load_error_model_near, metrics_summary,
-        observed_errors, prediction_features, save_report,
+        observed_errors, prediction_features, save_report, weights_fingerprint,
     )
     num_outputs = scores.reshape(len(scores), -1).shape[1]
     model = load_error_model_near(checkpoint_path, mode, num_outputs=num_outputs,
-                                  path=error_model_path, warn=logger.warning)
+                                  path=error_model_path, warn=logger.warning,
+                                  weights_sha256=None if state_dict is None else weights_fingerprint(state_dict))
     if model is None:
         return None
+    if model.method_used == 'constant':
+        logger.info('expected_error is the same for every sample (base rate): '
+                    f"{model.fit_info.get('fallback_reason')}")
     per_sample['expected_error'] = model.predict(prediction_features(scores, mode))
     report = calibration_table(per_sample['expected_error'].to_numpy(), observed_errors(per_sample, mode), mode=mode)
     save_report(report, output_dir, CALIBRATION_STEM,

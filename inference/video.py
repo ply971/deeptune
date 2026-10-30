@@ -112,5 +112,5 @@ def predict_video(
             result['abs_error'] = [abs(float(t) - float(p)) for t, p in zip(raw_labels, predicted)]
     # Per-prediction error estimate (A4): only when the run saved error_model.json.
     if scores:
-        attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy())
+        attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), model.state_dict())
     return result

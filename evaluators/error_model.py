@@ -64,7 +64,7 @@ CALIBRATION_STEM = 'error_calibration'
 
 MIN_FIT_SAMPLES = 30
 MIN_OUTCOME_COUNT = 5
-PRIOR_STRENGTH = 2.0
+PRIOR_STRENGTH = 0.5  # tuned on held-out synthetic data, not the test fixture: scripts/study_error_model_prior.py
 LOGISTIC_L2 = 1.0
 
 CLASSIFICATION_FEATURES = ('max_prob', 'margin', 'entropy')
@@ -76,20 +76,33 @@ PathLike = Union[str, Path]
 
 
 # ---------------------------------------------------------------------------
-# Opt-out switch (``--no_error_model``). cli.py sets it once per process; a
-# Trainer can also override it per instance with ``trainer.fit_error_model``.
+# Which weights was an error model fitted on?
 # ---------------------------------------------------------------------------
-_FIT_BY_DEFAULT = True
+FINGERPRINT_METHOD = 'state_dict-sha256-v1'
 
 
-def set_fit_by_default(enabled: bool) -> None:
-    """Process-wide default for fitting the error model after training."""
-    global _FIT_BY_DEFAULT
-    _FIT_BY_DEFAULT = bool(enabled)
-
-
-def fit_by_default() -> bool:
-    return _FIT_BY_DEFAULT
+def weights_fingerprint(state_dict) -> str:
+    """SHA-256 over a model's state_dict (sorted names, dtype, shape and raw
+    tensor bytes). Content-based, so it is the same for the in-memory model
+    the error model was fitted on and for the weights later loaded back
+    from ``model_weights.pth``. Duck-typed (anything with ``.detach()`` /
+    ``.numpy()`` or array-like), so this module never imports torch."""
+    import hashlib
+    digest = hashlib.sha256()
+    for name in sorted(state_dict):
+        value = state_dict[name]
+        if hasattr(value, 'detach'):
+            value = value.detach().cpu()
+            try:
+                array = value.contiguous().numpy()
+            except TypeError:  # e.g. bfloat16 has no numpy dtype
+                array = value.float().contiguous().numpy()
+        else:
+            array = np.ascontiguousarray(np.asarray(value))
+        digest.update(name.encode('utf-8'))
+        digest.update(f'|{array.dtype.str}|{array.shape}|'.encode('ascii'))
+        digest.update(array.tobytes())
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -496,9 +509,15 @@ def find_error_model(checkpoint_path: Optional[PathLike]) -> Optional[Path]:
 
 def load_error_model_near(checkpoint_path: Optional[PathLike], mode: str,
                           num_outputs: Optional[int] = None, path: Optional[PathLike] = None,
-                          warn=print) -> Optional[ErrorModel]:
+                          warn=print, weights_sha256: Optional[str] = None) -> Optional[ErrorModel]:
     """Load the run's error model if there is a usable one; otherwise None
-    (with a warning when a file exists but cannot be used)."""
+    (with a warning when a file exists but cannot be used).
+
+    ``weights_sha256`` is ``weights_fingerprint()`` of the weights about to
+    be scored. If the error model recorded a different fingerprint it was
+    fitted on other weights (e.g. a later best checkpoint in the same
+    folder), so it is ignored with a warning rather than applied silently.
+    Error models from before fingerprints existed are applied unchecked."""
     found = Path(path) if path is not None else find_error_model(checkpoint_path)
     if found is None or not found.is_file():
         return None
@@ -513,6 +532,12 @@ def load_error_model_near(checkpoint_path: Optional[PathLike], mode: str,
     fitted_k = model.fit_info.get('num_outputs')
     if num_outputs is not None and fitted_k is not None and int(fitted_k) != int(num_outputs):
         warn(f'Ignoring error model {found}: fitted for {fitted_k} outputs, model has {num_outputs}.')
+        return None
+    fitted_hash = model.fit_info.get('weights_sha256')
+    if weights_sha256 is not None and fitted_hash is not None and fitted_hash != weights_sha256:
+        warn(f'Ignoring error model {found}: it was fitted on different weights '
+             f'(sha256 {fitted_hash[:12]}..., these weights {weights_sha256[:12]}...). '
+             f'No expected_error is reported.')
         return None
     return model
 
@@ -603,6 +628,11 @@ def metrics_summary(report: dict, model: Optional[ErrorModel] = None) -> dict:
     if model is not None:
         summary['method'] = model.method_used
         summary['fit_samples'] = model.fit_info.get('n_samples')
+        summary['fit_split'] = model.fit_info.get('split')
+        if model.method_used == 'constant':
+            # Say so plainly: every sample got the same number.
+            summary['note'] = ('expected_error is the same for every sample (base rate): '
+                               + str(model.fit_info.get('fallback_reason')))
     return {k: v for k, v in summary.items() if not isinstance(v, (list, dict))}
 
 
