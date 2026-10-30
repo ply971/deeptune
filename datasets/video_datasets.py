@@ -286,6 +286,10 @@ class _VideoClipDataset(Dataset):
         self.has_labels = 'labels' in df.columns
         self.labels = df['labels'].to_numpy() if self.has_labels else None
         self.float_labels = bool(self.has_labels and pd.api.types.is_float_dtype(df['labels']))
+        if self.has_labels and len(df) and not (pd.api.types.is_numeric_dtype(df['labels'])
+                                                or pd.api.types.is_bool_dtype(df['labels'])):
+            raise ValueError('Video labels must be numeric (class indices or regression targets); deeptune.py '
+                             'encodes class names when it splits the dataset.')
         self.data = df.drop(columns=['videos'])  # labels + passthrough columns; never clip bytes
         self._extra_columns = [c for c in df.columns if c not in RESERVED_COLUMNS]
         self._starts = self._time_column(df, 'start_sec')

@@ -586,9 +586,11 @@ def _av_iterate(backend: _PyAVBackend, targets, want_frames: bool, want_mvs: boo
         return frames, mvs, kinds
     target_set = set(targets)
     stop_at = targets[-1] + lookahead
+    tail = []  # the most recently decoded (index, frame), for clamping past the end
 
     def keep(index, frame):
         kinds[index] = _pict_type(frame)
+        tail[:] = [(index, frame)]
         if index in target_set:
             if want_frames:
                 frames[index] = frame.to_ndarray(format='rgb24')
@@ -605,6 +607,11 @@ def _av_iterate(backend: _PyAVBackend, targets, want_frames: bool, want_mvs: boo
             stream.thread_type = 'AUTO'
         return container, stream
 
+    def add_tail():
+        # Targets past the real end: hand back the true last frame so callers can repeat it.
+        if want_frames and tail and tail[0][0] not in frames and tail[0][0] < targets[-1]:
+            frames[tail[0][0]] = tail[0][1].to_ndarray(format='rgb24')
+
     def sequential():
         container, stream = open_stream()
         try:
@@ -612,6 +619,7 @@ def _av_iterate(backend: _PyAVBackend, targets, want_frames: bool, want_mvs: boo
                 keep(index, frame)
                 if index >= stop_at:
                     break
+            add_tail()
         finally:
             container.close()
 
@@ -645,6 +653,7 @@ def _av_iterate(backend: _PyAVBackend, targets, want_frames: bool, want_mvs: boo
                     break
             if not reseek:
                 break  # every target handled, or the stream ended
+        add_tail()
     finally:
         container.close()
     if any(t not in kinds for t in targets if t < len(pts_index)):
@@ -899,16 +908,21 @@ class _OpenCVBackend:
         wanted = set(int(t) for t in targets)
         last = int(max(wanted))
         out = {}
+        decoded = 0
         try:
             for index in range(last + 1):
                 if not cap.grab():
                     break
+                decoded = index + 1
                 if index in wanted:
                     ok, frame = cap.retrieve()
                     if ok:
                         out[index] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         finally:
             cap.release()
+        if 0 < decoded <= last and decoded - 1 not in out:
+            # The reported frame count was too high: fetch the true last frame for clamping.
+            out.update(self.read(np.asarray([decoded - 1])))
         return out
 
     def iter_frames(self, width: Optional[int] = None, gray: bool = False):
