@@ -252,6 +252,47 @@ SAM 3 backend, the DeepTune-feature THUMOS run.
 4. GUI (Wave 4) covers everything that landed. Course report in December;
    the paper follows if the measured results support one.
 
+### Accepted board proposals (user accepted all 13, 2026-10-30)
+Source: `.claude/board/PROPOSALS.md` and `scout-wave1.md`, with the Critic's
+challenges V-013/V-014 as constraints. Board ids P-101…P-112 = the Scout's
+P-001…P-012 (an id clash, see P-113).
+- **Changes to planned tasks:**
+  - R1 default = **V-JEPA 2 / 2.1 frozen + attentive probe**, with SigLIP 2 as
+    the appearance stream (P-101). Report accuracy at DeepTune's own frame
+    counts, not the papers' 64-frame multi-view numbers (V-014).
+  - B1's feature cache stores **pooled token grids** (e.g. 8×4×4), and the
+    attentive probe is a first-class head (P-102). Measure the pooling cost.
+  - T1 adds the **expert recipe**: label smoothing, clip-consistent
+    mixup/cutmix, layer-wise LR decay, EMA, multi-crop × multi-clip testing,
+    and peak-memory logging per option (P-103). On 8 GB: probe or side
+    network first, then LoRA on ViT-B, then LoRA on ViT-L.
+  - R2 = the paper core: **group-aware conformal abstention** on a separate,
+    group-disjoint calibration split, since validation is used for model
+    selection once early stopping exists (P-104, P-114, V-011).
+  - S1/S3: a parity check against the Apache `trackers` library, after
+    checking against the reference lapjv rule first (P-110, V-013). It
+    needs the user's OK to install.
+  - Phase 2/6: two-sided static-bias probes. SCUFO-style frozen-frame splits
+    on synthetic data (A3's P-001) and a SCUBA-style background swap on real
+    data (P-111).
+- **New features:**
+  - **Leakage / near-duplicate audit** every run, plus suggested `group`
+    columns when none exist (P-105, S).
+  - **Run card** next to each checkpoint: CIs, calibration, the abstention
+    guarantee, leakage audit, bias scores, trainable parameters, and the
+    weight licence of every backbone used (P-106, S–M).
+  - **Label-issue finder** from out-of-fold predictions; cleanlab is Apache
+    (P-107, M).
+  - **Data-efficiency curve**: "how many clips do I need?", from cached
+    features (P-108, S).
+  - **"Label these next"**: TypiClust cold start, then `expected_error`. Ships
+    only if a simulation beats random selection by more than the CI (P-109, M).
+  - **Text-query temporal search**: "when does the lobster appear?", low
+    confidence (P-112, L).
+- **Placement:** P-105, P-106 and P-108 go in Wave 2 with B3. P-107 and P-109
+  come after B3's out-of-fold predictions. P-112 goes after Wave 3 and is
+  the first to cut after S6/R3 if time is short.
+
 ### Professional-quality rules (agreed 2026-10-30)
 1. **Real-data gate.** A feature is not "done" until the coordinator has run it
    once on a real dataset on the GPU, with the number recorded in PROGRESS.md
