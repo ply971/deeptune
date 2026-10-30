@@ -211,10 +211,15 @@ coordinator plan is in the session's plan file. Agent reports go in
 guarantee** (conformal / selective prediction). Every number is measured on
 public benchmarks or on the user's data, with confidence intervals.
 
-**Licences.** Prefer Apache/MIT/BSD weights (torchvision, RT-DETR v2,
-D-FINE, Grounding DINO, OWLv2, SAM 2, SegFormer, Mask2Former, VideoMAE).
-**SAM 3** and **V-JEPA 2** use Meta licences, and SAM 3 has gated checkpoints:
-make them optional backends, never defaults, and record the licence in the docs.
+**Licences** (corrected 2026-10-30 from the model cards / repo LICENSE files,
+after the Research Scout's F-002). Prefer Apache/MIT/BSD weights: torchvision,
+**V-JEPA 2 (MIT, can be a default)**, RT-DETR v2, D-FINE, Grounding DINO,
+OWLv2, SAM 2, SegFormer, Mask2Former, ViTPose. **VideoMAE (v1/v2) and
+TimeSformer weights are CC-BY-NC-4.0 (non-commercial)**, and VideoMAE V2 is
+gated: opt-in only, with the licence shown when they're chosen. **SAM 3** and
+**DINOv3** are gated under Meta's own licences: optional backends, never
+defaults. Ultralytics (AGPL-3.0) is never a dependency. Each run records the
+licence of every set of weights it used.
 
 ### New tasks (all via `transformers` 5.16.1 or torchvision, already installed)
 | Task | What | Builds on |
