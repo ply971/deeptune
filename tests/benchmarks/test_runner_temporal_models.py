@@ -47,3 +47,14 @@ def test_siglip_gets_its_own_preprocessing(tmp_path):
     """siglip_tiny takes 32 px only, so this fails if the runner's --resize transform reaches it."""
     out = bench.main(['--task', 'direction', '--out', str(tmp_path), '--models', 'mean:siglip_tiny', '--epochs', '1', *TINY, '--resize', '64'])
     assert pd.read_csv(out / 'results.csv')['test_acc'].between(0, 1).all()
+
+
+def test_the_runner_flip_also_negates_dx_on_two_stream_clips():
+    import torch
+    clip = torch.arange(5.0).reshape(1, 5, 1, 1).repeat(2, 1, 2, 3) + torch.arange(3.0).reshape(1, 1, 1, 3)
+    flipped, _ = bench.ClipHFlip([(clip.clone(), 0)], p=1.0)[0]
+    assert torch.equal(flipped[:, :3], clip[:, :3].flip(-1))
+    assert torch.equal(flipped[:, 3], -clip[:, 3].flip(-1))
+    assert torch.equal(flipped[:, 4], clip[:, 4].flip(-1))
+    rgb, _ = bench.ClipHFlip([(clip[:, :3].clone(), 0)], p=1.0)[0]
+    assert torch.equal(rgb, clip[:, :3].flip(-1))

@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-from handlers.video_arch import add_video_arch_arguments, pooling_argument, pooling_from_args, resolve_model_version
+from handlers.video_arch import add_video_arch_arguments, pooling_argument, pooling_from_args, resolve_model_version, spec_num_frames
 from inference.common import error_calibration_report, summarize_predictions
 from inference.data import (
     IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, load_labeled_or_flat_files, load_single_file,
@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         used = apply_recorded_video_settings(args, argv)
         if args.video_arch is not None:  # --video_arch given here; a recorded run's --pooling already holds its architecture
             from utils import is_native_video_architecture
-            args.pooling = pooling_from_args(args)
+            args.pooling = pooling_from_args(args, num_frames_given='num_frames' in {t.split('=', 1)[0][2:] for t in argv})
+            args.num_frames = spec_num_frames(args.pooling, args.num_frames)
             args.model_version = resolve_model_version(args, is_native_video_architecture)
         if used:
             print('Video settings (flags given here, else the run\'s cli_arguments.json): '

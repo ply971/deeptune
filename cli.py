@@ -5,7 +5,7 @@ from typing import Optional
 from utils import UseCase, RunType, get_model_architecture, is_native_video_architecture, lora_rank_ignored_reason, set_seed
 from trainers.param_count import parse_param_count
 from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
-from handlers.video_arch import VIDEO_ARCH_ARG_NAMES, add_video_arch_arguments, pooling_argument, pooling_from_args, resolve_model_version
+from handlers.video_arch import VIDEO_ARCH_ARG_NAMES, add_video_arch_arguments, flag_was_given, pooling_argument, pooling_from_args, resolve_model_version, spec_num_frames
 from handlers.training_args import TRAINING_BASICS_ARG_NAMES, add_training_basics_arguments, apply_config_defaults
 import json
 import os, shutil
@@ -194,7 +194,7 @@ class DeepTuneVisionOptions:
         if run_type == RunType.EMBED:
             self.use_case: UseCase = UseCase.from_string(parsed_args.use_case)
         
-        self._parse_video_arch_args(parsed_args)  # temporal video architectures (Phase 3)
+        self._parse_video_arch_args(parsed_args, args)  # temporal video architectures (Phase 3)
         self.model = self._parse_model_str(run_type)
         self.model_architecture = ( get_model_architecture(self.model_version) ) if self.model_version else 'not_provided'
         if run_type in (RunType.TRAIN, RunType.ONECALL, RunType.EVAL, RunType.EMBED):
@@ -283,10 +283,12 @@ Other PEFT models ignore this flag and use --embed_size as their rank.""")
             setattr(self, name, getattr(parsed_args, name))
 
     # --- temporal video architectures (Phase 3, handlers/video_arch.py) ---
-    def _parse_video_arch_args(self, parsed_args):
+    def _parse_video_arch_args(self, parsed_args, argv):
         for name in VIDEO_ARCH_ARG_NAMES:
             setattr(self, name, getattr(parsed_args, name))
-        self.pooling = pooling_from_args(self)
+        if self.video_arch is not None:
+            self.pooling = pooling_from_args(self, flag_was_given(self.parser, argv, 'num_frames'))
+            self.num_frames = spec_num_frames(self.pooling, self.num_frames)
         if hasattr(self, 'model_version'):
             self.model_version = resolve_model_version(self, is_native_video_architecture)
 

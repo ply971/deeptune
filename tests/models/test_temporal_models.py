@@ -40,13 +40,15 @@ def test_output_and_embedding_shapes(spec, mode, out, added_layers):
 
 @pytest.mark.parametrize('spec', ARCHES)
 def test_frozen_backbone_stays_frozen_and_head_trains(spec):
+    # The inflated first convolutions are the one exception (V-046): test_inflated_first_conv_trains_when_frozen.
     model = _build(spec, freeze=True)
-    names = {n: p.requires_grad for n, p in model.named_parameters()}
+    inflated = getattr(model, 'always_trainable', ())
+    names = {n: p.requires_grad for n, p in model.named_parameters() if not n.startswith(inflated)}
     backbone = {n: g for n, g in names.items() if n.startswith('backbone.model.')}
     head = {n: g for n, g in names.items() if not n.startswith('backbone.')}
     assert backbone and not any(backbone.values())
     assert head and all(head.values())
-    before = {n: p.clone() for n, p in model.named_parameters() if n.startswith('backbone.model.')}
+    before = {n: p.clone() for n, p in model.named_parameters() if n.startswith('backbone.model.') and not n.startswith(inflated)}
     torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=0.1).zero_grad()
     model(_clip(spec)).sum().backward()
     assert all(p.grad is None for n, p in model.named_parameters() if n in before)
@@ -499,13 +501,141 @@ def test_the_real_siglip_path_builds_and_runs(tiny_siglip_weights, peft, spec):
 
 
 def test_siglip_preprocessing_matches_a_pil_bicubic_resize_when_shrinking():
-    """A resize without antialiasing would keep this fine pattern's contrast; PIL, which SigLIP's processor uses, removes it."""
+    """On noise, a resize without antialiasing keeps most of the contrast; PIL, which SigLIP's processor uses, removes it."""
+    import numpy as np
     from PIL import Image
     from datasets.video_datasets import native_video_transform
-    pattern = torch.zeros(1, 3, 256, 256, dtype=torch.uint8)
-    pattern[:, :, ::2] = 255
-    pattern[:, :, :, 100:150] = 128
-    out = native_video_transform('siglip_tiny')(pattern)[0]
-    image = Image.fromarray(pattern[0].permute(1, 2, 0).numpy()).resize((32, 32), Image.BICUBIC)
-    expected = (torch.from_numpy(__import__('numpy').array(image)).permute(2, 0, 1).float() / 255 - 0.5) / 0.5
+    noise = torch.randint(0, 256, (1, 3, 256, 256), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    out = native_video_transform('siglip_tiny')(noise)[0]
+    image = Image.fromarray(noise[0].permute(1, 2, 0).numpy()).resize((32, 32), Image.BICUBIC)
+    expected = (torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255 - 0.5) / 0.5
     assert (out - expected).abs().max() < 0.05
+
+
+# --- frozen backbones must still see time (V-046) ------------------------------------------------------------------------
+def _few_steps(model, spec):
+    """A few updates on a clip whose frames differ, so the inflated kernels can stop being identical across the stack."""
+    torch.manual_seed(3)
+    x, y = _clip(spec, batch=4), torch.tensor([0, 1, 2, 0])
+    optimiser = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=1e-2)
+    model.train()
+    for _ in range(3):
+        optimiser.zero_grad()
+        torch.nn.functional.cross_entropy(model(x), y).backward()
+        optimiser.step()
+    return model.eval()
+
+
+@pytest.mark.parametrize('spec,conv', [('early_fusion:num_frames=4', 'backbone.model.conv1.'),
+                                       ('two_stream:num_frames=4', 'backbone.model.motion.model.conv1.'),
+                                       ('two_stream:num_frames=4,fusion=fc', 'backbone.model.motion.model.conv1.')])
+def test_inflated_first_conv_trains_when_frozen(spec, conv, capsys):
+    from trainers.param_budget import summarize_parameters
+    model = _build(spec, freeze=True)
+    assert 'stays trainable' in capsys.readouterr().out
+    trainable = [(n, p) for n, p in model.named_parameters() if p.requires_grad and n.startswith('backbone.')]
+    assert [n for n, _ in trainable] == [conv + 'weight']
+    summary = summarize_parameters(model)
+    assert summary['breakdown']['backbone']['trainable'] == trainable[0][1].numel()  # and so in the reported count
+    assert summary['trainable'] == summary['breakdown']['head']['total'] + trainable[0][1].numel()
+
+
+def test_frozen_early_fusion_becomes_order_aware_by_training():
+    model = _build('early_fusion:num_frames=4', freeze=True).eval()
+    x = _clip('early_fusion')
+    assert torch.allclose(model(x), model(x.flip(1)), atol=1e-4)  # the identical kernels: why the layer must train
+    _few_steps(model, 'early_fusion')
+    assert not torch.allclose(model(x), model(x.flip(1)), atol=1e-3)
+
+
+@pytest.mark.parametrize('fusion', ['avg', 'fc'])
+def test_frozen_two_stream_motion_stream_learns_order_and_axes(fusion):
+    model = _build(f'two_stream:num_frames=4,fusion={fusion}', freeze=True).eval()
+    x = _clip('two_stream')
+    reordered, swapped = x.clone(), x.clone()
+    reordered[:, :, 3:] = x[:, :, 3:].flip(1)
+    swapped[:, :, 3:] = x[:, :, [4, 3]]
+    motion = lambda clip: model(clip, extract_embed='separate')['motion']
+    assert torch.allclose(motion(x), motion(reordered), atol=1e-4)
+    assert torch.allclose(motion(x), motion(swapped), atol=1e-4)  # at the start: blind to order and to dx against dy
+    _few_steps(model, 'two_stream')
+    assert not torch.allclose(motion(x), motion(reordered), atol=1e-3)
+    assert not torch.allclose(motion(x), motion(swapped), atol=1e-3)
+    assert not torch.allclose(model(x), model(reordered), atol=1e-3)
+
+
+@pytest.mark.parametrize('spec,conv', [('early_fusion:num_frames=4', 'backbone.model.conv1.weight'),
+                                       ('two_stream:num_frames=4', 'backbone.model.motion.model.conv1.weight')])
+def test_a_budget_keeps_the_inflated_conv_trainable(spec, conv):
+    from trainers.param_budget import apply_top_down_budget, summarize_parameters
+    model = _build(spec)
+    params = dict(model.named_parameters())
+    head = summarize_parameters(model)['breakdown']['head']['total']
+    apply_top_down_budget(model, head + params[conv].numel())
+    assert params[conv].requires_grad
+    assert summarize_parameters(model)['trainable'] == head + params[conv].numel()
+    with pytest.raises(ValueError, match='budget'):
+        apply_top_down_budget(_build(spec), head + params[conv].numel() - 1)
+
+
+# --- a recorded spec wins unless the option flag is given (V-046) ----------------------------------------------------------
+def test_recorded_options_survive_and_explicit_flags_replace_them():
+    recorded = {'video_arch': 'cnn_rnn', 'pooling': 'cnn_rnn:bidirectional=1,rnn_hidden=9,rnn_layers=2,rnn_type=gru'}
+    assert parse_pooling_spec(pooling_from_args(recorded))[1] == {'bidirectional': True, 'rnn_hidden': 9, 'rnn_layers': 2, 'rnn_type': 'gru'}
+    changed = parse_pooling_spec(pooling_from_args({**recorded, 'rnn_hidden': 16}))[1]
+    assert changed == {'bidirectional': True, 'rnn_hidden': 16, 'rnn_layers': 2, 'rnn_type': 'gru'}
+    assert parse_pooling_spec(pooling_from_args({'video_arch': 'tsm', 'pooling': 'mean'}))[1] == {'tsm_fold_div': 8}  # the default
+
+
+def test_recorded_frame_count_wins_unless_given():
+    args = {'video_arch': 'early_fusion', 'pooling': 'early_fusion:num_frames=4', 'num_frames': 8}
+    assert parse_pooling_spec(pooling_from_args(args, num_frames_given=False))[1] == {'num_frames': 4}
+    assert parse_pooling_spec(pooling_from_args(args, num_frames_given=True))[1] == {'num_frames': 8}
+
+
+@pytest.mark.parametrize('given,fold', [([], 4), (['--tsm_fold_div', '8'], 8)])
+def test_the_cli_keeps_a_recorded_spec(tmp_path, given, fold):
+    from cli import DeepTuneVisionOptions
+    from utils import RunType
+    options = DeepTuneVisionOptions(RunType.EVAL, args=['--out', str(tmp_path), '--model_version', 'resnet_tiny', '--video_arch', 'tsm',
+                                                        '--pooling', 'tsm:tsm_fold_div=4', *given])
+    assert parse_pooling_spec(options.pooling)[1] == {'tsm_fold_div': fold}
+
+
+@pytest.mark.parametrize('given,frames', [([], 4), (['--num_frames', '8'], 8), (['--num_f', '8'], 8)])
+def test_the_cli_builds_clips_for_the_recorded_frame_count(tmp_path, given, frames):
+    from cli import DeepTuneVisionOptions
+    from utils import RunType
+    options = DeepTuneVisionOptions(RunType.EVAL, args=['--out', str(tmp_path), '--model_version', 'resnet_tiny', '--video_arch', 'early_fusion',
+                                                        '--pooling', 'early_fusion:num_frames=4', *given])
+    assert options.num_frames == frames and parse_pooling_spec(options.pooling)[1] == {'num_frames': frames}
+
+
+# --- where TSM shifts ------------------------------------------------------------------------------------------------------
+def test_tsm_shifts_inside_the_residual_branch_only():
+    """The block's output is the residual on the shifted features plus the input as it came in."""
+    model = _build('tsm').eval()
+    block = model.backbone.model.layer1  # no downsample here: the identity path is the input itself
+    assert block.downsample is None
+    seen = {}
+    block.register_forward_pre_hook(lambda _, inputs: seen.update(raw=inputs[0].clone()), prepend=True)
+    block.conv1.register_forward_pre_hook(lambda _, inputs: seen.update(branch=inputs[0].clone()))
+    block.bn2.register_forward_hook(lambda _, inputs, output: seen.update(residual=output.clone()))
+    block.register_forward_hook(lambda _, inputs, output: seen.update(out=output.clone()))
+    with torch.no_grad():
+        model(_clip('tsm'))
+    assert torch.equal(seen['branch'], temporal_shift(seen['raw'], 4, 8))
+    assert not torch.equal(seen['branch'], seen['raw'])
+    assert torch.allclose(seen['out'], torch.relu(seen['residual'] + seen['raw']), atol=1e-6)
+
+
+# --- DenseNet with one added layer on video, and the images guard (V-046) ----------------------------------------------------
+def test_densenet_video_embedding_is_the_features_and_the_images_embedder_still_refuses():
+    from embed.vision.embed import load_vision_model
+    from src.vision.densenet import adjustedDenseNet
+    model = VideoFramePoolClassifier(adjustedDenseNet, 'dummy', 3, 1, 4, False, pooling='mean').eval()
+    with torch.no_grad():
+        assert model(torch.randn(2, 2, 3, 64, 64), extract_embed=True).shape == (2, 1024)  # (2, 3), the logits, until V-046
+    with pytest.raises(ValueError, match='intermediate embedding layer'):
+        load_vision_model(model_architecture='densenet', model_version='dummy', use_case='finetuned', num_classes=3,
+                          embed_size=4, added_layers=1)

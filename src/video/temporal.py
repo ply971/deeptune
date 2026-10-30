@@ -98,8 +98,12 @@ def inflate_conv(conv: nn.Conv2d, in_channels: int, cross_modality: bool = False
     return new
 
 
-def inflate_first_conv(core, in_channels: int, cross_modality: bool = False) -> None:
-    """Inflate ``core.conv1`` in place. Under LoRA the base layer and the adapter's input convolution both inflate."""
+def inflate_first_conv(core, in_channels: int, cross_modality: bool = False, frozen: bool = False) -> None:
+    """Inflate ``core.conv1`` in place. Under LoRA the base layer and the adapter's input convolution both inflate.
+
+    The inflated kernels start identical across the stack, so with them frozen nothing could ever tell the stacked
+    frames apart. So this layer stays trainable under --freeze_backbone (under LoRA the adapter does that job, and the
+    base layer stays frozen), and the models list it in ``always_trainable`` for the trainable-parameter budget."""
     conv = core.conv1
     if hasattr(conv, 'base_layer'):
         conv.base_layer = inflate_conv(conv.base_layer, in_channels, cross_modality)
@@ -108,6 +112,11 @@ def inflate_first_conv(core, in_channels: int, cross_modality: bool = False) -> 
         conv.in_features = in_channels
     else:
         core.conv1 = inflate_conv(conv, in_channels, cross_modality)
+        core.conv1.requires_grad_(True)
+        if frozen:
+            count = sum(p.numel() for p in core.conv1.parameters())
+            print(f'--freeze_backbone: the inflated first convolution stays trainable ({count:,} parameters), '
+                  'or the model could not see time.')
 
 
 def temporal_shift(x: torch.Tensor, num_frames: int, fold_div: int) -> torch.Tensor:
@@ -158,14 +167,16 @@ class VideoLateFusion(nn.Module):
 
 class VideoEarlyFusion(nn.Module):
     """Early fusion: all T frames stacked on the channels of the first convolution, inflated to 3T inputs from the
-    2D weights; the rest of the backbone is unchanged. T is fixed when the model is built."""
+    2D weights; the rest of the backbone is unchanged. T is fixed when the model is built. The first convolution always
+    trains (see inflate_first_conv)."""
 
     def __init__(self, frame_model_cls, version, num_classes, added_layers=2, embed_size=1000, freeze_backbone=False,
                  task_type='cls', num_frames=8):
         super().__init__()
         self.num_frames = num_frames
         self.backbone, size = _feature_backbone(frame_model_cls, version, num_classes, embed_size, freeze_backbone, task_type)
-        inflate_first_conv(_resnet_core(self.backbone, 'early_fusion', version), 3 * num_frames)
+        inflate_first_conv(_resnet_core(self.backbone, 'early_fusion', version), 3 * num_frames, frozen=freeze_backbone)
+        self.always_trainable = ('backbone.model.conv1.',)
         self.head = ClipHead(size, _head_output_size(num_classes, task_type), added_layers, embed_size)
         self.embedding_dim = self.head.embedding_dim
 
@@ -249,8 +260,8 @@ class VideoTemporalTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, tt_dim))
         nn.init.trunc_normal_(self.cls_token, std=0.02)
         # Learned, but starting from the sinusoidal encoding at the scale of the normalised tokens. With unnormalised
-        # tokens and the usual small random start the model memorises frames before it can tell their order
-        # (direction, 1500 clips, held out: 0.545 against 1.000).
+        # tokens and the usual small random start, one run on the direction benchmark memorised frames before it could
+        # tell their order. This is not a measured gain: see docs/video-plan/reports/B2.md for the seed table.
         self.positions = nn.Parameter(_sinusoidal_positions(num_frames + 1, tt_dim))
         layer = nn.TransformerEncoderLayer(tt_dim, tt_heads, dim_feedforward=4 * tt_dim, dropout=0.1, activation='gelu',
                                            batch_first=True, norm_first=True)
@@ -279,7 +290,7 @@ class _StreamPair(nn.Module):
 
 class VideoTwoStream(nn.Module):
     """Two-stream ConvNet: a spatial stream on the middle RGB frame, a temporal stream on L stacked motion fields
-    (2L channels, first convolution inflated), fused late.
+    (2L channels, first convolution inflated and always trained, see inflate_first_conv), fused late.
 
     ``fusion='avg'``: each stream has its own head and the logits are averaged. ``fusion='fc'``: one head on the
     concatenated features. Input is ``[B, T, 5, H, W]``: RGB, then (dx, dy) normalised by the dataset, see
@@ -302,7 +313,9 @@ class VideoTwoStream(nn.Module):
         rgb, rgb_size = _feature_backbone(frame_model_cls, version, num_classes, embed_size, freeze_backbone, task_type)
         motion, motion_size = _feature_backbone(frame_model_cls, version, num_classes, embed_size, freeze_backbone, task_type)
         _resnet_core(rgb, 'two_stream', version)
-        inflate_first_conv(_resnet_core(motion, 'two_stream', version), 2 * self.motion_length, cross_modality=True)
+        inflate_first_conv(_resnet_core(motion, 'two_stream', version), 2 * self.motion_length, cross_modality=True,
+                           frozen=freeze_backbone)
+        self.always_trainable = ('backbone.model.motion.model.conv1.',)
         self.backbone = _StreamPair(rgb, motion)
         out = _head_output_size(num_classes, task_type)
         if fusion == 'avg':

@@ -169,3 +169,38 @@ def test_a_file_without_motion_vectors_fails_clearly_instead_of_giving_zero_moti
     monkeypatch.setattr(VideoReader, 'get_motion_vectors', unavailable)
     with pytest.raises(ValueError, match='no motion vectors'):
         open_video_dataset(frame, num_frames=4, options=VideoDataOptions(clip_motion='mv'))[0]
+
+
+def test_the_cache_keeps_two_videos_apart(tmp_path):
+    """Same frames asked for, same parameters, one cache: each video must get its own motion."""
+    left = translating_clip(tmp_path / 'left.mp4', 8, -2, 0, size=SIZE, seed=1)
+    right = translating_clip(tmp_path / 'right.mp4', 8, 2, 0, size=SIZE, seed=1)
+    cache = tmp_path / 'cache'
+    fields = []
+    for path in (left, right):
+        with VideoReader(path) as reader:
+            fields.append(load_motion_field(reader, [1, 2, 3], 'farneback', cache_dir=cache))
+    assert np.median(fields[0][:, 0]) < -0.5 and np.median(fields[1][:, 0]) > 0.5
+    assert len(list(cache.rglob('*.npy'))) == 2
+
+
+def _non_square_clip(path, dx, width=96, height=48, frames=12):
+    from datasets.video_synth import write_clip
+    rng = np.random.default_rng(0)
+    world = np.kron(rng.integers(0, 255, (height // 4, 2 * width // 4, 3), dtype=np.uint8), np.ones((4, 4, 1), dtype=np.uint8))
+    return write_clip(path, [np.roll(world, dx * i, axis=1)[:height, :width] for i in range(frames)], codec='mpeg4',
+                      options={'qscale': '2'})
+
+
+def test_a_non_square_clip_scales_dx_by_its_width(tmp_path):
+    """+2 px/frame at 96 px wide is 2 / (96 * 0.05) = 0.417; with width and height swapped it would be 0.833."""
+    frame = pd.DataFrame({'videos': [str(_non_square_clip(tmp_path / 'wide.mp4', 2))], 'labels': [1]})
+    clip = open_video_dataset(frame, num_frames=4, options=VideoDataOptions(clip_motion='farneback'))[0][0]
+    assert clip.shape == (4, 5, 48, 96)
+    assert abs(clip[1:, 3][..., 12:-12, 24:-24].median().item() - 2 / (96 * MOTION_FULL_SCALE)) < 0.15
+
+
+def test_normalising_divides_each_axis_by_its_own_size():
+    field = np.ones((1, 2, 2, 2), dtype=np.float32)
+    out = normalise_motion_field(field, height=32, width=64)
+    assert np.allclose(out[0, 0], 1 / (64 * MOTION_FULL_SCALE)) and np.allclose(out[0, 1], 1 / (32 * MOTION_FULL_SCALE))

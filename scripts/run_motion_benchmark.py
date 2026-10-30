@@ -171,6 +171,8 @@ class ClipHFlip:
         clip, label, *rest = self.dataset[idx]
         if self.rng.random() < self.p:
             clip = clip.flip(-1)
+            if clip.shape[-3] == 5:  # two-stream: a mirrored clip moves the other way, so dx changes sign too
+                clip[..., 3, :, :] *= -1
         return (clip, label, *rest)
 
 

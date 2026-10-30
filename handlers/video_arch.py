@@ -31,6 +31,10 @@ ARCH_OPTIONS = {
     'two_stream': ('num_frames', 'fusion', 'motion_length'),
 }
 _ALLOWED_VALUES = {'rnn_type': ('lstm', 'gru'), 'fusion': ('avg', 'fc')}
+# What an option flag means when neither the flag nor a recorded spec sets it. The flags themselves default to None,
+# so a recorded spec can tell "not given" from "given with the default value".
+ARCH_OPTION_DEFAULTS = {'tsm_fold_div': 8, 'rnn_type': 'lstm', 'rnn_hidden': 256, 'rnn_layers': 1, 'bidirectional': False,
+                        'tt_layers': 2, 'tt_heads': 4, 'tt_dim': 256, 'fusion': 'avg'}
 
 # Everything add_video_arch_arguments adds; recorded in cli_arguments.json.
 VIDEO_ARCH_ARG_NAMES = ('video_arch', 'tsm_fold_div', 'rnn_type', 'rnn_hidden', 'rnn_layers', 'bidirectional',
@@ -102,8 +106,11 @@ def _value(args, name):
     return args.get(name) if isinstance(args, dict) else getattr(args, name, None)
 
 
-def pooling_from_args(args) -> str:
-    """The pooling spec for parsed arguments (``video_arch`` and its options win over ``pooling``)."""
+def pooling_from_args(args, num_frames_given: bool = True) -> str:
+    """The pooling spec for parsed arguments. With ``video_arch`` set, each option comes from its flag if given, else
+    from a spec of the same architecture in ``pooling`` (what a run recorded), else from its default.
+
+    ``num_frames`` always has a value, so the caller says whether it was given (see ``flag_was_given``)."""
     arch, pooling = _value(args, 'video_arch'), _value(args, 'pooling') or 'mean'
     if arch in (None, 'frame_pool'):
         return pooling
@@ -113,7 +120,29 @@ def pooling_from_args(args) -> str:
         return arch
     if arch == 'slow_fusion':
         return 'mean'
-    return format_pooling_spec(arch, **{name: _value(args, name) for name in ARCH_OPTIONS[arch]})
+    recorded = parse_pooling_spec(pooling)[1] if pooling.partition(':')[0] == arch else {}
+    options = {name: ARCH_OPTION_DEFAULTS.get(name) for name in ARCH_OPTIONS[arch]}
+    options.update(recorded)
+    for name in ARCH_OPTIONS[arch]:
+        value = _value(args, name)
+        if value is not None and (name != 'num_frames' or num_frames_given or name not in recorded):
+            options[name] = value
+    return format_pooling_spec(arch, **options)
+
+
+def flag_was_given(parser, argv, name: str) -> bool:
+    """Whether ``--name`` was on the command line, in any spelling argparse accepts. Parses again with no default."""
+    default = parser.get_default(name)
+    parser.set_defaults(**{name: None})
+    try:
+        return getattr(parser.parse_args(argv), name) is not None
+    finally:
+        parser.set_defaults(**{name: default})
+
+
+def spec_num_frames(pooling: str, num_frames: int) -> int:
+    """Clips must have the length the model was built for: the spec's frame count if it has one."""
+    return parse_pooling_spec(pooling)[1].get('num_frames', num_frames)
 
 
 def resolve_model_version(args, is_native):
@@ -155,6 +184,8 @@ def add_video_arch_arguments(parser):
     g = parser.add_argument_group('temporal video architectures (video modality only)')
     g.add_argument('--video_arch', choices=VIDEO_ARCH_CHOICES, default=None,
                    help="""How the model fuses time, with --model_version as the backbone (default: frame_pool, set by --pooling).
+With a recorded run, an option flag below replaces the recorded value only if you give it.
+With --freeze_backbone, early_fusion and two_stream keep their inflated first convolution trainable.
 frame_pool: pool per-frame embeddings. single_frame: middle frame only.
 late_fusion: first and last frames, embeddings merged by FC layers.
 early_fusion: all frames stacked on the first convolution (ResNet family).
@@ -163,17 +194,17 @@ tsm: Temporal Shift Module in each residual block (ResNet family).
 cnn_rnn: per-frame embeddings into an LSTM or GRU.
 temporal_transformer: per-frame embeddings into a small transformer with a CLS token.
 two_stream: RGB middle frame + stacked motion fields (--motion_source; ResNet family).""")
-    g.add_argument('--tsm_fold_div', type=_positive_int, default=8,
+    g.add_argument('--tsm_fold_div', type=_positive_int, default=None,
                    help='tsm: shift 1/N of the channels forward and 1/N backward (default 8).')
-    g.add_argument('--rnn_type', choices=_ALLOWED_VALUES['rnn_type'], default='lstm', help='cnn_rnn: recurrent cell (default lstm).')
-    g.add_argument('--rnn_hidden', type=_positive_int, default=256, help='cnn_rnn: hidden size (default 256).')
-    g.add_argument('--rnn_layers', type=_positive_int, default=1, help='cnn_rnn: layers (default 1).')
-    g.add_argument('--bidirectional', action='store_true', help='cnn_rnn: read the clip in both directions.')
-    g.add_argument('--tt_layers', type=_positive_int, default=2, help='temporal_transformer: encoder layers (default 2).')
-    g.add_argument('--tt_heads', type=_positive_int, default=4, help='temporal_transformer: attention heads (default 4).')
-    g.add_argument('--tt_dim', type=_positive_int, default=256,
+    g.add_argument('--rnn_type', choices=_ALLOWED_VALUES['rnn_type'], default=None, help='cnn_rnn: recurrent cell (default lstm).')
+    g.add_argument('--rnn_hidden', type=_positive_int, default=None, help='cnn_rnn: hidden size (default 256).')
+    g.add_argument('--rnn_layers', type=_positive_int, default=None, help='cnn_rnn: layers (default 1).')
+    g.add_argument('--bidirectional', action='store_true', default=None, help='cnn_rnn: read the clip in both directions.')
+    g.add_argument('--tt_layers', type=_positive_int, default=None, help='temporal_transformer: encoder layers (default 2).')
+    g.add_argument('--tt_heads', type=_positive_int, default=None, help='temporal_transformer: attention heads (default 4).')
+    g.add_argument('--tt_dim', type=_positive_int, default=None,
                    help='temporal_transformer: token size, a multiple of --tt_heads (default 256).')
-    g.add_argument('--fusion', choices=_ALLOWED_VALUES['fusion'], default='avg',
+    g.add_argument('--fusion', choices=_ALLOWED_VALUES['fusion'], default=None,
                    help="two_stream: average the two streams' logits, or merge their embeddings with an FC head (default avg).")
     g.add_argument('--motion_length', type=_positive_int, default=None,
                    help='two_stream: motion fields stacked per clip, taken around the middle frame (default: --num_frames).')
