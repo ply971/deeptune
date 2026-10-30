@@ -25,7 +25,8 @@ def _iter_files(directory: Path, extensions: tuple[str, ...]) -> list[Path]:
     return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in extensions)
 
 
-def load_labeled_or_flat_files(data_path: Path, extensions: tuple[str, ...], bytes_col: str) -> tuple[pd.DataFrame, bool]:
+def load_labeled_or_flat_files(data_path: Path, extensions: tuple[str, ...], bytes_col: str,
+                               read_bytes: bool = True) -> tuple[pd.DataFrame, bool]:
     """Reads raw image/video files from `data_path` for inference.
 
     Follows the same "every top-level entry is either a class, or a split
@@ -35,9 +36,16 @@ def load_labeled_or_flat_files(data_path: Path, extensions: tuple[str, ...], byt
     falls back to a flat, unlabeled read of every recognised file directly
     inside `data_path` otherwise.
 
+    `read_bytes=False` stores each file's path instead of its bytes (video:
+    the clips are then decoded lazily by datasets.video_datasets).
+
     Returns (dataframe, has_labels).
     """
     data_path = Path(data_path)
+
+    def content(file: Path):
+        return file.read_bytes() if read_bytes else str(file)
+
     if not data_path.is_dir():
         raise ValueError(f'{data_path} is not a folder.')
 
@@ -48,12 +56,12 @@ def load_labeled_or_flat_files(data_path: Path, extensions: tuple[str, ...], byt
         if class_dirs:
             for class_dir in class_dirs:
                 for file in _iter_files(class_dir, extensions):
-                    rows[bytes_col].append(file.read_bytes())
+                    rows[bytes_col].append(content(file))
                     rows['labels'].append(class_dir.name)
                     rows['__sample_id'].append(str(file))
         else:
             for file in _iter_files(entry, extensions):
-                rows[bytes_col].append(file.read_bytes())
+                rows[bytes_col].append(content(file))
                 rows['labels'].append(entry.name)
                 rows['__sample_id'].append(str(file))
     if rows[bytes_col]:
@@ -65,12 +73,12 @@ def load_labeled_or_flat_files(data_path: Path, extensions: tuple[str, ...], byt
     if not files:
         raise ValueError(f'No supported files found under {data_path}.')
     return pd.DataFrame({
-        bytes_col: [f.read_bytes() for f in files],
+        bytes_col: [content(f) for f in files],
         '__sample_id': [str(f) for f in files],
     }), False
 
 
-def load_single_file(path: Path, bytes_col: str) -> pd.DataFrame:
+def load_single_file(path: Path, bytes_col: str, read_bytes: bool = True) -> pd.DataFrame:
     """Reads one image/video file for inference -- the common "I have one
     new clip, what does the model think it is" case, distinct from both the
     labeled-folder and flat-unlabeled-folder cases load_labeled_or_flat_files
@@ -81,10 +89,10 @@ def load_single_file(path: Path, bytes_col: str) -> pd.DataFrame:
     path = Path(path)
     if not path.is_file():
         raise ValueError(f'{path} is not a file.')
-    return pd.DataFrame({bytes_col: [path.read_bytes()], '__sample_id': [str(path)]})
+    return pd.DataFrame({bytes_col: [path.read_bytes() if read_bytes else str(path)], '__sample_id': [str(path)]})
 
 
-def load_video_manifest_for_inference(path: Path) -> tuple[pd.DataFrame, bool]:
+def load_video_manifest_for_inference(path: Path, read_bytes: bool = True) -> tuple[pd.DataFrame, bool]:
     """Reads a CSV/XLSX list of video file paths for inference. Like
     handlers/video_manifest.py's read_video_manifest, but a 'labels' column
     is optional here rather than mandatory -- inference data may genuinely
@@ -112,7 +120,7 @@ def load_video_manifest_for_inference(path: Path) -> tuple[pd.DataFrame, bool]:
 
     frame = frame.copy()
     frame['__sample_id'] = resolved
-    frame['videos'] = [Path(p).read_bytes() for p in resolved]
+    frame['videos'] = [Path(p).read_bytes() for p in resolved] if read_bytes else resolved
     if not has_labels and 'labels' in frame.columns:
         frame = frame.drop(columns=['labels'])
     return frame, has_labels

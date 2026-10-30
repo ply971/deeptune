@@ -59,6 +59,8 @@ else
     if "$python" scripts/smoke_video.py --model resnet18 --manifest; then results+=("smoke resnet18 --manifest: ok"); else results+=("smoke resnet18 --manifest: FAIL"); failed=1; fi
     echo "== smoke r3d_18"
     if "$python" scripts/smoke_video.py --model r3d_18; then results+=("smoke r3d_18: ok"); else results+=("smoke r3d_18: FAIL"); failed=1; fi
+    echo "== smoke resnet18 --parquet_bytes"
+    if "$python" scripts/smoke_video.py --model resnet18 --parquet_bytes; then results+=("smoke resnet18 --parquet_bytes: ok"); else results+=("smoke resnet18 --parquet_bytes: FAIL"); failed=1; fi
 fi
 
 elapsed=$(( $(date +%s) - started ))

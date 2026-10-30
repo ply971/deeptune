@@ -31,7 +31,11 @@ def read_video_manifest(path: Path) -> pd.DataFrame:
     return frame
 
 
-def load_video_manifest(path: Path) -> pd.DataFrame:
+def load_video_manifest(path: Path, read_bytes: bool = True) -> pd.DataFrame:
+    """The validated manifest; `read_bytes=False` keeps the resolved absolute
+    paths (the scalable default for --raw-data training, see --video_storage)
+    instead of embedding every clip's bytes."""
     frame = read_video_manifest(path)
-    frame['videos'] = frame['videos'].map(lambda name: Path(name).read_bytes())
+    if read_bytes:
+        frame['videos'] = frame['videos'].map(lambda name: Path(name).read_bytes())
     return frame

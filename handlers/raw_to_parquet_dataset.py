@@ -42,7 +42,12 @@ def main():
 
     print(f"Raw dataset converted and saved to Parquet at: {out_dir}")
 
-def raw_to_parquet(dataset_dir: Path, out: Path, modality:str):
+def raw_to_parquet(dataset_dir: Path, out: Path, modality:str, video_storage: str = 'bytes'):
+    """`video_storage` (video only; deeptune.py passes --video_storage, default 'paths'): 'paths' stores absolute file paths
+    (clips are decoded lazily, never copied); 'bytes' embeds every clip, the
+    original portable format. Both are read by datasets.video_datasets."""
+    if video_storage not in ('paths', 'bytes'):
+        raise ValueError("video_storage must be 'paths' or 'bytes'.")
     dataset_dir, out = Path(dataset_dir), Path(out)
     if modality not in ('images', 'video', 'text', 'tabular', 'timeseries'):
         raise ValueError(f'Unsupported modality: {modality}')
@@ -66,9 +71,9 @@ def raw_to_parquet(dataset_dir: Path, out: Path, modality:str):
             if dataset_dir.suffix.lower() not in ('.csv', '.xlsx'):
                 raise ValueError('For training, use a labeled video folder or a CSV/XLSX list with videos and labels columns. A single MP4 can be previewed in the desktop app.')
             from handlers.video_manifest import load_video_manifest
-            df = load_video_manifest(dataset_dir)
+            df = load_video_manifest(dataset_dir, read_bytes=video_storage == 'bytes')
         else:
-            df = pd.DataFrame(load_videos_and_labels_mcc(dataset_dir))
+            df = pd.DataFrame(load_videos_and_labels_mcc(dataset_dir, read_bytes=video_storage == 'bytes'))
 
         out = out / f"video_dataset_{UNIQUE_ID}.parquet"
 
@@ -98,7 +103,7 @@ def raw_to_parquet(dataset_dir: Path, out: Path, modality:str):
         return out
 
 
-def _load_labeled_files_mcc(dataset_dir, data_key: str, extensions: list[str]) -> dict:
+def _load_labeled_files_mcc(dataset_dir, data_key: str, extensions: list[str], read_bytes: bool = True) -> dict:
     """
     Shared directory-walking logic behind load_images_and_labels_mcc and
     load_videos_and_labels_mcc.
@@ -141,7 +146,7 @@ def _load_labeled_files_mcc(dataset_dir, data_key: str, extensions: list[str]) -
             for class_dir in class_dirs:
                 for data_file in sorted(class_dir.iterdir()):
                     if data_file.is_file() and data_file.suffix.lower() in extensions:
-                        combined_data[data_key].append(data_file.read_bytes())
+                        combined_data[data_key].append(data_file.read_bytes() if read_bytes else str(data_file.resolve()))
                         combined_data["labels"].append(class_dir.name)
                     else:
                         print(f"Warning: File {data_file} not found or unsupported format.")
@@ -149,7 +154,7 @@ def _load_labeled_files_mcc(dataset_dir, data_key: str, extensions: list[str]) -
             # `entry` itself is a class - its files belong directly to it.
             for data_file in sorted(entry.iterdir()):
                 if data_file.is_file() and data_file.suffix.lower() in extensions:
-                    combined_data[data_key].append(data_file.read_bytes())
+                    combined_data[data_key].append(data_file.read_bytes() if read_bytes else str(data_file.resolve()))
                     combined_data["labels"].append(entry.name)
                 else:
                     print(f"Warning: File {data_file} not found or unsupported format.")
@@ -176,7 +181,7 @@ def load_images_and_labels_mcc(dataset_dir):
     return _load_labeled_files_mcc(dataset_dir, "images", [".png", ".jpg", ".jpeg"])
 
 
-def load_videos_and_labels_mcc(dataset_dir):
+def load_videos_and_labels_mcc(dataset_dir, read_bytes: bool = True):
 
     """
     Handles data for Binary/Multi-Class video classification, mirroring
@@ -190,7 +195,7 @@ def load_videos_and_labels_mcc(dataset_dir):
     """
 
     video_extensions = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wmv", ".mpeg", ".mpg"]
-    return _load_labeled_files_mcc(dataset_dir, "videos", video_extensions)
+    return _load_labeled_files_mcc(dataset_dir, "videos", video_extensions, read_bytes=read_bytes)
 
 
 def make_parser() -> ArgumentParser:

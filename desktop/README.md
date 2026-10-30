@@ -127,6 +127,16 @@ You can also supply a CSV/XLSX file containing `videos` (local file paths) and
 Duplicate files and missing clips are rejected. MP4, AVI, MOV, MKV, WebM, M4V,
 WMV, MPEG, and MPG containers are accepted; decoding depends on the codec
 inside the file. Corrupt or unsupported clips produce a readable error.
+Optional `group` (clips of one group stay in one split), `start_sec` and
+`end_sec` (sample only that part of the clip) columns are honoured.
+
+Training from a clip list stores the file paths, not copies of the videos, so
+keep the originals in place while the run trains and evaluates. The video
+sampling, test-time-clip and worker settings a run used (see the main README,
+"Video data") are saved with the run, and the **Test** page passes them back to
+`infer.py` automatically. On Windows with a GPU, small video datasets now run
+without DataLoader worker processes, which removes the long worker start-up
+pauses seen before.
 
 ## Development checks
 
@@ -149,6 +159,7 @@ For a repeatable video plumbing check using generated moving-shape clips:
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --manifest
 .venv\Scripts\python.exe scripts\smoke_video.py --model r3d_18
+.venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --parquet_bytes
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --peft --pooling attention
 ```
 

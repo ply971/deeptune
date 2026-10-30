@@ -51,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Video only.
     p.add_argument('--num_frames', type=int, default=8)
     p.add_argument('--pooling', choices=['mean', 'attention'], default='mean')
+    # Video data layer: the run's recorded sampling/decoding settings (cli_arguments.json).
+    from handlers.video_args import add_video_data_arguments
+    add_video_data_arguments(p, training=False)
 
     # Tabular only.
     p.add_argument('--target', default='labels')
@@ -75,11 +78,12 @@ def _load_new_data(args: argparse.Namespace):
         raise ValueError('Images inference needs a folder of image files, or a single image file.')
     if args.modality == 'video':
         if args.data.is_dir():
-            return load_labeled_or_flat_files(args.data, VIDEO_EXTENSIONS, 'videos')
+            # File paths, not bytes: clips are decoded lazily and never all held in memory.
+            return load_labeled_or_flat_files(args.data, VIDEO_EXTENSIONS, 'videos', read_bytes=False)
         if args.data.suffix.lower() in ('.csv', '.xlsx'):
-            return load_video_manifest_for_inference(args.data)
+            return load_video_manifest_for_inference(args.data, read_bytes=False)
         if args.data.is_file() and args.data.suffix.lower() in VIDEO_EXTENSIONS:
-            return load_single_file(args.data, 'videos'), False
+            return load_single_file(args.data, 'videos', read_bytes=False), False
         raise ValueError('Video inference needs a folder of clips, a single clip, or a CSV/XLSX list of video paths.')
     df = load_tabular_like(args.data)
     if args.modality == 'text':
@@ -89,9 +93,56 @@ def _load_new_data(args: argparse.Namespace):
     return df, args.target in df.columns  # timeseries
 
 
+# Video settings that define how test clips are built. When a flag is not given
+# on the command line, the checkpoint run's cli_arguments.json supplies it (the
+# desktop Test page passes them explicitly). --num_workers is deliberately not
+# inherited: it describes the training machine, not the pipeline.
+RECORDED_VIDEO_SETTINGS = ('num_frames', 'pooling', 'video_backend', 'temporal_sampling', 'clip_stride',
+                           'clip_duration_sec', 'motion_source', 'test_clips')
+
+
+def _recorded_run_arguments(checkpoint: Path) -> dict:
+    """cli_arguments.json saved next to (or inside) the checkpoint, or {}."""
+    checkpoint = Path(checkpoint)
+    path = (checkpoint if checkpoint.is_dir() else checkpoint.parent) / 'cli_arguments.json'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def apply_recorded_video_settings(args: argparse.Namespace, argv: list[str]) -> dict:
+    """Fill video settings the user did not pass with the run's recorded values.
+    Returns {name: value} actually used for every recorded setting."""
+    given = {token.split('=', 1)[0][2:] for token in argv if token.startswith('--')}
+    recorded = _recorded_run_arguments(args.checkpoint)
+    parser = build_parser()
+    used = {}
+    for name in RECORDED_VIDEO_SETTINGS:
+        value = recorded.get(name)
+        if name not in given and value is not None:
+            try:  # re-validate the recorded value with the flag's own parser
+                setattr(args, name, parser.parse_args(_required_stub() + [f'--{name}', str(value)]).__dict__[name])
+            except SystemExit:
+                print(f'Ignoring the recorded {name}={value!r}: not a valid value for this version.')
+        used[name] = getattr(args, name)
+    return used if recorded else {}
+
+
+def _required_stub() -> list[str]:
+    return ['--modality', 'video', '--checkpoint', '.', '--data', '.', '--out', '.']
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.modality == 'video':
+        used = apply_recorded_video_settings(args, argv)
+        if used:
+            print('Video settings (flags given here, else the run\'s cli_arguments.json): '
+                  + ', '.join(f'{k}={v}' for k, v in used.items()))
 
     label_mapping = None
     if args.label_mapping is not None and args.label_mapping.exists():
@@ -110,10 +161,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.modality == 'video':
         from inference.video import predict_video
+        from datasets.video_datasets import video_options_from_args
         predictions = predict_video(
             df, args.checkpoint, args.model_version, args.num_classes, args.added_layers,
             args.embed_size, args.freeze_backbone, args.mode, args.use_peft, args.batch_size,
-            args.num_frames, args.pooling, label_mapping,
+            args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
         )
     elif args.modality == 'text':
         from inference.text import predict_text

@@ -9,9 +9,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from cli import DeepTuneVisionOptions
-from datasets.video_datasets import ParquetVideoDataset, native_video_transform, collate_video_samples
+from datasets.video_datasets import (VideoDataOptions, native_video_transform, open_video_dataset, video_loader_kwargs,
+                                     video_options_from_args)
 from helpers import transformations
-from options import UNIQUE_ID, DEVICE, NUM_WORKERS, PERSIST_WORK, PIN_MEM
+from options import UNIQUE_ID, DEVICE, PIN_MEM
+from src.video.multi_clip import wrap_for_test_clips
 from utils import RunType, build_video_model, save_process_times
 
 
@@ -58,14 +60,17 @@ def embed(df_path, out, model_weights, batch_size, use_case, model_version, adde
         embed_size=embed_size,
         num_frames=num_frames,
         device=DEVICE,
+        options=video_options_from_args(args),
     )
 
-    df = pd.read_parquet(df_path)
+    # The dataset is opened lazily from the parquet file (paths or bytes), so
+    # the clips are not loaded into memory here.
+    combined_df = embedding_model(Path(df_path), batch_size)
 
-    combined_df = embedding_model(df, batch_size)
-
-    if grouper is not None and grouper in df.columns:
-        combined_df[grouper] = df[grouper]
+    if grouper is not None:
+        import pyarrow.parquet as pq
+        if grouper in pq.read_schema(df_path).names:
+            combined_df[grouper] = pd.read_parquet(df_path, columns=[grouper])[grouper]
 
     combined_df.to_parquet(EMBED_FILE, index=False)
 
@@ -127,28 +132,25 @@ class VideoEmbeddingModel:
     existing 2D vision backbones.
     """
 
-    def __init__(self, model, model_version, added_layers=2, embed_size=1000, num_frames=8, device=DEVICE):
-        self.model = model
+    def __init__(self, model, model_version, added_layers=2, embed_size=1000, num_frames=8, device=DEVICE,
+                 options: VideoDataOptions | None = None):
+        self.options = options or VideoDataOptions()
+        # --test_clips N: embeddings are averaged over N clips per video.
+        self.model = wrap_for_test_clips(model, self.options.test_clips, 'cls')
         self.model_version = model_version
         self.added_layers = added_layers
         self.embed_size = embed_size
         self.num_frames = num_frames
         self.device = device
 
-    def __call__(self, df: DataFrame, batch_size: int = 2) -> DataFrame:
-        if df.empty:
+    def __call__(self, df, batch_size: int = 2) -> DataFrame:
+        """`df`: a DataFrame or a parquet/CSV/XLSX path, either storage format."""
+        dataset = open_video_dataset(df, transform=transformations, num_frames=self.num_frames,
+                                     clip_transform=native_video_transform(self.model_version),
+                                     options=self.options, num_clips=self.options.test_clips)
+        if len(dataset) == 0:
             raise ValueError('The embedding dataset is empty.')
-        dataset = ParquetVideoDataset(df, transform=transformations, num_frames=self.num_frames,
-                                       clip_transform=native_video_transform(self.model_version))
-        data_loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=NUM_WORKERS,
-            pin_memory=PIN_MEM,
-            persistent_workers=PERSIST_WORK,
-            collate_fn=collate_video_samples,
-        )
+        data_loader = DataLoader(dataset, **video_loader_kwargs(dataset, batch_size, False, self.options.num_workers))
         return self._extract_embeddings(data_loader)
 
     def _extract_embeddings(self, data_loader: DataLoader) -> DataFrame:
@@ -188,7 +190,7 @@ class VideoEmbeddingModel:
         with torch.no_grad():
             for batch in tqdm(data_loader):
                 data, labels, *extras = batch
-                data = data.to(self.device)
+                data = data.to(self.device, non_blocking=PIN_MEM)
 
                 embeddings = self.model(data, extract_embed=True)
 
