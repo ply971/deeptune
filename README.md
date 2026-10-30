@@ -249,7 +249,10 @@ confidence signal, so for regression the estimate is the validation mean
 absolute error for every sample until a later phase adds an uncertainty
 signal. Pass `--no_error_model` to skip the fit. Runs without
 `error_model.json` (old runs, or `--no_error_model`) just have no
-`expected_error` column.
+`expected_error` column. `error_model_fit.json` also records a fingerprint
+(`weights_sha256`) of the weights the error model was fitted on. If eval or
+inference loads different weights, DeepTune prints a warning and reports no
+`expected_error`, rather than a number that belongs to other weights.
 
 Where it appears: the eval folder's `predictions.csv` (one row per test
 sample), `infer.py`'s `predictions.csv`, and a summary under `error_estimate`
