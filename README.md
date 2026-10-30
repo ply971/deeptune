@@ -199,6 +199,46 @@ app with every dependency bundled in.
 </tbody>
 </table>
 
+## Per-prediction error estimate (video & images)
+
+Every video (and image) prediction can carry an **`expected_error`** column:
+
+- **classification:** the probability that *this* prediction is wrong;
+- **regression:** the expected absolute error of *this* prediction, in target units.
+
+How it works: after training, DeepTune runs the final model once more over the
+**validation split** (never the test set) and fits a small error model
+(`error_model.json`, plain JSON, saved next to `model_weights.pth`, with fit
+details in `error_model_fit.json`). For classification it maps the max softmax
+probability onto the error rate actually observed at that confidence
+(smoothed isotonic regression, so a less confident prediction never gets a
+lower stated error). With fewer than 30 validation samples, or fewer than 5
+wrong or 5 right predictions, it falls back to the validation error rate
+`(errors + 1) / (n + 2)` for every sample. A regression network has no built-in
+confidence signal, so for regression the estimate is the validation mean
+absolute error for every sample until a later phase adds an uncertainty
+signal. Pass `--no_error_model` to skip the fit. Runs without
+`error_model.json` (old runs, or `--no_error_model`) just have no
+`expected_error` column.
+
+Where it appears: the eval folder's `predictions.csv` (one row per test
+sample), `infer.py`'s `predictions.csv`, and a summary under `error_estimate`
+in `full_metrics.json` / `inference_metrics.json`.
+
+**Reading `error_calibration.csv`** (written on eval, and on inference when
+the new data has labels): test samples are sorted by stated error and split
+into 10 equal-count bins (deciles). Each row gives the bin's mean stated error
+(`stated_mean`), the error actually observed in that bin (`observed_mean`), the
+difference (`gap`), and a 95% interval for the observed value
+(`observed_ci_low`/`observed_ci_high`; `within_95ci` says whether the stated value
+falls inside it). If the estimate is trustworthy, `stated_mean ≈ observed_mean`
+in every row. `calibration_error` in the summary is the count-weighted mean
+|gap|. For example, 0.03 means the stated error is off by 3 percentage points
+on average. For classification, `auroc_error_detection` measures how well
+`expected_error` ranks wrong predictions above right ones (0.5 means no better
+than chance). With a small test set the bins are small and the intervals wide,
+so read the table as a whole rather than one bin at a time.
+
 ## Documentation
 
 DeepTune is being under active development and mainteneance with a user-friendly comprehensive documentation for easier usage. The documentation can be accessed [here](https://deeptune.readthedocs.io/en/latest/).
