@@ -264,12 +264,15 @@ class ArrowBytesStore:
         schema = pa.schema([('videos', pa.large_binary())])
         tmp = path.with_suffix(path.suffix + f'.{os.getpid()}.part')
         rows = 0
-        with pa.OSFile(str(tmp), 'wb') as sink, pa.ipc.new_file(sink, schema) as writer:
-            for values in batches:
-                array = pa.array(values, type=pa.large_binary())
-                writer.write_batch(pa.record_batch([array], schema=schema))
-                rows += len(array)
-        retry_while_locked(lambda: os.replace(tmp, path))
+        try:
+            with pa.OSFile(str(tmp), 'wb') as sink, pa.ipc.new_file(sink, schema) as writer:
+                for values in batches:
+                    array = pa.array(values, type=pa.large_binary())
+                    writer.write_batch(pa.record_batch([array], schema=schema))
+                    rows += len(array)
+            retry_while_locked(lambda: os.replace(tmp, path))
+        finally:
+            _try_unlink(tmp)
         return cls(path, rows)
 
 

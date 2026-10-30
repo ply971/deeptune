@@ -547,3 +547,18 @@ def test_the_clip_store_waits_for_a_lock_to_clear(tmp_path):
         store = ArrowBytesStore.from_batches([[b'clip']], tmp_path / 'clips.arrow')
     assert store[0] == b'clip'
 
+
+def test_the_clip_store_leaves_no_part_file_when_it_fails(tmp_path):
+    from datasets.video_datasets import ArrowBytesStore
+    target = tmp_path / 'clips.arrow'
+    with mock.patch('datasets.video_datasets.os.replace', side_effect=_LOCKED), pytest.raises(PermissionError):
+        ArrowBytesStore.from_batches([[b'clip']], target)
+    assert not list(tmp_path.iterdir())
+
+    def failing_batches():
+        yield [b'clip']
+        raise OSError('disk full')
+    with pytest.raises(OSError, match='disk full'):
+        ArrowBytesStore.from_batches(failing_batches(), target)
+    assert not list(tmp_path.iterdir())
+
