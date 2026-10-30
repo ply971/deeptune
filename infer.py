@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Video only.
     p.add_argument('--num_frames', type=int, default=8)
-    p.add_argument('--pooling', choices=['mean', 'attention'], default='mean')
+    p.add_argument('--pooling', choices=['mean', 'attention', 'single_frame'], default='mean')
 
     # Tabular only.
     p.add_argument('--target', default='labels')

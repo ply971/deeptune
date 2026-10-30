@@ -27,6 +27,7 @@ from src.vision.convnext_peft import adjustedPeftConvNext
 from src.video.video3d import adjustedVideo3D, VIDEO3D_ARCHITECTURES
 from src.video.video3d_peft import adjustedPeftVideo3D
 from src.video.frame_pool import VideoFramePoolClassifier
+from src.video.single_frame import VideoSingleFrameClassifier
 
 from helpers import fixed_seed
 
@@ -61,6 +62,11 @@ VIDEO3D_MODEL_CLS_MAP: dict[str, Type[nn.Module]] = {
 VIDEO3D_PEFT_MODEL_CLS_MAP: dict[str, Type[nn.Module]] = {
     version: adjustedPeftVideo3D for version in VIDEO3D_ARCHITECTURES
 }
+
+# Temporal strategies for 2D-backbone video models (--pooling). "single_frame"
+# is the Karpathy single-frame baseline: the backbone sees only the middle
+# frame (src/video/single_frame.py).
+VIDEO_POOLING_CHOICES: tuple[str, ...] = ("mean", "attention", "single_frame")
 
 
 class UseCase(Enum):
@@ -181,7 +187,23 @@ def build_video_model(
     model_cls = get_video_model_cls(model_version, use_peft=use_peft)
 
     if is_native_video_architecture(model_version):
+        if pooling == "single_frame":
+            raise ValueError(
+                f"pooling='single_frame' needs a 2D image backbone (e.g. resnet18); "
+                f"{model_version} is a native video architecture."
+            )
         return model_cls(num_classes, model_version, added_layers, embed_size, freeze_backbone, task_type=mode)
+
+    if pooling == "single_frame":
+        return VideoSingleFrameClassifier(
+            frame_model_cls=model_cls,
+            frame_model_version=model_version,
+            num_classes=num_classes,
+            added_layers=added_layers,
+            embedding_layer_size=embed_size,
+            freeze_backbone=freeze_backbone,
+            task_type=mode,
+        )
 
     return VideoFramePoolClassifier(
         frame_model_cls=model_cls,

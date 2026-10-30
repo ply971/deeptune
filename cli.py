@@ -207,7 +207,7 @@ class DeepTuneVisionOptions:
 
         # Video-modality args (ignored for other modalities)
         p.add_argument('--num_frames', type=int, default=8, help='Number of frames to uniformly sample per video clip (video modality only).')
-        p.add_argument('--pooling', type=str, choices=['mean', 'attention'], default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). Ignored for DeepTune's native video architectures.")
+        p.add_argument('--pooling', type=str, choices=['mean', 'attention', 'single_frame'], default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). 'single_frame' is the Karpathy single-frame baseline: the 2D backbone sees only the middle frame. Ignored for DeepTune's native video architectures (which reject 'single_frame').")
 
     def _add_tabpfn_train_args(self):
         p = self.parser
