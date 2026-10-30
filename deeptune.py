@@ -24,6 +24,13 @@ defaults={
     'group_ids': None
 }
 
+def training_log_dir(ckpt_directory) -> Path:
+    """Folder holding training_log.csv: the trainers write it next to the
+    checkpoint (trainval_output_*/), so for a weights file that is its parent."""
+    path = Path(ckpt_directory)
+    return path.parent if path.is_file() else path
+
+
 def main(argv=None):
     args = DeepTuneVisionOptions(RunType.ONECALL, args=argv)
     from desktop.config import RunConfig, validate_config, effective_mode
@@ -195,9 +202,7 @@ def main(argv=None):
                 batch_size = args.batch_size,
                 use_case="finetuned")
             
-        csv_dir = Path(ckpt_directory)
-        if csv_dir.is_file():
-            csv_dir = csv_dir.parent
+        csv_dir = training_log_dir(ckpt_directory)
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='text', mapping_path=MAPPING_PATH)
@@ -261,9 +266,7 @@ def main(argv=None):
             mode=defaults['mode'],
             grouper=GROUPER,
         )
-        csv_dir = Path(ckpt_directory)
-        if csv_dir.is_file():
-            csv_dir = csv_dir.parent.parent
+        csv_dir = training_log_dir(ckpt_directory)
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='images',mapping_path=MAPPING_PATH)
@@ -333,9 +336,7 @@ def main(argv=None):
             num_frames=args.num_frames,
             pooling=args.pooling,
         )
-        csv_dir = Path(ckpt_directory)
-        if csv_dir.is_file():
-            csv_dir = csv_dir.parent.parent
+        csv_dir = training_log_dir(ckpt_directory)
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='video',mapping_path=MAPPING_PATH)
