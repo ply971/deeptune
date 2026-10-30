@@ -307,8 +307,8 @@ def test_video_train_with_budget_saves_rebuildable_run(tiny_video_splits, tmp_pa
     train_df, val_df = tiny_video_splits
     start_rank = 16
     if use_peft:
-        slope, intercept = lora_rank_line(build_video_model("dummy_video3d", 2, 2, start_rank, False, "cls", use_peft=True), start_rank)
-        budget = slope * 3 + intercept
+        # V-040: the budget searches the rank alone, so the head stays start_rank wide.
+        budget = trainable_count(build_video_model("dummy_video3d", 2, 2, start_rank, False, "cls", use_peft=True, lora_rank=3))
     else:
         budget = 120_000
     argv = ["--out", str(tmp_path), "--model_version", "dummy_video3d", "--num_frames", "4",
@@ -329,9 +329,11 @@ def test_video_train_with_budget_saves_rebuildable_run(tiny_video_splits, tmp_pa
     summary = json.loads((run_dir / "parameter_summary.json").read_text(encoding="utf-8"))
     assert saved["trainable_params"] == budget
     assert summary["trainable"] <= budget
-    assert saved["embed_size"] == (3 if use_peft else start_rank)
+    assert saved["embed_size"] == start_rank
+    assert saved["lora_rank"] == (3 if use_peft else None)
 
-    rebuilt = build_video_model("dummy_video3d", 2, saved["added_layers"], saved["embed_size"], False, "cls", use_peft=use_peft)
+    rebuilt = build_video_model("dummy_video3d", 2, saved["added_layers"], saved["embed_size"], False, "cls", use_peft=use_peft,
+                                lora_rank=saved["lora_rank"])
     rebuilt.load_state_dict(torch.load(weights, map_location="cpu"))
     assert summary["total"] == sum(p.numel() for p in rebuilt.parameters())
 
@@ -463,7 +465,7 @@ def _readme_budget_examples():
     return [line.strip() for line in section.splitlines() if "deeptune.py" in line and "--trainable_params" in line]
 
 
-def _dummy_builder(modality, model_version, use_peft, num_classes, added_layers, pooling):
+def _dummy_builder(modality, model_version, use_peft, num_classes, added_layers, pooling, embed_size):
     """Same shapes as the real README models, built with weights=None."""
     if model_version == "resnet18" and modality == "images":
         cls = adjustedPeftResNet if use_peft else adjustedResNet
@@ -472,8 +474,9 @@ def _dummy_builder(modality, model_version, use_peft, num_classes, added_layers,
         cls = adjustedPeftResNet if use_peft else adjustedResNet
         return lambda r: VideoFramePoolClassifier(cls, "dummy", num_classes, added_layers, r, pooling=pooling)
     if model_version == "r3d_18" and modality == "video":
-        cls = adjustedPeftVideo3D if use_peft else adjustedVideo3D
-        return lambda r: cls(num_classes, "dummy_video3d", added_layers, r)
+        if use_peft:  # V-040: the search changes the rank, the head stays at embed_size
+            return lambda r: adjustedPeftVideo3D(num_classes, "dummy_video3d", added_layers, embed_size, lora_rank=r)
+        return lambda r: adjustedVideo3D(num_classes, "dummy_video3d", added_layers, r)
     return None
 
 
@@ -493,13 +496,14 @@ def test_readme_budget_examples_fit():
     for example in examples:
         opts, _ = parser.parse_known_args(example.split()[2:])
         for num_classes in (2, 10):
-            build = _dummy_builder(opts.modality, opts.model_version, opts.use_peft, num_classes, opts.added_layers, opts.pooling)
+            build = _dummy_builder(opts.modality, opts.model_version, opts.use_peft, num_classes, opts.added_layers, opts.pooling, opts.embed_size)
             assert build is not None, f"add a dummy builder for this README example: {example}"
             model, rank = build_with_budget(build, opts.trainable_params, opts.use_peft, opts.embed_size, log=lambda _: None)
             summary = summarize_parameters(model)
             assert summary["trainable"] <= opts.trainable_params, example
             if opts.use_peft:
                 assert rank >= 1 and summary["breakdown"]["lora"]["trainable"] > 0, example
+                assert rank == 8 and model.fc1.out_features == opts.embed_size, "the README says rank 8 for this example"
             else:
                 assert rank == opts.embed_size
                 assert summary["breakdown"]["backbone"]["trainable"] > 0, f"no backbone layer fits: {example}"
@@ -535,20 +539,21 @@ def test_onecall_video_peft_budget_train_eval_embed(tmp_path, monkeypatch):
     clips = [_write_clip(tmp_path / f"c{i}.mp4", seed=i) for i in range(20)]
     data = tmp_path / "videos.parquet"
     pd.DataFrame({"videos": clips, "labels": ["a", "b"] * 10}).to_parquet(data)
-    slope, intercept = lora_rank_line(build_video_model("dummy_video3d", 2, 2, 8, False, "cls", use_peft=True), 8)
-    budget = slope * 3 + intercept
+    # V-040: the budget searches the rank alone, so the head stays --embed_size wide.
+    budget = trainable_count(build_video_model("dummy_video3d", 2, 2, 8, False, "cls", use_peft=True, lora_rank=3))
 
     deeptune.main(["--modality", "video", "--df", str(data), "--out", str(tmp_path / "out"),
-                   "--model_version", "dummy_video3d", "--use-peft", "--trainable_params", str(budget),
+                   "--model_version", "dummy_video3d", "--use-peft", "--trainable_params", str(budget), "--embed_size", "8",
                    "--num_frames", "4", "--num_epochs", "1", "--batch_size", "2"])
 
     run_dir = next((tmp_path / "out").glob("deeptune-*"))
     train_args = json.loads(next(run_dir.glob("trainval_output_*/cli_arguments.json")).read_text(encoding="utf-8"))
     eval_args = json.loads(next(run_dir.glob("eval_output_*/cli_arguments.json")).read_text(encoding="utf-8"))
-    assert train_args["embed_size"] == eval_args["embed_size"] == 3
+    assert train_args["embed_size"] == eval_args["embed_size"] == 8
+    assert train_args["lora_rank"] == eval_args["lora_rank"] == 3
     summary = json.loads(next(run_dir.glob("trainval_output_*/parameter_summary.json")).read_text(encoding="utf-8"))
     assert summary["trainable"] <= budget
     embeddings = pd.read_parquet(next(run_dir.glob("embed_output_*/*.parquet")))
     numeric = [c for c in embeddings.columns if str(c).isdigit() or str(c).startswith(("embed", "feature"))]
-    assert len(embeddings) == 4 and len(numeric) == 3, list(embeddings.columns)
+    assert len(embeddings) == 4 and len(numeric) == 8, list(embeddings.columns)
     assert len(log_paths) == 1 and log_paths[0].is_file() and log_paths[0].parent.name.startswith("trainval_output_")

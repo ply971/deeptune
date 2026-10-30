@@ -45,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--mode', choices=['cls', 'reg'], default='cls')
     p.add_argument('--added_layers', type=int, default=2)
     p.add_argument('--embed_size', type=int, default=1000)
+    p.add_argument('--lora_rank', type=int, default=None,
+                   help="LoRA rank of a native video PEFT model. Default: the run's cli_arguments.json; "
+                        'a run recorded without it used --embed_size as the rank.')
     p.add_argument('--freeze-backbone', action='store_true')
     p.add_argument('--use-peft', action='store_true')
 
@@ -98,7 +101,7 @@ def _load_new_data(args: argparse.Namespace):
 # desktop Test page passes them explicitly). --num_workers is deliberately not
 # inherited: it describes the training machine, not the pipeline.
 RECORDED_VIDEO_SETTINGS = ('num_frames', 'pooling', 'video_backend', 'temporal_sampling', 'clip_stride',
-                           'clip_duration_sec', 'motion_source', 'test_clips', 'test_crops')
+                           'clip_duration_sec', 'motion_source', 'test_clips', 'test_crops', 'lora_rank')
 
 
 def _recorded_run_arguments(checkpoint: Path) -> dict:
@@ -166,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             df, args.checkpoint, args.model_version, args.num_classes, args.added_layers,
             args.embed_size, args.freeze_backbone, args.mode, args.use_peft, args.batch_size,
             args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
+            **({} if args.lora_rank is None else {'lora_rank': args.lora_rank}),
         )
     elif args.modality == 'text':
         from inference.text import predict_text

@@ -14,7 +14,7 @@ from datasets.video_datasets import (VideoDataOptions, native_video_transform, o
 from helpers import transformations
 from options import UNIQUE_ID, DEVICE, PIN_MEM
 from src.video.multi_clip import wrap_for_test_clips
-from utils import RunType, build_video_model, save_process_times
+from utils import RunType, build_video_model, is_native_video_architecture, resolve_lora_rank, save_process_times
 
 
 def embed(df_path, out, model_weights, batch_size, use_case, model_version, added_layers, embed_size, num_classes, args, mode, grouper, model_str, num_frames=8, pooling="mean"):
@@ -34,6 +34,12 @@ def embed(df_path, out, model_weights, batch_size, use_case, model_version, adde
     EMBED_FILE = EMBED_OUTPUT / f"{model_str}_{mode}_embeddings.parquet"
 
     use_peft = use_case == "peft"
+    lora_rank = None
+    if use_peft and is_native_video_architecture(model_version):
+        mw = Path(model_weights)
+        lora_rank = resolve_lora_rank(args, mw if mw.suffix == ".pth" else next(mw.glob("*.pth")))
+        if lora_rank is not None:
+            args.lora_rank = lora_rank
 
     model = build_video_model(
         model_version=model_version,
@@ -44,6 +50,7 @@ def embed(df_path, out, model_weights, batch_size, use_case, model_version, adde
         mode=mode,
         use_peft=use_peft,
         pooling=pooling,
+        lora_rank=lora_rank,
     )
 
     if use_case in ('peft', 'finetuned'):

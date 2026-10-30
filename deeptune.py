@@ -325,7 +325,8 @@ def main(argv=None):
             trainable_params=args.trainable_params,
         )
         if args.trainable_params is not None and args.embed_size is not None:
-            # A PEFT budget picks the LoRA rank (= embed_size); eval/embed must rebuild that shape.
+            # A PEFT budget on a 2D backbone picks the LoRA rank (= embed_size); eval/embed must rebuild
+            # that shape. Native models keep embed_size, and eval/embed read args.lora_rank.
             defaults['embed_size'] = args.embed_size
 
         metrics_dict = evaluate_video(

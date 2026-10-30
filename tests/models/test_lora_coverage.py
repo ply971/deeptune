@@ -94,7 +94,9 @@ def test_video_transformer_targets_are_unchanged_by_the_fix():
     backbone = video_models.swin3d_t(weights=None)
     backbone.head = nn.Identity()
     targets = lora_target_modules(backbone)
-    assert set(targets) >= set(_legacy_targets(backbone))
+    # V-040: Swin's attention qkv and proj were targets, but their adapters never run, so they left.
+    attention = {name for name in _legacy_targets(backbone) if name.endswith(('.attn.qkv', '.attn.proj'))}
+    assert set(targets) == set(_legacy_targets(backbone)) - attention
     assert any('mlp' in name for name in targets)
 
 

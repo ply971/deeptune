@@ -8,7 +8,7 @@ from options import UNIQUE_ID, DEVICE
 from src.video.multi_clip import error_model_clips_mismatch, wrap_for_test_clips
 
 from cli import DeepTuneVisionOptions
-from utils import RunType, build_video_model
+from utils import RunType, build_video_model, is_native_video_architecture, resolve_lora_rank
 
 
 def main() -> None:
@@ -63,9 +63,12 @@ def evaluate(eval_df, out, model_weights, num_classes, model_version, mode, adde
     EVAL_OUTPUT_DIR = (out / f"eval_output_{model_str}_{UNIQUE_ID}")
     EVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    args.save_args(EVAL_OUTPUT_DIR)
-
     ckpt_path = mw if mw.suffix == ".pth" else next(mw.glob("*.pth"))
+
+    lora_rank = resolve_lora_rank(args, ckpt_path) if use_peft and is_native_video_architecture(model_version) else None
+    if lora_rank is not None:
+        args.lora_rank = lora_rank
+    args.save_args(EVAL_OUTPUT_DIR)
 
     MODEL = build_video_model(
         model_version=model_version,
@@ -76,6 +79,7 @@ def evaluate(eval_df, out, model_weights, num_classes, model_version, mode, adde
         mode=mode,
         use_peft=use_peft,
         pooling=pooling,
+        lora_rank=lora_rank,
     )
 
     # --test_clips N: N clips per video, softmax probabilities averaged (src/video/multi_clip.py).

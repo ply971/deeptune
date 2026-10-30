@@ -483,6 +483,7 @@ class InferenceConfig:
     mode: str = "cls"
     added_layers: int = 2
     embed_size: int = 1000
+    lora_rank: Optional[int] = None  # native video PEFT; None = the rank is embed_size (old runs)
     freeze_backbone: bool = False
     use_peft: bool = False
     num_frames: int = 8
@@ -543,6 +544,7 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
         mode=cli_args.get('mode') or 'cls',
         added_layers=int(cli_args.get('added_layers') or 2),
         embed_size=int(cli_args.get('embed_size') or 1000),
+        lora_rank=int(cli_args['lora_rank']) if cli_args.get('lora_rank') else None,
         freeze_backbone=bool(cli_args.get('freeze_backbone', False)),
         use_peft=bool(cli_args.get('use_peft', False)),
         num_frames=int(cli_args.get('num_frames') or 8),
@@ -589,6 +591,8 @@ def build_infer_argv(cfg: InferenceConfig) -> list[str]:
             argv.append('--use-peft')
         if cfg.modality == 'video':
             argv += ['--num_frames', str(cfg.num_frames), '--pooling', cfg.pooling]
+            if cfg.lora_rank is not None:
+                argv += ['--lora_rank', str(cfg.lora_rank)]
             for key, value in (cfg.video_options or {}).items():
                 if key in INFER_VIDEO_OPTION_DEFAULTS and value not in (None, INFER_VIDEO_OPTION_DEFAULTS[key]):
                     argv += [f'--{key}', str(value)]

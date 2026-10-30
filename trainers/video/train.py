@@ -6,7 +6,7 @@ from trainers.vision.trainer import Trainer
 from options import UNIQUE_ID, DEVICE
 from datasets.video_datasets import ParquetVideoDataset, native_video_transform, video_loader_kwargs, video_options_from_args
 from cli import DeepTuneVisionOptions
-from utils import RunType, set_seed, build_video_model
+from utils import RunType, set_seed, build_video_model, is_native_video_architecture, resolve_lora_rank
 from trainers.param_budget import build_with_budget
 from src.video.multi_clip import wrap_for_test_clips
 from handlers.training_args import TrainingOptions
@@ -93,7 +93,8 @@ def train(
 
     `trainable_params` (optional) caps how many parameters are trained - see
     trainers/param_budget.py. With PEFT it picks the LoRA rank, which is then
-    written back to `args.embed_size` before the arguments are saved.
+    written back to `args` before the arguments are saved: as `lora_rank` on
+    native models, as `embed_size` on the others, whose head width is the rank.
     """
 
     if fixed_seed:
@@ -128,6 +129,7 @@ def train(
     train_loader = DataLoader(train_dataset, **train_kwargs)
     val_loader = DataLoader(val_dataset, **val_kwargs)
 
+    lora_rank = resolve_lora_rank(args) if use_peft and is_native_video_architecture(model_version) else None
     if trainable_params is None:
         model = build_video_model(
             model_version=model_version,
@@ -138,7 +140,17 @@ def train(
             mode=mode,
             use_peft=use_peft,
             pooling=pooling,
+            **({} if lora_rank is None else {'lora_rank': lora_rank}),
         )
+    elif use_peft and is_native_video_architecture(model_version):
+        def build_at_rank(rank):
+            return build_video_model(
+                model_version=model_version, num_classes=num_classes, added_layers=added_layers,
+                embed_size=embed_size, freeze_backbone=freeze_backbone, mode=mode, use_peft=True, pooling=pooling,
+                lora_rank=rank,
+            )
+        model, args.lora_rank = build_with_budget(build_at_rank, trainable_params, True, embed_size, freeze_backbone,
+                                                  rank_is_head_width=False)
     else:
         def build(rank):
             return build_video_model(

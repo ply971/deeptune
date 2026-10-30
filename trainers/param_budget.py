@@ -138,8 +138,8 @@ def lora_size_warning(summary: dict) -> str | None:
     if lora <= backbone:
         return None
     return (f'LoRA adds {lora:,} trainable parameters, more than the {backbone:,} of the backbone it adapts, so this '
-            f'is not parameter-efficient and may not fit in GPU memory. The rank is --embed_size: use a smaller one, '
-            f'or set --trainable_params.')
+            f'is not parameter-efficient and may not fit in GPU memory. Use a smaller rank (--lora_rank on native video '
+            f'models, --embed_size on the others), or set --trainable_params.')
 
 
 def apply_top_down_budget(model: nn.Module, budget: int) -> dict:
@@ -191,8 +191,8 @@ def apply_top_down_budget(model: nn.Module, budget: int) -> dict:
 def _rank_scaled_numel(name: str, shape: tuple, rank: int) -> int:
     """numel / rank for a tensor whose size grows linearly with the LoRA rank,
     else 0. LoRA tensors always scale with r; head tensors scale with it when
-    one of their dims is r (in PEFT classes embed_size is both the LoRA rank
-    and the head's hidden width)."""
+    one of their dims is r (in the PEFT classes other than the native video
+    one, embed_size is both the LoRA rank and the head's hidden width)."""
     if rank not in shape:
         return 0
     numel = 1
@@ -223,8 +223,8 @@ def choose_lora_rank(build_fn: Callable[[int], nn.Module], budget: int, start_ra
     """Largest LoRA rank r >= 1 whose model has at most ``budget`` trainable
     parameters. ``build_fn(r)`` must build the PEFT model with rank r.
 
-    The trainable count is affine in r (LoRA A/B tensors and the head's hidden
-    layer grow linearly with it). Two cheap probe builds at r = 1 and r = 2
+    The trainable count is affine in r (LoRA A/B tensors grow linearly with it,
+    and so does the head's hidden layer where r is also its width). Two cheap probe builds at r = 1 and r = 2
     give the exact slope and intercept from real counts, the largest fitting r
     is solved for, and the model is built at that rank (the r = 2 probe is
     reused when it is the answer). If the real count differs from the line,
@@ -253,7 +253,8 @@ def choose_lora_rank(build_fn: Callable[[int], nn.Module], budget: int, start_ra
     if count_1 > budget:
         raise ValueError(
             f"Even LoRA rank 1 needs {count_1:,} trainable parameters, more than the budget of "
-            f"{budget:,}. Raise --trainable_params to at least {count_1:,} or use --added_layers 1."
+            f"{budget:,}, because that count includes the new head. Raise --trainable_params to at least "
+            f"{count_1:,}, or shrink the head with --added_layers 1 or a smaller --embed_size."
         )
     del model
     model, count_2 = build(2)
@@ -293,14 +294,17 @@ def build_with_budget(
     embed_size: int,
     freeze_backbone: bool = False,
     log: Callable[[str], None] = print,
+    rank_is_head_width: bool = True,
 ) -> tuple[nn.Module, int]:
     """Build a model that respects a trainable-parameter budget.
 
-    ``build_fn(embed_size)`` builds the model. With PEFT the LoRA rank (which
-    DeepTune ties to embed_size) is chosen by ``choose_lora_rank``; without it
-    the model is built at ``embed_size`` and ``apply_top_down_budget`` decides
-    what trains. Returns (model, embed_size actually used) - callers must
-    record that embed_size so evaluation/inference rebuild the same shapes.
+    With PEFT, ``build_fn(r)`` builds the model at LoRA rank r and
+    ``choose_lora_rank`` picks r; ``rank_is_head_width`` says whether r is also
+    the head's width (False for native video models, where build_fn keeps the
+    head fixed). Without PEFT, ``build_fn(embed_size)`` builds the model and
+    ``apply_top_down_budget`` decides what trains. Returns (model, value actually
+    used: the rank with PEFT, else embed_size) - callers must record that value
+    so evaluation/inference rebuild the same shapes.
     """
     budget = parse_param_count(budget)
     if freeze_backbone:
@@ -308,8 +312,8 @@ def build_with_budget(
             "backbone parameters train.")
     if use_peft:
         model, embed_size = choose_lora_rank(build_fn, budget, embed_size)
-        log(f"Trainable-parameter budget {budget:,}: using LoRA rank r = {embed_size} "
-            f"(also the head's hidden width / embed_size).")
+        log(f"Trainable-parameter budget {budget:,}: using LoRA rank r = {embed_size}"
+            + (" (also the head's hidden width / embed_size)." if rank_is_head_width else "."))
     else:
         model = build_fn(embed_size)
         summary = apply_top_down_budget(model, budget)
