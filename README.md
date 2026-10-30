@@ -294,13 +294,95 @@ automatic Farneback fallback for codecs without motion vectors. They are exact f
 single-reference encoders (MPEG-4 Part 2, x264 `refs=1`);
 `datasets.video_io.reencode_for_motion_vectors` converts other H.264 files.
 
+**Frame cache** (`--frame_cache DIR`, off by default): sampled frames are shrunk so their
+short side is `--frame_cache_size` pixels (default 256; `0` keeps the decoded size) and
+stored as memory-mapped arrays, keyed by the file, the sampling settings, the frame indices,
+the size and the decoder. A hit does not decode the sampled frames again, but each one still
+probes the file's metadata, which demuxes it and decodes one frame. Only deterministic clips are cached:
+all of validation, test, embedding and inference, and training with plain `uniform`
+sampling. Training with `segment`, `dense`, `motion`, `--clip_duration_sec` or
+`--video_augment` draws different frames every epoch, so those clips are decoded each time
+(a warning says so) rather than reusing one draw. The first read of a clip shrinks it once,
+so with a cache the frames the model's resize sees differ slightly from an uncached run.
+The size belongs to the pipeline and the folder to the machine: `infer.py` inherits the size
+(`--frame_resize`, which also works without a cache; `0` turns it off) but not the folder, so
+pass `--frame_cache` again to use one, and it warns if the size differs from training. Interrupted or
+concurrent writes never leave a readable partial entry. The cache has no size limit; delete
+the folder to reclaim the space.
+
 All of these options are saved in `cli_arguments.json`, so the desktop Test page and
 `infer.py` rebuild the same pipeline. `scripts/bench_video_io.py` measures decode speed,
-old vs new dataset, and motion-vector vs Farneback cost.
+old vs new dataset, motion-vector vs Farneback cost, and an epoch from pixels vs the frame
+cache vs cached features.
 
 ```powershell
 .venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --num_frames 16 --temporal_sampling segment --video_augment --test_clips 3
 ```
+
+## Video features: decode once, extract once
+
+`extract_features.py` splits each video into snippets, runs a frozen backbone on each one
+once and stores the result per video. Heads then train in minutes without decoding a frame.
+Finished videos are skipped, so an interrupted run continues where it stopped.
+
+```powershell
+.venv\Scripts\python.exe extract_features.py --data clips.csv --out features --model_version r3d_18 --streams rgb motion
+.venv\Scripts\python.exe train_feature_head.py --features features --train_df train.csv --val_df val.csv --test_df test.csv --out probe --num_classes 5 --head linear_probe
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files. Within one manifest an id cannot stand for two videos or trims. Ids may not differ only by case, across runs and streams too. A later run may give an id another video in one stream only; loading both streams then refuses, as does a row whose file or clip bytes are not the ones extracted, or a row of one kind against features from the other. Files are compared by path, size and modified time, so a touched or re-copied file needs a new extraction or a row with only a `video_id`, which is not compared at all; a file rewritten with the same size and modified time goes undetected |
+| `--out` | required | feature folder; a folder holds one configuration per stream |
+| `--streams` | `rgb` | `rgb` and/or `motion` |
+| `--model_version` | `r3d_18` | `rgb` backbone: any DeepTune video or frame backbone |
+| `--motion_backbone` | `r3d_18` | `motion` backbone; dx, dy and their magnitude go through its RGB filters, which were not trained on motion |
+| `--motion_method` | `auto` | `codec` motion vectors, `farneback` flow, or `auto` (codec, else Farneback; recorded per video) |
+| `--motion_gain` | 0.05 | multiplies motion after clipping to +-20 input pixels per frame; recorded in the config and sidecar. The default has not been chosen on real clips |
+| `--feature_weights` | `pretrained` | `none` = fixed random weights, for tests and timing only |
+| `--snippet_frames` / `--snippet_stride` | 16 / same | frames per snippet / between snippet starts |
+| `--cache_tokens` | `none` | `none` = one vector `[N, D]`; `8x4x4` = pooled token grid `[N, 8, 4, 4, D]` |
+| `--batch_size` | 8 | snippets per forward pass |
+| `--feature_input_size` | backbone's own | square input size; keeps that backbone's normalisation and squashes the whole frame. ViT and `mvit_v2_s` accept only their own size (`mvit_v2_s` also only 16-frame snippets), and other values are refused up front |
+| `--video_backend` | `auto` | decoder |
+
+**Snippets.** `N = ceil((frames - snippet_frames) / stride) + 1` (1 for a short video), with the
+last snippet padded by repeating the final frame. With a stride larger than the snippet, no
+snippet starts after the last frame.
+
+**Layout.** `<out>/rgb/<video_id>.npy` and `<out>/motion/<video_id>.npy` are float16 arrays, each
+with a `.json` sidecar (fps, snippet_frames, stride, backbone, weights, the licence of exactly those
+weights where torchvision states one, the input size really fed, the part of the frame kept
+(`field_of_view`), stream, frame range and trim, and float16 rounding stats; motion also records
+`motion_gain` and `motion_weights_trained_on_motion: false`). Motion is cut to the same part of the frame
+as `rgb` (native presets centre-crop), so a cell of a token grid covers the same place in both streams;
+streams that see different parts refuse to concatenate. `datasets.snippet_features.load_snippet_features(out,
+video_id)` returns `[N, D_rgb + D_motion]` plus the split. A value that float16 cannot hold (NaN,
+inf, above 65504) fails that video instead of being stored; failures go to `<out>/failed.json`, and
+the command exits with status 1. Run it again to retry them.
+
+**Training a head.** `train_feature_head.py` needs only the feature folder and manifests with `videos`
+or `video_id` plus labels; the video files may be gone. It refuses splits that share an id, a source
+video (two trims of one video count) or a value of the `group` column, and warns if a split has no
+`group` column. It also refuses motion features from an older preprocessing version. `--test_df` writes
+`metrics.json` (accuracy, balanced accuracy, macro-F1, confusion matrix; MSE, RMSE, MAE, R2 for regression;
+a `chance` row for a model that only learned the training majority or mean) and per-video `predictions.csv`,
+the input to a paired test. `cli_arguments.json` records the seed, the feature config hash and whether the
+motion weights were trained on motion.
+
+**Token grids and the attentive probe.** A mean-pooled vector throws away where and when something
+happened. `--cache_tokens 8x4x4` keeps a coarse grid, and `train_feature_head.py --head
+attentive_probe` (the default) reads it through a learned query (`src/video/feature_heads.py`). An
+axis is capped at what the backbone produces, for example `r3d_18` on 16 frames gives at most
+`2x7x7`, and the sidecar records the real grid. A grid costs storage:
+
+| stored per 16-frame snippet (`r3d_18`, 512-d) | size |
+|---|---|
+| vector | 1 kB |
+| `2x4x4` | 33 kB |
+| `2x7x7` (unpooled) | 100 kB |
+
+Whether the finer grid pays off in accuracy depends on the data, so measure it on yours.
 
 ## Per-prediction error estimate (video & images)
 

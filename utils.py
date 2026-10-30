@@ -239,7 +239,7 @@ def build_video_model(
 #         json.dump(cli_dict, f, indent=4)
 
 
-def set_seed(use_fixed_seed: bool) -> None:
+def set_seed(use_fixed_seed: bool) -> int:
     if use_fixed_seed:
         SEED = 42
         fixed_seed(SEED)
@@ -248,6 +248,7 @@ def set_seed(use_fixed_seed: bool) -> None:
         fixed_seed(SEED)
         warnings.warn('This will set a random seed for different initialization affecting Deeptune, inclduing weights and datasets splits. You are safe to neglect this warning if you are using Deeptune for purposes other than training or generating data splits', category=UserWarning)
         warnings.warn("This is liable to increase variability across consecutive runs of DeepTune.", category=UserWarning)
+    return SEED
         
 def save_process_times(epoch_times, total_duration, outdir,process):
     """

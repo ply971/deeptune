@@ -502,7 +502,7 @@ class InferenceConfig:
 # passed on, so old runs (which lack them) keep the original argv.
 INFER_VIDEO_OPTION_DEFAULTS = {
     'video_backend': 'auto', 'temporal_sampling': 'uniform', 'clip_stride': None, 'clip_duration_sec': None,
-    'motion_source': 'auto', 'test_clips': 1, 'num_workers': 'auto',
+    'motion_source': 'auto', 'test_clips': 1, 'num_workers': 'auto', 'frame_cache': None, 'frame_cache_size': 256, 'frame_resize': None,
 }
 
 
@@ -553,10 +553,16 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
         max_encoder_length=int(cli_args.get('max_encoder_length') or 30),
         group_ids=list(cli_args.get('group_ids') or []) if isinstance(cli_args.get('group_ids'), list) else [],
         video_options={key: cli_args[key] for key, default in INFER_VIDEO_OPTION_DEFAULTS.items()
-                       if cli_args.get(key) not in (None, default)} if modality == 'video' else {},
+                       if key not in ('frame_cache', 'frame_cache_size', 'frame_resize')
+                       and cli_args.get(key) not in (None, default)} if modality == 'video' else {},
     )
     label_mapping_path = _first_glob(results.run_dir, 'data_splits_*/label_mapping.json') if results.run_dir else None
     cfg.label_mapping_path = label_mapping_path
+    if modality == 'video':  # the cache folder is machine-specific and stays out; the resize it implied is pipeline
+        resize = (cli_args.get('frame_resize') if cli_args.get('frame_resize') is not None
+                  else cli_args.get('frame_cache_size', 256) if cli_args.get('frame_cache') else 0)
+        if resize:  # 0 is what infer.py assumes without the flag, so old runs keep the original argv
+            cfg.video_options['frame_resize'] = resize
     if modality == 'timeseries':
         cfg.history_df_paths = find_history_paths(results.run_dir)
     return cfg
