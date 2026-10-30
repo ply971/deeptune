@@ -37,7 +37,7 @@ single frame is uniform, whatever its velocity.
 | `--bias` | 0.9 | scene_bias only. |
 | `--n_videos`, `--min_length`, `--max_length`, `--max_instances`, `--n_classes`, `--background_motion` | 40, 150, 300, 3, 3, mixed | untrimmed only. |
 | `--fps` | 10 | Stored in the metadata. Segment times are `frame / fps`. |
-| `--codec` | auto | `auto` uses H.264 (`avc1`) if the OpenCV build can encode it, otherwise MPEG-4 Part 2 (`mp4v`). Both carry motion vectors. The pip OpenCV wheel on Windows has no OpenH264 DLL, so you get `mp4v` there. The codec used is recorded in `dataset.json`. |
+| `--codec` | auto | `auto` uses H.264 (`avc1`) if the OpenCV build can encode it, otherwise MPEG-4 Part 2 (`mp4v`). Both carry motion vectors. The pip OpenCV wheel on Windows has no OpenH264 DLL, so you get `mp4v` there. The codec used is recorded in `dataset.json`. Each written file is read back, and an explicit FourCC that OpenCV cannot honour raises an error instead of being recorded falsely. |
 
 Generating is fast. 500 clips at 32×32 with 12 frames take about 1.5 s. Twelve untrimmed videos
 of about 200 frames at 48×48 take about 0.3 s.
@@ -118,7 +118,7 @@ Every clip has its own background, so `group` = clip.
 out/
   videos/<video_id>.mp4
   manifest.csv          every clip
-  train.csv, test.csv   one split each (+ val.csv for scene_bias); same columns as manifest.csv
+  train.csv, val.csv, test.csv   one split each (val.csv when n_val > 0); same columns as manifest.csv
   dataset.json          metadata + per-video ground truth
   masks.npz             blob masks per video: np.packbits(bool[T, H, W]); shape in dataset.json
   gt_segments.csv       untrimmed only: video-id, t-start, t-end, label   (ActivityNet / CtxPL eval style)
