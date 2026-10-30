@@ -502,7 +502,7 @@ class InferenceConfig:
 # passed on, so old runs (which lack them) keep the original argv.
 INFER_VIDEO_OPTION_DEFAULTS = {
     'video_backend': 'auto', 'temporal_sampling': 'uniform', 'clip_stride': None, 'clip_duration_sec': None,
-    'motion_source': 'auto', 'test_clips': 1, 'num_workers': 'auto',
+    'motion_source': 'auto', 'test_clips': 1, 'num_workers': 'auto', 'frame_cache': None, 'frame_cache_size': 256,
 }
 
 
