@@ -229,17 +229,21 @@ make them optional backends, never defaults, and record the licence in the docs.
 | S2 | Segmentation: promptable video object segmentation (SAM 2 click/box → masks through the video; SAM 3 text prompts optional); semantic/instance fine-tune (SegFormer, Mask2Former) | S0 |
 | S3 | Tracking: tracking-by-detection (ByteTrack / BoT-SORT re-implemented, Kalman + Hungarian via scipy) on S1 detections; SAM 2 mask tracking; object counting and per-track timelines | S1, S2 |
 | S4 | Spatial metrics: COCO box/mask mAP (torchmetrics; checked against pycocotools), HOTA / MOTA / IDF1 (checked against TrackEval on fixtures) | S1–S3 |
+| S5 | Pose estimation on video: ViTPose (transformers) on person boxes from S1, torchvision Keypoint R-CNN as a baseline; keypoint tracks over time through S3; **pose-based action classification** (keypoint sequences → the Phase 3 temporal heads, plus a small graph-conv head) as a third stream next to RGB and motion; PCK / OKS-AP metrics | S1, S3, Phase 3 |
+| S6 | **Beyond-classification fusion:** the spatial outputs feed back into recognition. Object-centric features (pooled inside detected/segmented boxes), pose stream, and **background-masked clips** (from S2 masks) are compared with RGB-only on the Phase 2 background-bias task and in Phase 6's background-reliance score | S1, S2, S5 |
 | P  | Phase 8 → paper: UCF101 / HMDB51, a Something-Something v2 subset (motion), THUMOS'14 (CtxPL), a small detection/tracking benchmark; ablations, seeds, CIs, related work | everything |
 
-Stretch (cut first if time is short): pose (ViTPose), token merging, RAFT,
+Pose was promoted from stretch to core (S5) after the instructor suggested
+pose estimation, detection and segmentation beyond classification.
+Stretch (cut first if time is short): token merging, RAFT,
 SAM 3 backend, the DeepTune-feature THUMOS run.
 
 ### Priority for the end-of-term deadline (Dec 2026)
 1. Waves 1–2 as planned (A1, A2, A3, A4; B1, B2, B3).
-2. Spatial core: S0 → S1 → S3, with zero-shot detection + tracking first,
-   so a user can say "track the lobsters" with no labels.
+2. Spatial core: S0 → S1 → S3 → S5, with zero-shot detection + tracking
+   first, so a user can say "track the lobsters" with no labels; then pose.
 3. R1 + R2 (the best models, plus abstention), then Wave 3 (timeline, CtxPL,
-   unsupervised, explainability), then S2 and S4, then R3.
+   unsupervised, explainability), then S2, S6 and S4, then R3.
 4. GUI (Wave 4) covers everything that landed. Course report in December;
    the paper follows if the measured results support one.
 
