@@ -31,7 +31,8 @@ out-of-fold predictions and extra features.
     - **isotonic** (the default) uses a weighted PAV written in numpy, checked
       against `sklearn.isotonic.isotonic_regression`. It runs on one score
       (`max_prob` for cls, with direction from a known-feature map). Smoothing:
-      each block is shrunk toward the base rate with `PRIOR_STRENGTH = 2`
+      each block is shrunk toward the base rate with `PRIOR_STRENGTH` (2 at
+      first, tuned to 0.5 in the follow-ups)
       pseudo-samples, the blocks are re-pooled to stay monotone, and
       predictions interpolate linearly between block centres (constant past
       the ends).
@@ -330,8 +331,21 @@ These answer the Critic's retroactive review: V-010, V-011 and V-012.
   - Kept unchanged: every decile |gap vs observed| < 0.10, ECE < 0.05, raw
     ECE > 0.15, AUROC > 0.75.
   - Added a **noise-free check against the truth**: per-decile
-    |stated − true| max < 0.04 and mean < 0.015. Seed 0 measures 0.018 and
-    0.009.
+    |stated − true|. A first version used single-seed bounds (max < 0.04,
+    mean < 0.015) that held only for seed 0; 78/100 seeds failed them
+    (Critic, V-030). It now asserts the **median over seeds 0–9**: worst
+    decile < 0.07, mean decile < 0.025.
+  - These bounds come from the multi-seed spread. Over 200 seeds, a single
+    seed's worst decile has median 0.044 (p95 0.071, max 0.088) and its mean
+    decile has median 0.016 (p95 0.022). The 10-seed medians range
+    0.035–0.052 and 0.014–0.019 over 20 disjoint seed blocks.
+  - So **the typical worst decile is about 0.05 off the true error rate**
+    (mean decile about 0.016) at 4000 fit samples. The seed-0 figures quoted
+    above (0.018 worst) were a lucky draw.
+  - A paired test confirms the check catches real mis-calibration. Stating
+    every error 15% too low gives 10-seed medians of about 0.145 worst /
+    0.08 mean (0.144–0.152 and 0.078–0.084 over the 20 blocks), and the test
+    asserts that this fails.
   - Added: ECE ≤ oracle ECE + 0.02.
 - **One stricter check I tried fails, so I did not add it:** "≥ 8/10 bins
   within the 95% CI". Seed 0 gives 6/10 and the oracle itself gives 9/10.
@@ -384,38 +398,62 @@ These answer the Critic's retroactive review: V-010, V-011 and V-012.
 - The autouse fixture that guarded the global is gone.
 
 ### PRIOR_STRENGTH: tuned 2 → 0.5 on held-out checks, not the fixture
-- **Setup.** A different 5-class generator, scratchpad
-  `a4fix\prior_study.py` and `a4fix\prior_study2.py`: max prob ~ U(0.4, 1),
-  true-error curves 1 − m^1.8, 1 − m, and a step 0.02 + 0.5·[m < 0.6]. Fit
-  sizes 50 to 4000, 30–40 seeds each, scored by mean |stated − true P(wrong)|
-  on 10k held-out draws.
+- **Setup.** A different 5-class generator, not the test fixture: max
+  prob ~ U(0.4, 1) and three true-error curves, 1 − m^1.8, 1 − m and a step
+  0.02 + 0.5·[m < 0.6]. Fit sizes 50 to 4000, 30 seeds each, scored by mean
+  |stated − true P(wrong)| on 10k held-out draws.
+- **Reproduce** (CPU, seeded, about 8 s):
+  `python scripts/study_error_model_prior.py --seeds 30 --n_test 10000 --fit_sizes 50 200 1000 4000`.
+  The default run takes seconds and reaches the same conclusion. The first
+  version of this table came from scratch scripts with a different RNG
+  order. The table below is the committed script's exact output and
+  replaces it.
 
 | curve, n_fit | prior 0 | 0.5 | 1 | 2 |
 |---|---|---|---|---|
-| 1 − m^1.8, 50 | 0.099 | **0.071** | 0.077 | 0.096 |
-| 1 − m^1.8, 200 | 0.061 | **0.050** | 0.058 | 0.072 |
-| 1 − m^1.8, 1000 | 0.031 | **0.030** | 0.033 | 0.041 |
-| 1 − m^1.8, 4000 | **0.020** | 0.021 | 0.023 | 0.027 |
-| 1 − m, 50 | 0.111 | 0.089 | **0.087** | 0.091 |
-| 1 − m, 200 | 0.054 | **0.045** | 0.046 | 0.055 |
-| 1 − m, 1000 | **0.027** | 0.028 | 0.030 | 0.036 |
-| step, 50 | **0.101** | 0.110 | 0.121 | 0.141 |
-| step, 200 | **0.071** | 0.080 | 0.089 | 0.101 |
-| step, 1000 | **0.041** | 0.043 | 0.047 | 0.061 |
+| 1 − m^1.8, 50 | 0.0938 | **0.0664** | 0.0753 | 0.0946 |
+| 1 − m^1.8, 200 | 0.0605 | **0.0511** | 0.0573 | 0.0681 |
+| 1 − m^1.8, 1000 | 0.0317 | **0.0310** | 0.0343 | 0.0419 |
+| 1 − m^1.8, 4000 | **0.0185** | 0.0198 | 0.0223 | 0.0269 |
+| 1 − m, 50 | 0.0892 | 0.0692 | **0.0676** | 0.0731 |
+| 1 − m, 200 | 0.0637 | 0.0528 | **0.0517** | 0.0565 |
+| 1 − m, 1000 | 0.0285 | **0.0280** | 0.0299 | 0.0348 |
+| 1 − m, 4000 | **0.0171** | 0.0181 | 0.0202 | 0.0242 |
+| step, 50 | **0.0910** | 0.0993 | 0.1100 | 0.1274 |
+| step, 200 | **0.0749** | 0.0847 | 0.0918 | 0.1023 |
+| step, 1000 | **0.0429** | 0.0450 | 0.0479 | 0.0578 |
+| step, 4000 | 0.0311 | **0.0290** | 0.0336 | 0.0379 |
 
 - **Reading.**
-  - Prior 2 is never the best and loses to 0.5 in all 10 settings.
-  - Prior 0 is best for large fits and step-shaped curves, but it is clearly
-    worse on smooth curves at small n (0.099 vs 0.071).
+  - Prior 2 is never the best and loses to 0.5 in all 12 settings.
+  - Prior 0 is best for large fits and the step curve. It is clearly worse
+    on smooth curves at small n (0.094 vs 0.066, 0.089 vs 0.069).
+  - Best-in-row counts: prior 0: 5, 0.5: 5, 1: 2, 2: 0.
   - 0.5 is the robust choice and is now the default.
 - On the fixture, prior 0.5 moved seed-0 ECE from 0.036 to 0.032 and the
   200-seed mean ECE from 0.035 to 0.024.
 
 ### Tests (CPU, `CUDA_VISIBLE_DEVICES=-1`)
 - `tests/test_error_model.py` + `tests/test_error_model_pipeline.py`:
-  `34 passed, 8 warnings in 23.34s`.
+  `34 passed, 8 warnings in 23.34s` (first follow-up). After the V-030 fix
+  (multi-seed truth-gap test plus the mis-calibration test): see the end of
+  the section.
 - Targeted run: those two files plus test_evaluation, test_inference_data,
   training/test_video_trainer, training/test_vision_trainer,
   training/test_param_budget, test_workflow_reliability,
   models/test_desktop_config and models/test_video:
   `175 passed, 18 warnings in 30.46s`.
+
+### Second follow-up (Critic V-030/V-031)
+- The single-seed truth-gap bounds are replaced by 10-seed medians with
+  bounds taken from the multi-seed spread (see the V-010 section above).
+  `test_truth_gap_check_catches_a_miscalibrated_model` shows that a model
+  stating every error 15% too low fails the check.
+- The ECE ≤ perfect-estimator ECE + 0.02 check is kept on seed 0 (the
+  Critic measured 100/100 seeds passing).
+- `scripts/study_error_model_prior.py` (numpy only, seeded) reproduces the
+  PRIOR_STRENGTH table exactly.
+- Tests (CPU, `CUDA_VISIBLE_DEVICES=-1`):
+  - `tests/test_error_model.py` + `tests/test_error_model_pipeline.py`:
+    `36 passed, 8 warnings in 31.67s`.
+  - The same targeted run as above: `177 passed, 18 warnings in 31.18s`.
