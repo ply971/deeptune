@@ -216,17 +216,35 @@ def test_choose_lora_rank_picks_largest_fitting_rank(build):
 
     model, rank = choose_lora_rank(counted, budget, 8)
     assert rank == 5
-    assert calls == [8, 5]
+    assert calls == [1, 2, 5]  # two cheap probes, then the chosen rank (V-008: never probe at embed_size)
     assert trainable_count(model) <= budget
     assert trainable_count(build(6)) > budget
     assert model(torch.randn(1, 2, 3, 32, 32)).shape == (1, 3)
 
 
-def test_choose_lora_rank_keeps_start_rank_when_it_is_the_answer():
+@pytest.mark.parametrize("answer, expected_calls", [(2, [1, 2]), (1, [1, 2, 1])])
+def test_choose_lora_rank_reuses_or_rebuilds_small_probe_ranks(answer, expected_calls):
     slope, intercept = lora_rank_line(peft_video3d(4), 4)
     calls = []
-    model, rank = choose_lora_rank(lambda r: calls.append(r) or peft_video3d(r), slope * 4 + intercept, 4)
-    assert rank == 4 and calls == [4]
+    model, rank = choose_lora_rank(lambda r: calls.append(r) or peft_video3d(r), slope * answer + intercept, 1000)
+    assert rank == answer and calls == expected_calls
+    assert trainable_count(model) == slope * answer + intercept
+
+
+@pytest.mark.parametrize("build", [peft_video3d, peft_frame_pool], ids=["dummy_video3d", "frame_pool_resnet"])
+def test_choose_lora_rank_init_does_not_depend_on_search(build):
+    slope, intercept = lora_rank_line(build(4), 4)
+    budget = slope * 5 + intercept
+    torch.manual_seed(123)
+    searched, rank = choose_lora_rank(build, budget, 1000)
+    after_search = torch.rand(3)
+    torch.manual_seed(123)
+    direct = build(rank)
+    after_direct = torch.rand(3)
+    assert rank == 5
+    direct_state = direct.state_dict()
+    assert all(torch.equal(value, direct_state[key]) for key, value in searched.state_dict().items())
+    assert torch.equal(after_search, after_direct)
 
 
 def test_choose_lora_rank_survives_rank_equal_to_num_classes():
@@ -243,9 +261,11 @@ def test_choose_lora_rank_survives_rank_equal_to_num_classes():
 @pytest.mark.parametrize("build", [peft_video3d, peft_frame_pool], ids=["dummy_video3d", "frame_pool_resnet"])
 def test_choose_lora_rank_too_small_budget_raises(build):
     slope, intercept = lora_rank_line(build(4), 4)
+    calls = []
     with pytest.raises(ValueError, match="LoRA rank 1") as info:
-        choose_lora_rank(build, slope + intercept - 1, 4)
+        choose_lora_rank(lambda r: calls.append(r) or build(r), slope + intercept - 1, 4)
     assert f"{slope + intercept:,}" in str(info.value)
+    assert calls == [1]
 
 
 def test_build_with_budget_reports_rank_and_overrides_freeze(capsys):
@@ -404,3 +424,131 @@ def test_gui_budget_field_round_trips_and_is_shown_for_images_and_video(ui, tmp_
         ui.on_modality_changed()
         shown = ui.dpg.get_item_configuration("trainable_params_group")["show"]
         assert shown == (modality in ("images", "video"))
+
+
+# ---------------------------------------------------------------------------
+# A1 follow-ups (reviews V-006, V-007, V-008, V-015)
+# ---------------------------------------------------------------------------
+
+def test_lora_coverage_counts_adapted_and_eligible_modules(tmp_path, caplog):
+    import logging
+    from trainers.param_budget import format_lora_coverage, lora_coverage
+    # r3d_18 today: LoRA reaches only the stem and the 3 downsample convs (V-007; T1 will fix).
+    peft = peft_video3d(4)
+    coverage = lora_coverage(peft)
+    adapted = {n.split(".lora_A")[0] for n, _ in peft.named_parameters() if ".lora_A" in n}
+    assert coverage == {"lora_modules": len(adapted), "eligible_modules": 20, "eligible_by_type": {"Conv3d": 20}}
+    assert coverage["lora_modules"] == 4
+    line = format_lora_coverage(summarize_parameters(peft))
+    assert line.startswith("LoRA adapters on 4 of 20 eligible backbone modules (20 Conv3d)")
+    # Same eligible count without PEFT; no LoRA line then.
+    plain = summarize_parameters(adjustedVideo3D(3, "dummy_video3d", 2, 4))
+    assert plain["lora_coverage"]["eligible_modules"] == 20 and plain["lora_coverage"]["lora_modules"] == 0
+    assert format_lora_coverage(plain) is None
+    # The 2D frame-pool PEFT ResNet covers all 20 Conv2d layers (head Linear layers are not counted).
+    pool = lora_coverage(peft_frame_pool(4))
+    assert pool == {"lora_modules": 20, "eligible_modules": 20, "eligible_by_type": {"Conv2d": 20}}
+    # Trainer logs the line and stores the counts in parameter_summary.json.
+    loader = DataLoader(TensorDataset(torch.randn(2, 4, 3, 32, 32), torch.tensor([0, 1])), batch_size=2)
+    with caplog.at_level(logging.INFO):
+        Trainer(peft, loader, loader, 1e-3, "cls", 1, tmp_path)
+    assert "LoRA adapters on 4 of 20" in caplog.text
+    written = json.loads((tmp_path / "parameter_summary.json").read_text(encoding="utf-8"))
+    assert written["lora_coverage"]["lora_modules"] == 4 and written["lora_coverage"]["eligible_modules"] == 20
+
+
+def _readme_budget_examples():
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Trainable-parameter budget", 1)[1].split("\n## ", 1)[0]
+    return [line.strip() for line in section.splitlines() if "deeptune.py" in line and "--trainable_params" in line]
+
+
+def _dummy_builder(modality, model_version, use_peft, num_classes, added_layers, pooling):
+    """Same shapes as the real README models, built with weights=None."""
+    if model_version == "resnet18" and modality == "images":
+        cls = adjustedPeftResNet if use_peft else adjustedResNet
+        return lambda r: cls(num_classes, "dummy", added_layers, r)
+    if model_version == "resnet18" and modality == "video":
+        cls = adjustedPeftResNet if use_peft else adjustedResNet
+        return lambda r: VideoFramePoolClassifier(cls, "dummy", num_classes, added_layers, r, pooling=pooling)
+    if model_version == "r3d_18" and modality == "video":
+        cls = adjustedPeftVideo3D if use_peft else adjustedVideo3D
+        return lambda r: cls(num_classes, "dummy_video3d", added_layers, r)
+    return None
+
+
+def test_readme_budget_examples_fit():
+    import argparse
+    import deeptune
+    examples = _readme_budget_examples()
+    assert len(examples) >= 2
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--modality")
+    parser.add_argument("--model_version", default="resnet18")
+    parser.add_argument("--embed_size", type=int, default=deeptune.defaults["embed_size"])
+    parser.add_argument("--added_layers", type=int, default=deeptune.defaults["added_layers"])
+    parser.add_argument("--pooling", default="mean")
+    parser.add_argument("--use-peft", dest="use_peft", action="store_true")
+    parser.add_argument("--trainable_params", type=parse_param_count, required=True)
+    for example in examples:
+        opts, _ = parser.parse_known_args(example.split()[2:])
+        for num_classes in (2, 10):
+            build = _dummy_builder(opts.modality, opts.model_version, opts.use_peft, num_classes, opts.added_layers, opts.pooling)
+            assert build is not None, f"add a dummy builder for this README example: {example}"
+            model, rank = build_with_budget(build, opts.trainable_params, opts.use_peft, opts.embed_size, log=lambda _: None)
+            summary = summarize_parameters(model)
+            assert summary["trainable"] <= opts.trainable_params, example
+            if opts.use_peft:
+                assert rank >= 1 and summary["breakdown"]["lora"]["trainable"] > 0, example
+            else:
+                assert rank == opts.embed_size
+                assert summary["breakdown"]["backbone"]["trainable"] > 0, f"no backbone layer fits: {example}"
+
+
+def test_training_log_dir_points_at_the_trainval_folder(tmp_path):
+    from deeptune import training_log_dir
+    trainval = tmp_path / "deeptune-run" / "trainval_output_x"
+    trainval.mkdir(parents=True)
+    weights = trainval / "model_weights.pth"
+    weights.write_bytes(b"")
+    (trainval / "training_log.csv").write_text("epoch\n1\n")
+    assert training_log_dir(str(weights)) == trainval
+    assert training_log_dir(trainval) == trainval  # siglip/text return the folder itself
+    assert (training_log_dir(str(weights)) / "training_log.csv").is_file()
+
+
+def test_onecall_video_peft_budget_train_eval_embed(tmp_path, monkeypatch):
+    """deeptune.py one-call: PEFT + budget -> train -> eval -> embed all rebuild the chosen rank,
+    and the training-log table reads the real training_log.csv (V-015)."""
+    import deeptune
+    import desktop.config as gc
+    import embed.video.embed as video_embed
+    import evaluators.video.evaluate as video_eval
+    import trainers.video.train as video_train
+
+    for module in (video_train, video_eval, video_embed):
+        monkeypatch.setattr(module, "transformations", None)  # keep 32x32 frames: fast on CPU
+    monkeypatch.setitem(gc.MODEL_VERSIONS_BY_MODALITY, "video", [*gc.MODEL_VERSIONS_BY_MODALITY["video"], "dummy_video3d"])
+    log_paths = []
+    monkeypatch.setattr(deeptune, "print_training_log_table", lambda path: log_paths.append(Path(path)))
+
+    clips = [_write_clip(tmp_path / f"c{i}.mp4", seed=i) for i in range(20)]
+    data = tmp_path / "videos.parquet"
+    pd.DataFrame({"videos": clips, "labels": ["a", "b"] * 10}).to_parquet(data)
+    slope, intercept = lora_rank_line(build_video_model("dummy_video3d", 2, 2, 8, False, "cls", use_peft=True), 8)
+    budget = slope * 3 + intercept
+
+    deeptune.main(["--modality", "video", "--df", str(data), "--out", str(tmp_path / "out"),
+                   "--model_version", "dummy_video3d", "--use-peft", "--trainable_params", str(budget),
+                   "--num_frames", "4", "--num_epochs", "1", "--batch_size", "2"])
+
+    run_dir = next((tmp_path / "out").glob("deeptune-*"))
+    train_args = json.loads(next(run_dir.glob("trainval_output_*/cli_arguments.json")).read_text(encoding="utf-8"))
+    eval_args = json.loads(next(run_dir.glob("eval_output_*/cli_arguments.json")).read_text(encoding="utf-8"))
+    assert train_args["embed_size"] == eval_args["embed_size"] == 3
+    summary = json.loads(next(run_dir.glob("trainval_output_*/parameter_summary.json")).read_text(encoding="utf-8"))
+    assert summary["trainable"] <= budget
+    embeddings = pd.read_parquet(next(run_dir.glob("embed_output_*/*.parquet")))
+    numeric = [c for c in embeddings.columns if str(c).isdigit() or str(c).startswith(("embed", "feature"))]
+    assert len(embeddings) == 4 and len(numeric) == 3, list(embeddings.columns)
+    assert len(log_paths) == 1 and log_paths[0].is_file() and log_paths[0].parent.name.startswith("trainval_output_")

@@ -154,3 +154,76 @@ The full suite was not run, as the rules say. The coordinator runs it.
   one `validate_config` block.
 - No GPU or pretrained-weight runs were done, so the README examples were not
   executed against real weights.
+
+## A1 follow-ups (branch `video/A1-fixes`, from `video-analysis` @ ac32792)
+These address the Critic's retroactive review (V-006 to V-009) and A2's V-015.
+
+- **V-006, README example 1 failed (fixed).**
+  - With the default `embed_size` of 1000, a resnet18 head is 515,002 params,
+    which is over the 500k budget.
+  - The example now passes `--embed_size 256`, giving a head of about 132k plus
+    top ResNet-18 layers.
+  - The README explains how to size the head, and says that
+    `test_readme_budget_examples_fit` guards the block.
+  - That test parses every `deeptune.py ... --trainable_params` line in the
+    README section and runs `build_with_budget` on dummy models of the same
+    shape, for 2 and 10 classes. It requires ≤ budget, LoRA > 0 (PEFT) or some
+    backbone trained (top-down). It fails on an example with no dummy builder.
+  - I checked that it fails on the old README with exactly the critic's
+    ValueError.
+- **V-007, interim LoRA coverage report (done; target selection unchanged,
+  that is T1).**
+  - `summarize_parameters` now adds
+    `lora_coverage = {lora_modules, eligible_modules, eligible_by_type}`.
+  - Eligible means nn.Conv1d/2d/3d/Linear in the pretrained backbone. It uses
+    isinstance, so `Conv3DSimple` counts; LoRA's own A/B layers do not.
+  - `Trainer` and `build_with_budget` log a line such as
+    `LoRA adapters on 4 of 20 eligible backbone modules (20 Conv3d); the other
+    backbone modules stay frozen without LoRA`, and the counts go into
+    `parameter_summary.json`.
+  - Tested: r3d_18 PEFT gives 4/20, frame-pool PeftResNet-18 gives 20/20, and
+    non-PEFT gives no line.
+- **V-015, wrong `training_log.csv` path (fixed).** The new
+  `deeptune.training_log_dir()` returns the checkpoint's own folder, and the
+  text, images and video branches all use it. It has a unit test, and the
+  one-call end-to-end test asserts that the table gets an existing
+  `trainval_output_*/training_log.csv`.
+- **V-008 (nice-to-have, all done).**
+  - `choose_lora_rank` probes at r=1 and r=2. These are real counts, so the
+    line is exact. It then builds at the solved rank, reusing the r=2 probe
+    when that is the answer, refits once if the count is off, and always checks
+    the final real count.
+  - A too-small budget now costs a single rank-1 build.
+  - `start_rank` is still accepted but no longer used.
+  - Every build starts from the RNG state at entry. So the returned weights,
+    and the RNG state afterwards, equal a single direct `build_fn(rank)`; this
+    is tested for both families.
+  - README notes: BatchNorm running stats still update in frozen layers, and
+    registration order is only roughly output-first (ViT `class_token` /
+    `pos_embedding`).
+  - New end-to-end test: one-call `deeptune.main` on 20 synthetic clips, video,
+    `dummy_video3d`, `--use-peft --trainable_params`. Train, eval and embed all
+    use the chosen rank 3: `embed_size` = 3 in the train and eval
+    `cli_arguments.json`, 3 embedding columns, and summary ≤ budget.
+  - The test temporarily adds `dummy_video3d` to the GUI model list and
+    disables the 224 resize, so it runs in seconds on CPU.
+- **Test change to note.** `test_choose_lora_rank_picks_largest_fitting_rank`
+  expected the old build sequence `[8, 5]`; it now expects `[1, 2, 5]`, because
+  the algorithm changed as V-008 asked. The rank, budget and over-by-one checks
+  are unchanged. `test_choose_lora_rank_keeps_start_rank_when_it_is_the_answer`
+  no longer applies, since the start rank is not probed. It is replaced by
+  `test_choose_lora_rank_reuses_or_rebuilds_small_probe_ranks`, which expects
+  builds `[1, 2]` and `[1, 2, 1]` with exact counts. The too-small test now
+  also asserts a single build.
+- **Tests (CPU).**
+  - `tests/training/test_param_budget.py`: `59 passed in 31.65s`
+  - The new tests plus the touched-file tests (vision/video trainer,
+    desktop_config, desktop_ui, evaluation, workflow, models/test_video,
+    models/test_resnet, runner, test_error_model, test_error_model_pipeline):
+    `179 passed in 47.29s`
+  - `pytest tests -k "video or vision_trainer or desktop_config or param_budget
+    or error_model"`: `161 passed, 102 deselected in 49.23s`
+- **Still open.** T1 has to fix the `type(m) in` target selection in
+  `src/video/video3d_peft.py` and the 2D `*_peft.py` files. After that, the
+  coverage test's `4 of 20` assertion (it is labelled V-007) should become
+  `20 of 20`.

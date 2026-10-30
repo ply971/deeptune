@@ -76,9 +76,12 @@ class Trainer:
 
         # --- trainable / total parameter report (A1 param budget) ---
         import json
-        from trainers.param_budget import summarize_parameters, format_summary
+        from trainers.param_budget import summarize_parameters, format_summary, format_lora_coverage
         self.parameter_summary = summarize_parameters(self.model)
         self.logger.info(format_summary(self.parameter_summary))
+        lora_line = format_lora_coverage(self.parameter_summary)
+        if lora_line:
+            self.logger.info(lora_line)
         if output_dir:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             with open(Path(output_dir) / 'parameter_summary.json', 'w', encoding='utf-8') as stream:
