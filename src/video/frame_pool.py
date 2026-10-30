@@ -1,5 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+# Value of the `pool_format` buffer: pooled embeddings. Old checkpoints have no such key.
+EMBEDDING_POOL_FORMAT = 2
 
 
 class VideoFramePoolClassifier(nn.Module):
@@ -9,10 +13,14 @@ class VideoFramePoolClassifier(nn.Module):
 
     Each sampled frame of the clip is passed through the *same* backbone
     (weights are shared across frames - it is applied frame-by-frame, not one
-    backbone per frame), producing one set of per-frame outputs. Those are then
+    backbone per frame), producing one embedding per frame. Those are then
     pooled over time - either by a simple average, or by a small learned
     attention layer that lets the model weigh more informative frames more
-    heavily - into a single clip-level prediction.
+    heavily - and the backbone's head classifies the pooled clip embedding.
+
+    Checkpoints from before embeddings were pooled (no `pool_format` key) pooled
+    the per-frame *logits*. `load_state_dict` detects them and keeps that
+    behaviour for that model, so they still load and predict exactly as before.
 
     This keeps video classification fully compatible with DeepTune's existing
     Trainer/TestTrainer pipeline (forward(x) -> [B, num_classes]) and PEFT/LoRA
@@ -34,8 +42,8 @@ class VideoFramePoolClassifier(nn.Module):
             added_layers=2 (or the LoRA attention dimension, for PEFT backbones).
         freeze_backbone (bool): Whether to freeze the per-frame backbone's weights.
         task_type (str): "cls" or "reg".
-        pooling (str): "mean" or "attention" - how per-frame outputs are combined
-            over time into a single clip-level prediction.
+        pooling (str): "mean" or "attention" - how per-frame embeddings are combined
+            over time into a single clip embedding.
     """
 
     def __init__(
@@ -57,6 +65,7 @@ class VideoFramePoolClassifier(nn.Module):
         self.pooling = pooling
         self.task_type = task_type
         self.added_layers = added_layers
+        self.num_classes = num_classes
 
         # Every adjusted*Net class (PEFT or not) shares this exact positional
         # signature - it's how DeepTune's own vision trainer instantiates them
@@ -65,18 +74,52 @@ class VideoFramePoolClassifier(nn.Module):
             num_classes, frame_model_version, added_layers, embedding_layer_size, freeze_backbone, task_type=task_type,
         )
 
-        per_frame_out_dim = num_classes if task_type == "cls" else 1
+        self.logit_pooling = False
+        self.register_buffer("pool_format", torch.tensor(EMBEDDING_POOL_FORMAT))
 
         if pooling == "attention":
-            self.attention = nn.Linear(per_frame_out_dim, 1)
+            self.attention = nn.Linear(self.embedding_dim, 1)
+
+    @property
+    def embedding_dim(self) -> int:
+        """Size of what the backbone returns for extract_embed=True: fc1's output with two added layers, else fc1's input."""
+        if self.added_layers == 2:
+            return self.backbone.fc1.out_features
+        return self.backbone.fc1.in_features
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        if prefix + "pool_format" not in state_dict and not self.logit_pooling:
+            self._use_logit_pooling()
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+
+    def _use_logit_pooling(self):
+        """The old checkpoint format: no marker in the state dict (which keeps its fingerprint, so the run's
+        error model still applies), and attention over per-frame outputs."""
+        self.logit_pooling = True
+        del self._buffers["pool_format"]
+        if self.pooling == "attention":
+            weight = self.attention.weight
+            per_frame_out_dim = self.num_classes if self.task_type == "cls" else 1
+            self.attention = nn.Linear(per_frame_out_dim, 1).to(weight.device, weight.dtype)
+
+    def _classify(self, embedding):
+        """The backbone's own head, as its forward() applies it after extract_embed's output."""
+        if self.added_layers == 2:
+            return self.backbone.fc2(F.relu(embedding))
+        return self.backbone.fc1(embedding) if self.added_layers == 1 else embedding
+
+    def _pool(self, per_frame):
+        if self.pooling == "mean":
+            return per_frame.mean(dim=1)
+        weights = torch.softmax(self.attention(per_frame), dim=1)  # [B, T, 1]
+        return (per_frame * weights).sum(dim=1)
 
     def forward(self, x, extract_embed=False):
         """
         Args:
             x (Tensor): Video clip batch of shape [B, T, C, H, W].
-            extract_embed (bool): If True, returns a pooled clip-level embedding
-                (mean-pooled over the backbone's own per-frame embeddings) instead
-                of a prediction.
+            extract_embed (bool): If True, returns the clip embedding the head
+                sees (pooled with the model's own pooling) instead of a prediction.
 
         Returns:
             Tensor: [B, num_classes] (or [B, 1] for regression), or
@@ -85,18 +128,9 @@ class VideoFramePoolClassifier(nn.Module):
         B, T, C, H, W = x.shape
         x = x.reshape(B * T, C, H, W)
 
-        out = self.backbone(x, extract_embed=extract_embed)
-        out = out.reshape(B, T, -1)
+        if self.logit_pooling:
+            out = self.backbone(x, extract_embed=extract_embed).reshape(B, T, -1)
+            return out.mean(dim=1) if extract_embed else self._pool(out)
 
-        if extract_embed:
-            # Attention pooling is trained to weigh class-logit-shaped outputs,
-            # not raw embeddings, so embeddings are always mean-pooled over time.
-            return out.mean(dim=1)
-
-        if self.pooling == "mean":
-            pooled = out.mean(dim=1)
-        else:
-            weights = torch.softmax(self.attention(out), dim=1)  # [B, T, 1]
-            pooled = (out * weights).sum(dim=1)
-
-        return pooled
+        embedding = self._pool(self.backbone(x, extract_embed=True).reshape(B, T, -1))
+        return embedding if extract_embed else self._classify(embedding)
