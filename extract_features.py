@@ -12,8 +12,8 @@ Streams:
 
 * ``rgb``: decoded frames through ``--model_version`` (any DeepTune video or
   frame backbone), with that backbone's usual preprocessing.
-* ``motion``: dx, dy per frame through ``--motion_backbone`` with its first
-  convolution inflated to 2 channels. The field comes from
+* ``motion``: dx, dy and magnitude per frame through the unchanged RGB filters
+  of ``--motion_backbone`` (not trained on motion). The field comes from
   ``VideoReader.get_motion_vectors`` (codec vectors, Farneback flow as the
   fallback), is rotated to the display orientation, resized to the input size,
   rescaled to input pixels per frame, clipped to +-20 and divided by 20, as is
@@ -42,7 +42,6 @@ MOTION_CLIP_PIXELS = 20.0
 MOTION_NORMALISATION = f'input pixels per frame, clipped to +-{MOTION_CLIP_PIXELS:g}, divided by {MOTION_CLIP_PIXELS:g}'
 BLOCK_SIZE = 8
 IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-KINETICS_MEAN, KINETICS_STD = (0.43216, 0.394666, 0.37645), (0.22803, 0.22145, 0.216989)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,14 +97,17 @@ def rotate_motion_field(field_: np.ndarray, rotation: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 class _RgbPreprocess:
     """uint8 ``[S, H, W, 3]`` -> float ``[S, 3, H', W']`` the way training preprocesses this backbone,
-    or a plain resize + normalise when `input_size` overrides the size."""
+    or a plain resize + normalise with this backbone's own statistics when `input_size` overrides the size."""
 
     def __init__(self, version: str, native: bool, input_size: Optional[int]):
         import torch
         self.torch = torch
         self.input_size = input_size
-        self.mean = torch.tensor(KINETICS_MEAN if native else IMAGENET_MEAN).view(1, 3, 1, 1)
-        self.std = torch.tensor(KINETICS_STD if native else IMAGENET_STD).view(1, 3, 1, 1)
+        from src.video.video3d import _KINETICS400_WEIGHTS
+        # Each native model has its own statistics (r3d 0.43/0.22, mvit 0.45/0.225, swin3d ImageNet). dummy_video3d is r3d_18.
+        preset = _KINETICS400_WEIGHTS[version if version in _KINETICS400_WEIGHTS else 'r3d_18'].transforms() if native else None
+        self.mean = torch.tensor(preset.mean if preset else IMAGENET_MEAN).view(1, 3, 1, 1)
+        self.std = torch.tensor(preset.std if preset else IMAGENET_STD).view(1, 3, 1, 1)
         self.clip_transform = self.frame_transform = None
         if input_size is None:
             from datasets.video_datasets import native_video_transform
@@ -209,7 +211,9 @@ class _StreamExtractor:
         def tensors():
             for snippet, valid in iter_rgb_snippets(frames(), snippet_frames, stride):
                 info['last_snippet_valid_frames'] = valid
-                yield self.preprocess(snippet)
+                tensor = self.preprocess(snippet)
+                self.input_size = int(tensor.shape[-1])
+                yield tensor
 
         return self._run_batches(tensors()), info
 
@@ -222,8 +226,10 @@ class _StreamExtractor:
         info = {'frame_count': frame_count, 'motion_normalisation': MOTION_NORMALISATION, 'motion_source': None,
                 'last_snippet_valid_frames': int(min(snippet_frames, frame_count - starts[-1]))}
         intra = [0, 0]
+        codec_meta = None
 
         def tensors():
+            nonlocal codec_meta
             for chunk in range(0, len(starts), self.batch_size):
                 chosen = starts[chunk:chunk + self.batch_size]
                 wanted = (lo + chosen[:, None] + np.arange(snippet_frames)).reshape(-1)
@@ -232,11 +238,20 @@ class _StreamExtractor:
                 info['motion_source'] = motion.source
                 intra[0] += int(np.count_nonzero(motion.is_intra))
                 intra[1] += len(motion.is_intra)
-                field_ = rotate_motion_field(motion.field, meta.rotation)
+                # Codec vectors always use PyAV's stored orientation. OpenCV and
+                # TorchCodec metadata can omit the display rotation entirely.
+                motion_meta = meta
+                if motion.source == 'codec' and reader.backend != 'pyav':
+                    if codec_meta is None:
+                        from datasets.video_io import VideoReader
+                        with VideoReader(reader.source, backend='pyav') as probe:
+                            codec_meta = probe.metadata()
+                    motion_meta = codec_meta
+                field_ = rotate_motion_field(motion.field, motion_meta.rotation)
                 filled = np.zeros((len(wanted), *field_.shape[1:]), dtype=np.float32)  # padded frames: no motion
                 filled[inside] = field_
                 for snippet in filled.reshape(len(chosen), snippet_frames, *field_.shape[1:]):
-                    yield _motion_to_tensor(snippet, (meta.width, meta.height), self.input_size)
+                    yield _motion_to_tensor(snippet, (motion_meta.width, motion_meta.height), self.input_size)
 
         features = self._run_batches(tensors())
         info['intra_fraction'] = intra[0] / max(1, intra[1])
@@ -282,8 +297,11 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
                      motion_backbone: str = 'r3d_18', feature_weights: str = 'pretrained', snippet_frames: int = 16,
                      snippet_stride: Optional[int] = None, cache_tokens: str = 'none', batch_size: int = 8,
                      motion_method: str = 'auto', feature_input_size: Optional[int] = None, video_backend: str = 'auto',
-                     device=None) -> ExtractionReport:
-    """Extract every requested stream of every video in `data` (manifest, parquet or DataFrame) into `out`."""
+                     device=None, record_arguments: Optional[dict] = None) -> ExtractionReport:
+    """Extract every requested stream of every video in `data` (manifest, parquet or DataFrame) into `out`.
+
+    `record_arguments` is written to ``cli_arguments.json`` once the settings and rows have been accepted, so a
+    refused run leaves the record of the folder's real settings alone and an interrupted one still has it."""
     from datasets.feature_dataset import open_feature_source, row_video_id
     from datasets.video_io import MotionVectorsUnavailable, VideoReader, describe_source, source_fingerprint
     if device is None:
@@ -299,16 +317,16 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
         config = {'format': FORMAT_VERSION, 'stream': stream, 'snippet_frames': snippet_frames, 'stride': stride,
                   'backbone': model_version if stream == 'rgb' else motion_backbone, 'weights': feature_weights,
                   'input_size': feature_input_size, 'token_grid': list(grid) if grid else None,
-                  'video_backend': video_backend, 'motion_method': motion_method if stream == 'motion' else None}
+                  'video_backend': video_backend, 'motion_method': motion_method if stream == 'motion' else None,
+                  'preprocessing_version': 2}
         store.check_config(stream, config)
         extractors[stream] = _StreamExtractor(stream, config, grid, batch_size, device)
     dataset, columns = open_feature_source(data)
     report = ExtractionReport()
     began = time.perf_counter()
-    seen: dict = {}
     registered = set()
 
-    def extract_one(stream, reader, vid, source, fingerprint, lo, hi, frames_known):
+    def extract_one(stream, reader, vid, source, fingerprint, source_range, lo, hi, frames_known):
         extractor, clock = extractors[stream], time.perf_counter()
         if stream == 'rgb':
             features, info = extractor.extract_rgb(reader, lo, hi)
@@ -324,6 +342,7 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
         sidecar = {
             'format_version': FORMAT_VERSION, 'video_id': vid, 'stream': stream, 'source': describe_source(source),
             'source_fingerprint': fingerprint, 'config_hash': extractor.digest, 'fps': meta.fps, 'frame_count': count,
+            'source_range': source_range,
             'start_frame': lo, 'end_frame': lo + count, 'duration_sec': count / meta.fps if meta.fps else None,
             'variable_fps': bool(meta.variable_fps), 'snippet_frames': snippet_frames, 'stride': stride,
             'num_snippets': len(stored), 'last_snippet_valid_frames': info['last_snippet_valid_frames'],
@@ -334,7 +353,9 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
         }
         if stream == 'motion':
             sidecar.update(motion_source=info['motion_source'], intra_fraction=info['intra_fraction'],
-                           motion_normalisation=info['motion_normalisation'])
+                           motion_normalisation=info['motion_normalisation'],
+                           motion_encoding='dx, dy, magnitude through RGB filters',
+                           motion_weights_trained_on_motion=False)
         times = _snippet_times(reader, lo, snippet_starts(count, snippet_frames, stride))
         if times is not None:
             sidecar['snippet_start_sec'] = times
@@ -346,16 +367,19 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
         report.bytes_written += store.array_path(stream, vid).stat().st_size
         return count
 
+    # Checked before anything is decoded: one id cannot stand for two clips, wherever the clash is in the manifest.
+    rows: dict = {}
     for i in range(len(dataset)):
         vid = row_video_id(dataset, columns, i)
+        identity = (source_fingerprint(dataset._source(i)), {'start_sec': _value(dataset._starts, i), 'end_sec': _value(dataset._ends, i)})
+        if rows.setdefault(vid, (i, *identity))[1:] != identity:
+            raise ValueError(f'Two different videos or trims have the id {vid!r}; video_id values must be unique.')
+    if record_arguments is not None:
+        write_json_atomic(Path(out) / 'cli_arguments.json', record_arguments)
+
+    for vid, (i, fingerprint, source_range) in rows.items():
         source = dataset._source(i)
-        fingerprint = source_fingerprint(source)
-        if vid in seen:
-            if seen[vid] != fingerprint:
-                raise ValueError(f'Two different videos have the id {vid!r}; video_id values must be unique.')
-            continue
-        seen[vid] = fingerprint
-        todo = [s for s in streams if not store.is_complete(s, vid, fingerprint, extractors[s].digest)]
+        todo = [s for s in streams if not store.is_complete(s, vid, fingerprint, extractors[s].digest, source_range)]
         for stream in streams:
             if stream not in todo:
                 report.skipped[stream] += 1
@@ -363,13 +387,14 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
             continue
         frames_known = None
         rgb_sidecar = store.read_sidecar('rgb', vid)  # the frames actually decoded, so both streams have the same N
-        if rgb_sidecar and rgb_sidecar.get('source_fingerprint') == fingerprint:
+        if (rgb_sidecar and rgb_sidecar.get('source_fingerprint') == fingerprint
+                and rgb_sidecar.get('source_range') == source_range):
             frames_known = rgb_sidecar.get('frame_count')
         try:
             with VideoReader(source, backend=video_backend) as reader:
                 lo, hi = _frame_range(reader, _value(dataset._starts, i), _value(dataset._ends, i))
                 for stream in todo:
-                    count = extract_one(stream, reader, vid, source, fingerprint, lo, hi, frames_known)
+                    count = extract_one(stream, reader, vid, source, fingerprint, source_range, lo, hi, frames_known)
                     frames_known = count if stream == 'rgb' else frames_known
         except (ValueError, IndexError, MotionVectorsUnavailable) as exc:  # includes VideoDecodeError, FeatureValueError
             LOGGER.error('Video %s failed: %s', vid, exc)
@@ -396,12 +421,12 @@ def main(argv=None) -> int:
         parser.error(str(exc))
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(levelname)s | %(message)s')
     Path(args.out).mkdir(parents=True, exist_ok=True)
-    write_json_atomic(Path(args.out) / 'cli_arguments.json', {name: getattr(args, name) for name in SNIPPET_FEATURE_ARG_NAMES})
     report = extract_features(args.data, args.out, streams=args.streams, model_version=args.model_version,
                               motion_backbone=args.motion_backbone, feature_weights=args.feature_weights,
                               snippet_frames=args.snippet_frames, snippet_stride=args.snippet_stride,
                               cache_tokens=args.cache_tokens, batch_size=args.batch_size, motion_method=args.motion_method,
-                              feature_input_size=args.feature_input_size, video_backend=args.video_backend)
+                              feature_input_size=args.feature_input_size, video_backend=args.video_backend,
+                              record_arguments={name: getattr(args, name) for name in SNIPPET_FEATURE_ARG_NAMES})
     print(json.dumps({'extracted': report.extracted, 'skipped': report.skipped, 'failed': len(report.failed),
                       'seconds': round(report.seconds, 2), 'megabytes_written': round(report.bytes_written / 1e6, 3)}))
     if report.failed:

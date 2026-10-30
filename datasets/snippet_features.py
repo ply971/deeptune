@@ -251,10 +251,13 @@ class FeatureStore:
     def read_sidecar(self, stream: str, video_id: str) -> Optional[dict]:
         return _read_json(self.sidecar_path(stream, video_id))
 
-    def is_complete(self, stream: str, video_id: str, fingerprint: str, config_digest: str) -> bool:
+    def is_complete(self, stream: str, video_id: str, fingerprint: str, config_digest: str,
+                    source_range: Optional[dict] = None) -> bool:
         """True only for a whole, matching entry: this is what makes extraction resumable."""
         sidecar = self.read_sidecar(stream, video_id)
         if not sidecar or sidecar.get('source_fingerprint') != fingerprint or sidecar.get('config_hash') != config_digest:
+            return False
+        if source_range is not None and sidecar.get('source_range') != source_range:
             return False
         try:
             mapped = valid_npy_memmap(self.array_path(stream, video_id))
@@ -304,6 +307,10 @@ class FeatureStore:
             split[name] = (start, start + int(array.shape[-1]))
             start += int(array.shape[-1])
             meta[name] = self.read_sidecar(name, video_id) or {}
+        ranges = {name: side['source_range'] for name, side in meta.items() if 'source_range' in side}
+        if len({json.dumps(value, sort_keys=True) for value in ranges.values()}) > 1:
+            raise ValueError(f'Video {video_id!r}: the streams come from different trims of the video: {ranges}. '
+                             'Run extract_features.py again with all the streams.')
         if len({a.shape[:-1] for a in arrays}) > 1:
             shapes = {name: a.shape for name, a in zip(names, arrays)}
             raise ValueError(f'Video {video_id!r}: streams cannot be concatenated, their shapes differ: {shapes}. '

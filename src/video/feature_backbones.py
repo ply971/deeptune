@@ -12,9 +12,9 @@ r2plus1d_18, mvit_v2_s, swin3d_*) downsample time themselves: r3d_18 gives
 ``T' = T / 8``. ViT and MViT grids hold the patch tokens without the class
 token, so a vector from those families is the patch mean, not the class token.
 
-Motion input has 2 channels (dx, dy): ``in_channels=2`` replaces the first
-convolution by one whose weights are the RGB filters averaged over channels
-and repeated, the cross-modality initialisation of TSN (Wang et al., ECCV 2016).
+Motion input has 2 channels (dx, dy): ``in_channels=2`` feeds dx, dy and their
+magnitude to the unchanged RGB filters. This preserves direction information;
+these are appearance weights, not weights trained on optical flow.
 """
 from __future__ import annotations
 
@@ -28,13 +28,25 @@ from src.video.video3d import _KINETICS400_WEIGHTS, VIDEO3D_ARCHITECTURES
 DUMMY_VIDEO_BACKBONE = 'dummy_video3d'  # r3d_18 without weights, for tests
 _R3D_FAMILY = ('r3d_18', 'mc3_18', 'r2plus1d_18')
 _FRAME_FAMILIES = ('resnet', 'densenet', 'efficientnet', 'vgg', 'convnext', 'swin', 'vit')
-# Weight terms worth carrying with the features. Torchvision's code is BSD-3-Clause;
-# the weights inherit the terms of the data they were trained on.
-_LICENCE_NOTES = {
-    'imagenet': 'torchvision weights (code BSD-3-Clause), trained on ImageNet-1K, whose terms are non-commercial research only; check before other use',
-    'kinetics': 'torchvision weights (code BSD-3-Clause), trained on Kinetics-400 (YouTube videos with their own terms); check before commercial use',
-    'none': 'none: random initialisation, no pretrained weights',
-}
+# Licence notes are per set of weights, never per architecture: ViT-H's DEFAULT is a SWAG checkpoint with its
+# own non-commercial licence, unlike the other ViT weights. Torchvision only links to a licence, and only for a few.
+_LICENCE_TERMS = {'https://github.com/facebookresearch/SWAG/blob/main/LICENSE': 'CC BY-NC 4.0 (non-commercial)'}
+_TRAINING_DATA = {'IMAGENET1K': 'ImageNet-1K (non-commercial research terms)',
+                  'KINETICS400': 'Kinetics-400 (YouTube videos with their own terms)'}
+
+
+def weight_licence(weights) -> str:
+    """What is known about the terms of exactly these weights, from their torchvision metadata (needs no download)."""
+    if weights is None:
+        return 'none: random initialisation, no pretrained weights'
+    url = weights.meta.get('license')
+    if url:
+        terms = f'{_LICENCE_TERMS[url]}, {url}' if url in _LICENCE_TERMS else f'licence at {url}'
+    else:
+        terms = (f'no weight licence in torchvision metadata, check the recipe {weights.meta.get("recipe", "(none given)")}; '
+                 "torchvision's BSD-3-Clause covers its code, not these weights")
+    data = next((note for key, note in _TRAINING_DATA.items() if key in weights.name), 'see the recipe')
+    return f'{weights}: {terms}; training data: {data}'
 
 
 def _grid_resnet(model, x):
@@ -92,23 +104,6 @@ def frame_family(version: str) -> str | None:
     return None
 
 
-def _inflate_first_conv(model: nn.Module, in_channels: int) -> None:
-    """Replace the first 3-channel convolution by an `in_channels` one (see the module docstring)."""
-    for module in model.modules():
-        for name, child in module.named_children():
-            if isinstance(child, (nn.Conv2d, nn.Conv3d)) and child.in_channels == 3:
-                replacement = type(child)(in_channels, child.out_channels, child.kernel_size, child.stride, child.padding,
-                                          child.dilation, child.groups, child.bias is not None, child.padding_mode)
-                with torch.no_grad():
-                    mean = child.weight.mean(dim=1, keepdim=True)
-                    replacement.weight.copy_(mean.repeat(1, in_channels, *[1] * (mean.ndim - 2)))
-                    if child.bias is not None:
-                        replacement.bias.copy_(child.bias)
-                setattr(module, name, replacement)
-                return
-    raise ValueError(f'{type(model).__name__} has no 3-channel input convolution to inflate.')
-
-
 class SnippetBackbone(nn.Module):
     """A frozen backbone in eval mode. `version`, `weights_name`, `weights_licence` and
     `default_input_size` describe it for the feature sidecars."""
@@ -117,6 +112,8 @@ class SnippetBackbone(nn.Module):
         super().__init__()
         self.version = version
         self.in_channels = in_channels
+        if in_channels not in (2, 3):
+            raise ValueError('Snippet backbones accept RGB (3 channels) or motion (dx, dy; 2 channels).')
         family = frame_family(version)
         native = version in VIDEO3D_ARCHITECTURES or version == DUMMY_VIDEO_BACKBONE
         if not native and family is None:
@@ -140,10 +137,8 @@ class SnippetBackbone(nn.Module):
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(seed)
             self.model = tv_models.get_model(builder_name, weights=weights)
-            if in_channels != 3:
-                _inflate_first_conv(self.model, in_channels)
         self.weights_name = str(weights) if weights is not None else None
-        self.weights_licence = _LICENCE_NOTES['none' if weights is None else 'kinetics' if native else 'imagenet']
+        self.weights_licence = weight_licence(weights)
         if builder_name in _R3D_FAMILY:
             self.default_input_size = 112
         else:
@@ -158,6 +153,9 @@ class SnippetBackbone(nn.Module):
     def token_grid(self, x: torch.Tensor) -> torch.Tensor:
         """``[B, T, C, H, W]`` -> ``[B, T', H', W', D]``."""
         B, T = x.shape[:2]
+        if self.in_channels == 2:
+            magnitude = torch.linalg.vector_norm(x, dim=2, keepdim=True)
+            x = torch.cat((x, magnitude), dim=2)
         if self.native:
             return self._grid_fn(self.model, x.permute(0, 2, 1, 3, 4))
         grid = self._grid_fn(self.model, x.reshape(B * T, *x.shape[2:]))  # [B*T, D, h, w]

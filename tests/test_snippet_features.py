@@ -17,7 +17,7 @@ from datasets.feature_dataset import open_feature_source, row_video_id
 from datasets.snippet_features import (FeatureConfigError, FeatureStore, FeatureValueError, load_snippet_features,
                                        parse_token_grid, safe_video_id, snippet_count, snippet_starts, to_float16,
                                        video_id_for_path)
-from datasets.video_io import VideoDecodeError, VideoReader
+from datasets.video_io import VideoDecodeError, VideoReader, farneback_flow
 from datasets.video_synth import decode_frame_index, index_coded_clip, translating_clip
 from handlers.video_args import SNIPPET_FEATURE_ARG_NAMES
 from src.video.feature_backbones import SnippetBackbone, pool_token_grid, resolve_token_grid
@@ -543,12 +543,24 @@ def test_every_backbone_family_gives_a_grid_and_is_frozen(version, frames, size,
     del model, out
 
 
-def test_inflated_first_convolution_uses_the_rgb_mean():
-    rgb = SnippetBackbone('resnet18', pretrained=False, in_channels=3, seed=4)
-    motion = SnippetBackbone('resnet18', pretrained=False, in_channels=2, seed=4)
-    expected = rgb.model.conv1.weight.mean(dim=1)
-    assert torch.equal(motion.model.conv1.weight[:, 0], expected) and torch.equal(motion.model.conv1.weight[:, 1], expected)
-    assert torch.equal(motion.model.layer1[0].conv1.weight, rgb.model.layer1[0].conv1.weight)
+@pytest.mark.parametrize('version', ['resnet18', 'dummy_video3d'])
+def test_motion_encoding_preserves_direction_and_uses_unchanged_rgb_weights(version):
+    """Replaces the check that the first convolution held the RGB mean (V-039 item 1): with one filter repeated,
+    frozen features depended only on dx + dy."""
+    rgb = SnippetBackbone(version, pretrained=False, in_channels=3, seed=4)
+    motion = SnippetBackbone(version, pretrained=False, in_channels=2, seed=4)
+    assert all(torch.equal(a, b) for a, b in zip(rgb.state_dict().values(), motion.state_dict().values()))
+    fields = torch.zeros(5, 4, 2, 32, 32)
+    fields[0, :, 0] = 0.5  # right
+    fields[1, :, 1] = 0.5  # down
+    fields[2, :, 0], fields[2, :, 1] = 0.5, -0.5  # dx + dy = 0, which used to look like the still field
+    fields[3, :, 0] = -0.5  # left
+    with torch.inference_mode():
+        features = motion(fields)
+    still = features[4]
+    assert not torch.allclose(features[0], features[1])
+    assert not torch.allclose(features[2], still)
+    assert not torch.allclose(features[0], features[3])
 
 
 def test_random_weights_are_reproducible_and_do_not_disturb_the_global_rng():
@@ -617,3 +629,127 @@ def test_empty_video_is_reported(tmp_path):
     empty.write_bytes(b'')
     report = ef.extract_features(pd.DataFrame({'videos': [str(empty)]}), tmp_path / 'f', **SMALL)
     assert report.failed and 'empty' in report.failed[0]['error'].lower()
+
+
+def test_duplicate_explicit_id_with_different_trims_is_refused(videos, tmp_path):
+    df = pd.DataFrame({'videos': [str(videos[0]), str(videos[2]), str(videos[2])], 'video_id': ['first', 'same', 'same'],
+                       'start_sec': [0.0, 0.0, 0.4], 'end_sec': [0.2, 0.4, 0.8]})
+    with pytest.raises(ValueError, match='trims.*unique'):
+        ef.extract_features(df, tmp_path / 'f', **SMALL)
+    assert not (tmp_path / 'f' / 'rgb').exists()  # refused before the clean first row cost any decoding
+
+
+def test_rows_repeating_one_trim_under_one_id_share_their_features(videos, tmp_path):
+    df = pd.DataFrame({'videos': [str(videos[2])] * 2, 'video_id': ['same'] * 2, 'start_sec': [0.0] * 2, 'end_sec': [0.4] * 2})
+    assert ef.extract_features(df, tmp_path / 'f', **SMALL).extracted['rgb'] == 1
+
+
+def test_streams_from_different_trims_are_not_concatenated(videos, tmp_path):
+    df = pd.DataFrame({'videos': [str(videos[2])], 'video_id': ['same'], 'start_sec': [0.0], 'end_sec': [0.4]})
+    ef.extract_features(df, tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    ef.extract_features(df.assign(start_sec=0.4, end_sec=0.8), tmp_path / 'f', streams=('rgb',), **SMALL)  # same N
+    with pytest.raises(ValueError, match='different trims'):
+        load_snippet_features(tmp_path / 'f', 'same')
+    assert load_snippet_features(tmp_path / 'f', 'same', streams=['rgb']).meta['rgb']['source_range']['start_sec'] == 0.4
+
+
+def test_resume_reextracts_changed_trim_and_aligns_new_motion(videos, tmp_path):
+    df = pd.DataFrame({'videos': [str(videos[2])], 'video_id': ['same'],
+                       'start_sec': [0.0], 'end_sec': [0.4]})
+    ef.extract_features(df, tmp_path / 'f', **SMALL)
+    df['start_sec'], df['end_sec'] = 0.4, 1.2
+    report = ef.extract_features(df, tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    assert report.extracted == {'rgb': 1, 'motion': 1}
+    loaded = load_snippet_features(tmp_path / 'f', 'same')
+    for side in loaded.meta.values():
+        assert side['source_range'] == {'start_sec': 0.4, 'end_sec': 1.2}
+        assert (side['start_frame'], side['end_frame']) == (10, 30)
+    assert loaded.meta['motion']['motion_weights_trained_on_motion'] is False
+    with _NoDecode():
+        assert ef.extract_features(df, tmp_path / 'f', streams=('rgb', 'motion'), **SMALL).skipped == {'rgb': 1, 'motion': 1}
+
+
+@pytest.mark.parametrize('version', ['r3d_18', 'mvit_v2_s', 'swin3d_t'])
+def test_size_override_preserves_each_native_weights_normalisation(version):
+    from src.video.video3d import _KINETICS400_WEIGHTS
+    preset = _KINETICS400_WEIGHTS[version].transforms()
+    output = ef._RgbPreprocess(version, True, 16)(np.full((2, 20, 30, 3), 128, np.uint8))
+    expected = (128 / 255 - torch.tensor(preset.mean)) / torch.tensor(preset.std)
+    assert torch.allclose(output[0, :, 0, 0], expected)
+
+
+def test_sidecar_records_actual_frame_preprocessing_size(videos, tmp_path, monkeypatch):
+    class TinyBackbone(torch.nn.Module):
+        native = False
+        default_input_size = 380
+        weights_name = None
+        weights_licence = 'none: random'
+
+        def token_grid(self, x):
+            return x.mean(dim=(-1, -2)).unsqueeze(2).unsqueeze(2)
+
+    monkeypatch.setattr('src.video.feature_backbones.SnippetBackbone', lambda *a, **kw: TinyBackbone())
+    ef.extract_features(_manifest(videos[:1]), tmp_path / 'f',
+                        **{**SMALL, 'model_version': 'efficientnet_b4', 'feature_input_size': None})
+    assert FeatureStore(tmp_path / 'f').read_sidecar('rgb', 'v0')['input_size'] == 224
+
+
+def test_weight_licence_comes_from_selected_weights_without_loading_them(monkeypatch):
+    from torchvision.models import ViT_H_14_Weights
+    monkeypatch.setattr('src.video.feature_backbones.tv_models.get_model', lambda *a, **kw: torch.nn.Identity())
+    model = SnippetBackbone('vit_h_14', pretrained=True)
+    assert str(ViT_H_14_Weights.DEFAULT) in model.weights_licence
+    assert ViT_H_14_Weights.DEFAULT.meta['license'] in model.weights_licence
+    assert 'CC BY-NC 4.0' in model.weights_licence
+
+
+@pytest.mark.parametrize('version,data', [('resnet18', 'ImageNet-1K'), ('r3d_18', 'Kinetics-400'), ('mvit_v2_s', 'Kinetics-400')])
+def test_weights_without_a_licence_in_their_metadata_do_not_claim_one(monkeypatch, version, data):
+    import torchvision.models as tv
+    from src.video.feature_backbones import weight_licence
+    monkeypatch.setattr('src.video.feature_backbones.tv_models.get_model', lambda *a, **kw: torch.nn.Identity())
+    weights = tv.get_model_weights(version).DEFAULT
+    assert weights.meta.get('license') is None
+    licence = SnippetBackbone(version, pretrained=True).weights_licence
+    assert licence == weight_licence(weights)
+    assert str(weights) in licence and 'no weight licence' in licence and data in licence and weights.meta['recipe'] in licence
+    assert 'random' in SnippetBackbone(version, pretrained=False).weights_licence
+
+
+def test_refused_cli_run_keeps_original_arguments(videos, tmp_path):
+    manifest = tmp_path / 'clips.csv'
+    _manifest(videos[:1]).to_csv(manifest, index=False)
+    argv = ['--data', str(manifest), '--out', str(tmp_path / 'f'), '--model_version', 'dummy_video3d',
+            '--feature_weights', 'none', '--feature_input_size', '32', '--snippet_frames', '8']
+    assert ef.main(argv) == 0
+    before = (tmp_path / 'f' / 'cli_arguments.json').read_bytes()
+    with pytest.raises(FeatureConfigError):
+        ef.main(argv[:-1] + ['4'])
+    assert (tmp_path / 'f' / 'cli_arguments.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('method', ['codec', 'farneback'])
+def test_rotated_motion_is_backend_independent(tmp_path, method):
+    from datasets.video_synth import write_clip
+    path = translating_clip(tmp_path / 'original.mp4', 20, 2, 0, size=32, seed=5)
+    with VideoReader(path, backend='pyav') as reader:
+        frames = list(reader.iter_frames())
+    rotated = write_clip(tmp_path / 'rotated.mp4', frames, rotation=90)
+    outputs = []
+    for backend in ('pyav', 'opencv'):
+        extractor = ef._StreamExtractor('motion', {'snippet_frames': 8, 'stride': 8, 'motion_method': method}, None, 2, 'cpu')
+        extractor._ensure_backbone = lambda: None
+        extractor.input_size = 32
+        extractor._run_batches = lambda tensors: np.stack([tensor.numpy() for tensor in tensors])
+        with VideoReader(rotated, backend=backend) as reader:
+            output, _ = extractor.extract_motion(reader, 0, 20)
+            outputs.append(output)
+    # Codec vectors are the same numbers. Farneback runs on stored frames for pyav and on display frames for opencv, and
+    # flow is not exactly rotation-equivariant: measured 0.009 px at most, so allow 0.02 px of the +-20 px range.
+    assert np.allclose(*outputs, atol=1e-5 if method == 'codec' else 0.02 / ef.MOTION_CLIP_PIXELS)
+    # ... and the direction agrees with what the display-orientation frames show, measured without our rotation.
+    with VideoReader(rotated, backend='pyav') as reader:
+        shown = reader.get_frames(np.arange(9, 12))
+    flow = np.mean([farneback_flow(a, b)[8:24, 8:24].mean(axis=(0, 1)) for a, b in zip(shown, shown[1:])], axis=0)
+    vectors = outputs[0][:, :, :, 8:24, 8:24].mean(axis=(0, 1, 3, 4))
+    assert np.dot(flow, vectors) > 0 and np.argmax(np.abs(flow)) == np.argmax(np.abs(vectors))
