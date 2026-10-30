@@ -282,6 +282,66 @@ on average. For classification, `auroc_error_detection` measures how well
 than chance). With a small test set the bins are small and the intervals wide,
 so read the table as a whole rather than one bin at a time.
 
+## Detect and track objects in video (zero-shot)
+
+Describe what to find in words. No labels or training needed:
+
+```bash
+python track.py --video lobsters.mp4 --prompt lobster --out runs/lobsters --save_video
+python track.py --video_dir clips/ --prompt lobster --prompt fish --detector owlv2 --out runs/clips
+```
+
+An open-vocabulary detector finds each prompt in each frame:
+**Grounding DINO** (`IDEA-Research/grounding-dino-tiny`, the default) or
+**OWLv2** (`google/owlv2-base-patch16-ensemble`), both Apache-2.0 and loaded
+through 🤗 `transformers`. The weights download on first use (about 0.6–0.7 GB
+each). A re-implementation of **ByteTrack** (Zhang et al., ECCV 2022) then links
+the boxes into tracks. It uses a constant-velocity Kalman filter, a Hungarian
+(IoU) match of high-score boxes, and a second match of low-score boxes, which
+keeps objects that are briefly blurred or partly hidden. Each track gets a
+stable integer ID. A lost track keeps its ID if it comes back within
+`--track_buffer` steps.
+
+Each video gets its own folder (`<out>/<video name>/`):
+
+| File | Contents |
+|---|---|
+| `detections.json` | every sampled frame: `box_xyxy` (pixels), `score`, `label` |
+| `tracks.csv` | MOTChallenge format, no header: `frame,id,x,y,w,h,score,class,-1,-1` (frame is 1-based; class is the 1-based prompt index) |
+| `track_labels.csv` | `track_id,class_id,label` |
+| `summary.json` | per prompt: `count` (number of unique tracks), first/last seen (seconds), and each track's frames, duration and number of observations |
+| `overlay.mp4` | with `--save_video`: the video with boxes and `label #id` drawn on it |
+
+`<out>/counts.csv` lists video, label and count, and `<out>/track_arguments.json`
+records every setting used.
+
+Useful options:
+- `--box_threshold`: default 0.2 for Grounding DINO, 0.1 for OWLv2.
+- `--text_threshold`: Grounding DINO only.
+- `--every_n_frames`: detect on every n-th frame only, which is faster.
+- `--batch_size`, `--device auto|cpu|cuda`.
+- `--track_high_thresh` / `--track_low_thresh` / `--new_track_thresh`, `--track_buffer`.
+- `--class_agnostic`: let one track switch between prompts and take the majority label.
+- `--cross_label_nms 0.7`: when boxes of *different* prompts overlap (Grounding DINO
+  often finds one object for both "lobster" and "crab"), keep only the best-scoring
+  one, so the object is counted once. This is off by default, so such an object is
+  counted under each prompt.
+
+Run `python track.py --help` for the full list. Bad arguments stop the run before
+any video is read or weights load (exit code 2). The exit code is 1 when any video
+fails; failed videos are listed in `<out>/errors.json`. Prompts may contain dots
+("St. Bernard"). `scripts/smoke_track.py` runs both detectors with real weights on
+a generated clip.
+
+**Accuracy depends on the prompt and the footage.** Short, concrete nouns work
+best ("lobster", not "the animal on the left"). Small, blurred or unusual
+objects may be missed or confused. Two same-label objects that stay hidden
+behind each other for a long time can come back with a new ID, because
+association uses box overlap and motion only, not appearance. These results
+have not been measured yet. Detection mAP and tracking HOTA / MOTA / IDF1
+arrive with the spatial metrics task (S4). Check `overlay.mp4` before you
+trust the counts.
+
 ## Documentation
 
 DeepTune is being under active development and mainteneance with a user-friendly comprehensive documentation for easier usage. The documentation can be accessed [here](https://deeptune.readthedocs.io/en/latest/).
@@ -290,6 +350,8 @@ DeepTune is being under active development and mainteneance with a user-friendly
 This software package was developed as part of work done at Medical Imaging Bioinformatics lab under the supervision of Jacob Levman at St. Francis Xavier Univeristy (StFX), Nova Scotia, Canada.
 
 Thanks to Xuchen for providing their parameter-efficient fine-tuned Swin implementation [SwinTransformerWithPEFT](https://github.com/XuchenGuo/SwinTransformerWithPEFT)
+
+Video tracking (`spatial/track.py`) re-implements ByteTrack (Zhang et al., "ByteTrack: Multi-Object Tracking by Associating Every Detection Box", ECCV 2022; reference code MIT). Zero-shot detection uses Grounding DINO (Liu et al., ECCV 2024) and OWLv2 (Minderer et al., NeurIPS 2023) through Hugging Face `transformers` (Apache-2.0 checkpoints).
 
 ## Citation
 
