@@ -59,25 +59,37 @@ def mean_flow_features(frames_rgb: np.ndarray, vertical: bool = False) -> np.nda
     return np.concatenate([u, flow[..., 1].mean(axis=(1, 2))])
 
 
+# Grey-level change (0-255) between consecutive frames above which a pixel
+# counts as "changing". Codec noise on a static background stays well below
+# it (measured max error 15 on a still mp4v clip); the blob's edges and
+# texture are far above it.
+CHANGE_THRESHOLD = 40
+
+
 def flow_summary_features(frames_rgb: np.ndarray) -> np.ndarray:
     """Order-free summary of horizontal motion (6 numbers).
 
-    ``[mean u, mean |u|, std u, consistency, speed, speed_any]`` where u is the
-    per-frame-pair mean horizontal flow, ``consistency = |sum u| / sum |u|``
-    (1 for a steady drift, near 0 for a back-and-forth oscillation), ``speed``
-    is the median over frame pairs of the 97th percentile of |u| over pixels
-    (the moving object's speed, insensitive to its size) and ``speed_any`` the
-    same for the flow magnitude. Used for the speed and periodic probes, where
-    the phase of the motion is random so per-frame features are not aligned.
+    ``[mean u, mean |u|, std u, consistency, speed, speed_mean]`` where u is
+    the per-frame-pair mean horizontal flow and ``consistency = |sum u| /
+    sum |u|`` (1 for a steady drift, near 0 for a back-and-forth oscillation).
+    ``speed`` / ``speed_mean`` are the median / mean over frame pairs of the
+    median |u| over *changing* pixels (grey-level change > CHANGE_THRESHOLD):
+    the moving object's speed, independent of its size. Gating matters on
+    small frames: Farneback spreads flow far beyond the object along
+    background stripes (aperture problem), so whole-frame percentiles are
+    unreliable. Used for the speed and periodic probes, where the phase of the
+    motion is random so per-frame features are not aligned.
     """
     flow = farneback_flow(frames_rgb)
     u = flow[..., 0].mean(axis=(1, 2))
     abs_u = np.abs(flow[..., 0]).reshape(len(flow), -1)
-    mag = np.hypot(flow[..., 0], flow[..., 1]).reshape(len(flow), -1)
+    grey = frames_rgb.astype(np.float32).mean(axis=-1)
+    changing = (np.abs(np.diff(grey, axis=0)) > CHANGE_THRESHOLD).reshape(len(flow), -1)
+    gated = np.array([np.median(abs_u[i][changing[i]]) if changing[i].sum() > 3 else 0.0
+                      for i in range(len(flow))])
     consistency = np.abs(u.sum()) / max(float(np.abs(u).sum()), 1e-6)
     return np.array([u.mean(), np.abs(u).mean(), u.std(), consistency,
-                     np.median(np.percentile(abs_u, 97, axis=1)),
-                     np.median(np.percentile(mag, 97, axis=1))], np.float32)
+                     np.median(gated), gated.mean()], np.float32)
 
 
 def appearance_features(frame_rgb: np.ndarray, grid: int = 16) -> np.ndarray:
@@ -117,16 +129,20 @@ def spectrum_features(frame_rgb: np.ndarray, mask: np.ndarray | None = None, bin
 
 
 def codec_mv_features(path: Path) -> np.ndarray | None:
-    """Mean horizontal codec motion per frame (P/B frames), via PyAV ``+export_mvs``.
+    """Mean horizontal codec motion of each inter frame, via PyAV ``+export_mvs``.
 
-    Returns ``None`` if PyAV is not installed or the decoder exports no motion
-    vectors (e.g. an intra-only stream). Each motion vector's displacement is
-    ``(dst - src)`` for a past reference (``source < 0``) and ``-(dst - src)``
-    for a future reference, giving the forward motion of the block.
-    Untested on machines without PyAV (Phase 1 installs it).
+    FFmpeg exports one motion vector per (sub-)block of each P/B frame: the
+    block at ``dst`` in the current frame is predicted from ``src = dst +
+    motion / motion_scale`` in the reference frame (past if ``source < 0``).
+    The forward horizontal motion of a block is therefore ``-motion_x /
+    motion_scale`` for a past reference and ``+motion_x / motion_scale`` for a
+    future one; blocks are weighted by area. Frames with no exported vectors
+    (I-frames) are skipped; intra-coded blocks inside P-frames export none.
+
+    Returns ``None`` if PyAV is not installed or no frame carries vectors.
     """
     try:
-        import av  # noqa: F401 - optional dependency
+        import av
     except ImportError:
         return None
     feats = []
@@ -134,15 +150,17 @@ def codec_mv_features(path: Path) -> np.ndarray | None:
         stream = container.streams.video[0]
         stream.codec_context.options = {"flags2": "+export_mvs"}
         for frame in container.decode(stream):
-            side = frame.side_data.get("MOTION_VECTORS") if hasattr(frame.side_data, "get") else None
+            side = frame.side_data.get("MOTION_VECTORS")
             if side is None:
                 continue
             mvs = side.to_ndarray()
             if len(mvs) == 0:
                 feats.append(0.0)
                 continue
-            dx = (mvs["dst_x"] - mvs["src_x"]).astype(np.float32)
-            dx = np.where(mvs["source"] < 0, dx, -dx)
-            area = (mvs["w"] * mvs["h"]).astype(np.float32)
-            feats.append(float((dx * area).sum() / area.sum()))
+            scale = np.maximum(mvs["motion_scale"].astype(np.float64), 1.0)
+            forward = mvs["motion_x"].astype(np.float64) / scale
+            forward = np.where(mvs["source"] < 0, -forward, forward)
+            # w/h are uint8: widen before multiplying (16 * 16 overflows).
+            area = mvs["w"].astype(np.float64) * mvs["h"].astype(np.float64)
+            feats.append(float((forward * area).sum() / area.sum()))
     return np.asarray(feats, np.float32) if feats else None
