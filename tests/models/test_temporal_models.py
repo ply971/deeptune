@@ -346,3 +346,166 @@ def test_siglip_preprocessing_is_the_models_own():
     assert torch.allclose(out[0], torch.tensor(-1.0)) and torch.allclose(out[1], torch.tensor(1.0))
     assert native_video_transform('siglip').size == 384
     assert native_video_transform('resnet18') is None
+
+
+# --- every 2D family ---------------------------------------------------------------------------------------------------
+FAMILIES = ['resnet', 'densenet', 'swin', 'efficientnet', 'vgg', 'vit', 'convnext']
+
+
+def _family_cls(family, peft=False):
+    from utils import MODEL_CLS_MAP, PEFT_MODEL_CLS_MAP
+    return (PEFT_MODEL_CLS_MAP if peft else MODEL_CLS_MAP)[family]
+
+
+@pytest.mark.parametrize('family', FAMILIES)
+@pytest.mark.parametrize('added_layers', [1, 2])
+def test_embedding_pooling_works_on_every_family(family, added_layers):
+    """G5 uses the backbone's extract_embed output and then its head, so these must agree in every family."""
+    torch.manual_seed(0)
+    model = VideoFramePoolClassifier(_family_cls(family), 'dummy', 3, added_layers, 4, False, pooling='attention').eval()
+    x = torch.randn(1, 2, 3, 224, 224)
+    with torch.no_grad():
+        assert model(x).shape == (1, 3)
+        assert model(x, extract_embed=True).shape == (1, model.embedding_dim)
+        frame = x[:, 0]
+        assert torch.allclose(model.backbone(frame), model._classify(model.backbone(frame, extract_embed=True)), atol=1e-4)
+
+
+@pytest.mark.parametrize('peft', [False, True])
+def test_densenet_with_one_added_layer_embeds_its_features_not_its_logits(peft):
+    model = _family_cls('densenet', peft)(3, 'dummy', 1, 4, False).eval()
+    with torch.no_grad():
+        assert model(torch.randn(1, 3, 64, 64), extract_embed=True).shape == (1, model.fc1.in_features)
+
+
+@pytest.mark.parametrize('family', FAMILIES)
+@pytest.mark.parametrize('arch,options', [('late_fusion', {}), ('cnn_rnn', {'rnn_hidden': 8})])
+def test_frame_based_architectures_work_on_every_family(family, arch, options):
+    from src.video.temporal import build_temporal_model
+    torch.manual_seed(0)
+    model = build_temporal_model(arch, options, _family_cls(family), 'dummy', 3, 2, 4, False, 'cls').eval()
+    with torch.no_grad():
+        assert model(torch.randn(1, 2, 3, 224, 224)).shape == (1, 3)
+
+
+# --- what each model reads ---------------------------------------------------------------------------------------------
+def test_late_fusion_reads_only_the_first_and_last_frames():
+    model = _build('late_fusion').eval()
+    x = _clip('late_fusion')
+    middle, last = x.clone(), x.clone()
+    middle[:, 1:3] = 0
+    last[:, -1] = 0
+    assert torch.equal(model(x), model(middle))
+    assert not torch.allclose(model(x), model(last), atol=1e-4)
+
+
+@pytest.mark.parametrize('fusion', ['avg', 'fc'])
+def test_two_stream_output_depends_on_both_streams(fusion):
+    model = _build(f'two_stream:num_frames=4,fusion={fusion}').eval()
+    x = _clip('two_stream')
+    no_rgb, no_motion = x.clone(), x.clone()
+    no_rgb[:, :, :3] = 0
+    no_motion[:, :, 3:] = 0
+    assert not torch.allclose(model(x), model(no_rgb), atol=1e-4)
+    assert not torch.allclose(model(x), model(no_motion), atol=1e-4)
+
+
+def test_two_stream_reads_the_middle_rgb_frame_and_the_motion_around_it():
+    model = _build('two_stream:num_frames=4,motion_length=2').eval()
+    x = _clip('two_stream')
+    base = model(x, extract_embed='separate')
+
+    def changed(frames, channels):
+        other = x.clone()
+        other[:, frames, channels] = 0
+        return model(other, extract_embed='separate')
+    assert torch.equal(changed([0, 1, 3], slice(0, 3))['rgb'], base['rgb'])  # T // 2 = 2 is the RGB frame
+    assert not torch.allclose(changed([2], slice(0, 3))['rgb'], base['rgb'], atol=1e-4)
+    assert torch.equal(changed([0, 3], slice(3, 5))['motion'], base['motion'])  # L = 2 around the middle: frames 1, 2
+    for frame in (1, 2):
+        assert not torch.allclose(changed([frame], slice(3, 5))['motion'], base['motion'], atol=1e-4)
+
+
+def test_settings_that_cannot_work_are_refused_when_the_model_is_built():
+    with pytest.raises(ValueError, match='motion_length'):
+        _build('two_stream:num_frames=4,motion_length=5')
+    with pytest.raises(ValueError, match='tsm_fold_div'):
+        _build('tsm:tsm_fold_div=1')
+    with pytest.raises(ValueError, match='tt_dim'):
+        _build('temporal_transformer:num_frames=4,tt_dim=15,tt_heads=2')
+
+
+# --- trainable-parameter budget ----------------------------------------------------------------------------------------
+@pytest.mark.parametrize('spec', ARCHES)
+def test_budget_without_peft_counts_the_new_layers_as_head(spec):
+    from trainers.param_budget import build_with_budget, summarize_parameters
+    head = summarize_parameters(_build(spec))['breakdown']['head']['total']
+    budget = head + 2000
+    model, _ = build_with_budget(lambda rank: _build(spec), budget, False, 8, log=lambda _: None)
+    summary = summarize_parameters(model)
+    assert head < summary['trainable'] <= budget  # the head, and part of the backbone from the output side
+    assert summary['breakdown']['head']['trainable'] == head
+    assert model.eval()(_clip(spec)).shape == (2, 3)
+
+
+@pytest.mark.parametrize('spec', ARCHES)
+def test_budget_with_peft_picks_a_rank_that_fits(spec):
+    from trainers.param_budget import build_with_budget, summarize_parameters
+    budget = summarize_parameters(_build(spec, version='dummy', peft=True, embed=1))['trainable'] + 50_000
+    model, rank = build_with_budget(lambda r: _build(spec, version='dummy', peft=True, embed=r), budget, True, 8, log=lambda _: None)
+    assert rank >= 1 and summarize_parameters(model)['trainable'] <= budget
+    assert summarize_parameters(_build(spec, version='dummy', peft=True, embed=rank + 1))['trainable'] > budget
+    assert model.eval()(_clip(spec)).shape == (2, 3)
+
+
+# --- the standalone train, eval and embed commands -----------------------------------------------------------------------
+@pytest.mark.parametrize('run_type,extra', [('TRAIN', []), ('EVAL', []), ('EMBED', ['--use_case', 'finetuned'])])
+def test_standalone_commands_accept_the_architecture_flags(run_type, extra, tmp_path):
+    from cli import DeepTuneVisionOptions
+    from utils import RunType
+    common = ['--out', str(tmp_path), '--model_version', 'resnet_tiny', '--num_frames', '6', *extra]
+    from_flag = DeepTuneVisionOptions(RunType[run_type], args=[*common, '--video_arch', 'tsm', '--tsm_fold_div', '4'])
+    assert parse_pooling_spec(from_flag.pooling) == ('tsm', {'tsm_fold_div': 4})
+    recorded = DeepTuneVisionOptions(RunType[run_type], args=[*common, '--pooling', 'early_fusion:num_frames=6'])
+    assert parse_pooling_spec(recorded.pooling) == ('early_fusion', {'num_frames': 6})
+    assert DeepTuneVisionOptions(RunType[run_type], args=common).pooling == 'mean'
+
+
+# --- SigLIP: the path real weights take ----------------------------------------------------------------------------------
+@pytest.fixture()
+def tiny_siglip_weights(monkeypatch):
+    """`--model_version siglip` loads a SiglipModel and uses its vision tower. Same classes, no download."""
+    from transformers import SiglipConfig, SiglipModel
+    import src.vision.siglip as siglip
+    config = SiglipConfig(vision_config=dict(hidden_size=32, intermediate_size=64, num_hidden_layers=1, num_attention_heads=2,
+                                             image_size=32, patch_size=8),
+                          text_config=dict(hidden_size=32, intermediate_size=64, num_hidden_layers=1, num_attention_heads=2,
+                                           vocab_size=16, projection_size=32))
+    monkeypatch.setattr(siglip, 'load_siglip_model_offline', lambda tiny=False: SiglipModel(config))
+
+
+@pytest.mark.parametrize('peft', [False, True])
+@pytest.mark.parametrize('spec', ['mean', 'late_fusion', 'cnn_rnn'])
+def test_the_real_siglip_path_builds_and_runs(tiny_siglip_weights, peft, spec):
+    from trainers.param_budget import summarize_parameters
+    model = _build(spec, version='siglip', peft=peft, embed=2).eval()
+    x = torch.randn(1, 4, 3, 32, 32)
+    assert model(x).shape == (1, 3)
+    assert model(x, extract_embed=True).ndim == 2
+    summary = summarize_parameters(model)['breakdown']
+    assert summary['backbone']['total'] > 0
+    if peft:
+        assert summary['lora']['trainable'] > 0 and summary['backbone']['trainable'] == 0
+
+
+def test_siglip_preprocessing_matches_a_pil_bicubic_resize_when_shrinking():
+    """A resize without antialiasing would keep this fine pattern's contrast; PIL, which SigLIP's processor uses, removes it."""
+    from PIL import Image
+    from datasets.video_datasets import native_video_transform
+    pattern = torch.zeros(1, 3, 256, 256, dtype=torch.uint8)
+    pattern[:, :, ::2] = 255
+    pattern[:, :, :, 100:150] = 128
+    out = native_video_transform('siglip_tiny')(pattern)[0]
+    image = Image.fromarray(pattern[0].permute(1, 2, 0).numpy()).resize((32, 32), Image.BICUBIC)
+    expected = (torch.from_numpy(__import__('numpy').array(image)).permute(2, 0, 1).float() / 255 - 0.5) / 0.5
+    assert (out - expected).abs().max() < 0.05

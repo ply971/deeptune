@@ -22,7 +22,8 @@ def _load_vision_tower(version: str) -> nn.Module:
 
 
 class SiglipClipTransform:
-    """SigLIP's preprocessing for a uint8 clip ``[T, C, H, W]``: bicubic resize, then mean and std 0.5."""
+    """SigLIP's preprocessing for a uint8 clip ``[T, C, H, W]``: bicubic resize, antialiased when shrinking as the
+    image processor's PIL resize is, then mean and std 0.5."""
 
     def __init__(self, version: str):
         if version not in SIGLIP_INPUT_SIZE:
@@ -30,7 +31,7 @@ class SiglipClipTransform:
         self.size = SIGLIP_INPUT_SIZE[version]
 
     def __call__(self, clip: torch.Tensor) -> torch.Tensor:
-        frames = F.interpolate(clip.float() / 255.0, size=(self.size, self.size), mode='bicubic', align_corners=False)
+        frames = F.interpolate(clip.float() / 255.0, size=(self.size, self.size), mode='bicubic', align_corners=False, antialias=True)
         return (frames.clamp(0.0, 1.0) - 0.5) / 0.5
 
 
