@@ -13,9 +13,11 @@ for quick CPU smoke runs only.
 
 Every neural model is built with utils.build_video_model, fed through the
 existing manifest loader + ParquetVideoDataset, and trained with the shared
-vision Trainer. There is no early stopping or model selection, so the
-validation loader (the val split if the dataset has one, else test) is only
-logged. Horizontal flip augmentation (--hflip) is refused on direction tasks.
+vision Trainer. Every generated benchmark has its own seeded val split
+(disjoint scenes): the Trainer validates on it and fits its per-prediction
+error model (error_model.json) on it; the test split is touched only by the
+final evaluation. Horizontal flip augmentation (--hflip) is refused on
+direction tasks.
 
 Example (GPU, the course-slide size):
   python scripts/run_motion_benchmark.py --task direction --models single_frame:resnet18 mean:resnet18 \
@@ -47,7 +49,8 @@ def parse_args(argv=None):
     p.add_argument("--out", type=Path, default=Path(".artifacts/motion-benchmark"))
     p.add_argument("--n_train", type=int, default=700)
     p.add_argument("--n_test", type=int, default=400)
-    p.add_argument("--n_val", type=int, default=200, help="scene_bias: biased held-out split.")
+    p.add_argument("--n_val", type=int, default=200,
+                   help="Validation split used by the Trainer (scene_bias: the biased held-out split).")
     p.add_argument("--size", type=int, default=64, help="Generated frame size.")
     p.add_argument("--num_frames", type=int, default=None, help="Generated clip length (default 12; periodic 16).")
     p.add_argument("--seed", type=int, default=0, help="Data and model seed.")
@@ -74,15 +77,22 @@ def generate_or_load(args):
         if meta["task"] != args.task:
             raise SystemExit(f"{root} holds a {meta['task']!r} benchmark, not {args.task!r}.")
         splits = {s: root / f"{s}.csv" for s in ("train", "val", "test") if (root / f"{s}.csv").is_file()}
+        if "val" not in splits:
+            raise SystemExit(f"{root} has no val split. Regenerate it with --n_val > 0: the Trainer must not "
+                             "validate (or fit its error model) on the test split.")
         return BenchmarkDataset(meta["task"], root, root / "manifest.csv", root / "dataset.json", root / "masks.npz",
                                 splits, meta["codec"], meta["classes"])
-    root = args.out / "data" / f"{args.task}_s{args.size}_n{args.n_train}-{args.n_test}_seed{args.seed}"
-    common = dict(n_train=args.n_train, n_test=args.n_test, size=args.size, seed=args.seed, codec=args.codec)
+    if args.n_val < 1:
+        raise SystemExit("--n_val must be at least 1: the Trainer validates on the val split, never on test.")
+    root = (args.out / "data"
+            / f"{args.task}_s{args.size}_n{args.n_train}-{args.n_val}-{args.n_test}_seed{args.seed}")
+    common = dict(n_train=args.n_train, n_val=args.n_val, n_test=args.n_test, size=args.size, seed=args.seed,
+                  codec=args.codec)
     if args.task == "direction":
         return make_direction_dataset(root, num_frames=args.num_frames or 12, **common)
     if args.task == "periodic":
         return make_periodic_dataset(root, num_frames=args.num_frames or 16, **common)
-    return make_scene_bias_dataset(root, n_val=args.n_val, num_frames=args.num_frames or 12, **common)
+    return make_scene_bias_dataset(root, num_frames=args.num_frames or 12, **common)
 
 
 def parse_spec(spec: str):
@@ -211,7 +221,7 @@ def run_model(ds, kind, version, args, run_dir):
     torch.manual_seed(args.seed)
     model = build_model(kind, version, len(meta["classes"]), args)
     loaders = make_loaders(ds, kind, version, num_frames, args)
-    val_loader = loaders.get("val", loaders["test"])
+    val_loader = loaders["val"]  # never test: the Trainer logs on it and fits error_model.json on it
     run_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
     Trainer(model, loaders["train"], val_loader, learning_rate=args.lr, mode="cls", num_epochs=args.epochs,

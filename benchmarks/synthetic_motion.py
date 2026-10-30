@@ -227,7 +227,7 @@ def _split_plan(n_train: int, n_test: int, n_val: int = 0):
             yield split, index
 
 
-def make_direction_dataset(out: Path, n_train: int = 700, n_test: int = 400, num_frames: int = 12,
+def make_direction_dataset(out: Path, n_train: int = 700, n_test: int = 400, n_val: int = 0, num_frames: int = 12,
                            size: int = 64, seed: int = 0, speed_range=(1.0, 2.0), fps: float = 10,
                            clips_per_scene: int = 2, codec: str = "auto") -> BenchmarkDataset:
     """The slide's direction task: classes differ only in the sign of vx.
@@ -240,11 +240,11 @@ def make_direction_dataset(out: Path, n_train: int = 700, n_test: int = 400, num
     """
     _check_common(num_frames, size)
     classes = ["left", "right"]
-    params = dict(n_train=n_train, n_test=n_test, num_frames=num_frames, size=size,
+    params = dict(n_train=n_train, n_val=n_val, n_test=n_test, num_frames=num_frames, size=size,
                   speed_range_px_per_frame=list(_scaled(speed_range, size)), clips_per_scene=clips_per_scene)
     writer = _Writer(out, "direction", seed, params, codec, fps, size, classes, hflip_safe=False, vflip_safe=True)
     lo, hi = _scaled(speed_range, size)
-    for split, index in _split_plan(n_train, n_test):
+    for split, index in _split_plan(n_train, n_test, n_val):
         scene = index // clips_per_scene
         scene_rng = _rng(seed, "direction", _SPLIT_CODES[split], 1, scene)
         family = TEXTURE_FAMILIES[int(scene_rng.integers(len(TEXTURE_FAMILIES)))]
@@ -267,16 +267,16 @@ def make_direction_dataset(out: Path, n_train: int = 700, n_test: int = 400, num
     return writer.finish(classes)
 
 
-def make_speed_dataset(out: Path, n_train: int = 700, n_test: int = 400, num_frames: int = 12,
+def make_speed_dataset(out: Path, n_train: int = 700, n_test: int = 400, n_val: int = 0, num_frames: int = 12,
                        size: int = 64, seed: int = 0, speed_range=(0.5, 3.0), fps: float = 10,
                        clips_per_scene: int = 2, codec: str = "auto") -> BenchmarkDataset:
     """Speed regression (``mode=reg``): label = |vx| in px/frame, random sign."""
     _check_common(num_frames, size)
     lo, hi = _scaled(speed_range, size)
-    params = dict(n_train=n_train, n_test=n_test, num_frames=num_frames, size=size,
+    params = dict(n_train=n_train, n_val=n_val, n_test=n_test, num_frames=num_frames, size=size,
                   speed_range_px_per_frame=[lo, hi], clips_per_scene=clips_per_scene)
     writer = _Writer(out, "speed", seed, params, codec, fps, size, None, hflip_safe=True, vflip_safe=True)
-    for split, index in _split_plan(n_train, n_test):
+    for split, index in _split_plan(n_train, n_test, n_val):
         scene = index // clips_per_scene
         scene_rng = _rng(seed, "speed", _SPLIT_CODES[split], 1, scene)
         family = TEXTURE_FAMILIES[int(scene_rng.integers(len(TEXTURE_FAMILIES)))]
@@ -296,7 +296,7 @@ def make_speed_dataset(out: Path, n_train: int = 700, n_test: int = 400, num_fra
     return writer.finish([])
 
 
-def make_periodic_dataset(out: Path, n_train: int = 700, n_test: int = 400, num_frames: int = 16,
+def make_periodic_dataset(out: Path, n_train: int = 700, n_test: int = 400, n_val: int = 0, num_frames: int = 16,
                           size: int = 64, seed: int = 0, speed_range=(1.0, 2.0), cycles_range=(1.0, 2.0),
                           fps: float = 10, clips_per_scene: int = 2, codec: str = "auto") -> BenchmarkDataset:
     """``oscillate`` (horizontal sinusoid) vs ``drift`` (constant velocity).
@@ -308,10 +308,10 @@ def make_periodic_dataset(out: Path, n_train: int = 700, n_test: int = 400, num_
     _check_common(num_frames, size)
     classes = ["drift", "oscillate"]
     lo, hi = _scaled(speed_range, size)
-    params = dict(n_train=n_train, n_test=n_test, num_frames=num_frames, size=size,
+    params = dict(n_train=n_train, n_val=n_val, n_test=n_test, num_frames=num_frames, size=size,
                   speed_range_px_per_frame=[lo, hi], cycles_range=list(cycles_range), clips_per_scene=clips_per_scene)
     writer = _Writer(out, "periodic", seed, params, codec, fps, size, classes, hflip_safe=True, vflip_safe=True)
-    for split, index in _split_plan(n_train, n_test):
+    for split, index in _split_plan(n_train, n_test, n_val):
         scene = index // clips_per_scene
         scene_rng = _rng(seed, "periodic", _SPLIT_CODES[split], 1, scene)
         family = TEXTURE_FAMILIES[int(scene_rng.integers(len(TEXTURE_FAMILIES)))]
@@ -574,7 +574,7 @@ def _parse(argv=None):
     p.add_argument("--num_frames", type=int, default=None, help="Frames per clip (default 12; periodic 16).")
     p.add_argument("--n_train", type=int, default=700)
     p.add_argument("--n_test", type=int, default=400)
-    p.add_argument("--n_val", type=int, default=200, help="scene_bias only: biased held-out split.")
+    p.add_argument("--n_val", type=int, default=200, help="Validation split (trimmed tasks; for scene_bias it is the biased held-out split).")
     p.add_argument("--bias", type=float, default=0.9, help="scene_bias only: P(family matches class) in train/val.")
     p.add_argument("--n_classes", type=int, default=None, help="untrimmed (default 3) / scene_bias (default 2).")
     p.add_argument("--n_videos", type=int, default=40, help="untrimmed only.")
@@ -594,14 +594,14 @@ def generate(args) -> BenchmarkDataset:
                                       n_classes=args.n_classes or 3, size=args.size or 48,
                                       max_instances=args.max_instances, background_motion=args.background_motion,
                                       **common)
-    sized = dict(n_train=args.n_train, n_test=args.n_test, size=args.size or 64, **common)
+    sized = dict(n_train=args.n_train, n_test=args.n_test, n_val=args.n_val, size=args.size or 64, **common)
     if args.task == "direction":
         return make_direction_dataset(args.out, num_frames=args.num_frames or 12, **sized)
     if args.task == "speed":
         return make_speed_dataset(args.out, num_frames=args.num_frames or 12, **sized)
     if args.task == "periodic":
         return make_periodic_dataset(args.out, num_frames=args.num_frames or 16, **sized)
-    return make_scene_bias_dataset(args.out, n_val=args.n_val, num_frames=args.num_frames or 12,
+    return make_scene_bias_dataset(args.out, num_frames=args.num_frames or 12,
                                    n_classes=args.n_classes or 2, bias=args.bias, **sized)
 
 

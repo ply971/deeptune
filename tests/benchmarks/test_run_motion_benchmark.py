@@ -13,7 +13,7 @@ _SPEC = importlib.util.spec_from_file_location(
 bench = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(bench)
 
-TINY = ["--n_train", "4", "--n_test", "4", "--n_val", "4", "--size", "32", "--num_frames", "4", "--epochs", "1",
+TINY = ["--n_train", "4", "--n_test", "4", "--n_val", "3", "--size", "32", "--num_frames", "4", "--epochs", "1",
         "--batch_size", "2", "--resize", "32", "--embed_size", "8", "--codec", "mp4v", "--threads", "2"]
 
 
@@ -31,6 +31,19 @@ def test_direction_table_has_every_model(tmp_path):
     assert (out / "results.md").read_text().startswith("| model |")
     # Each neural model trained through the shared Trainer (its log is written).
     assert (out / "single_frame_dummy" / "training_log.csv").is_file()
+    # The Trainer validated (and fitted its error model) on the 3-clip val split, never on the 4-clip test split.
+    assert report["config"]["params"]["n_val"] == 3
+    fit = json.loads((out / "single_frame_dummy" / "error_model_fit.json").read_text())
+    assert fit["split"] == "validation" and fit["val_dataset_size"] == 3
+
+
+def test_runner_refuses_data_without_a_val_split(tmp_path):
+    from benchmarks.synthetic_motion import make_direction_dataset
+    ds = make_direction_dataset(tmp_path / "old", n_train=4, n_test=4, num_frames=4, size=32, codec="mp4v")
+    with pytest.raises(SystemExit, match="no val split"):
+        bench.main(["--task", "direction", "--data", str(ds.root), "--out", str(tmp_path), "--models", "flow_logreg"])
+    with pytest.raises(SystemExit, match="n_val"):
+        bench.main(["--task", "direction", "--out", str(tmp_path), "--models", "flow_logreg", *TINY, "--n_val", "0"])
 
 
 def test_scene_bias_reports_biased_and_unbiased_splits(tmp_path):

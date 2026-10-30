@@ -37,8 +37,9 @@ def untrimmed(tmp_path_factory):
 
 @pytest.mark.parametrize("maker,kwargs", [
     (make_direction_dataset, dict(num_frames=8)),
-    (make_speed_dataset, dict(num_frames=8)),
-    (make_periodic_dataset, dict(num_frames=12)),
+    (make_direction_dataset, dict(num_frames=8, n_val=4)),
+    (make_speed_dataset, dict(num_frames=8, n_val=4)),
+    (make_periodic_dataset, dict(num_frames=12, n_val=4)),
     (make_scene_bias_dataset, dict(num_frames=8, n_val=4)),
 ])
 def test_trimmed_layout_and_manifest_load_through_existing_loader(tmp_path, maker, kwargs):
@@ -88,10 +89,10 @@ def test_manifest_feeds_parquet_video_dataset(tmp_path):
 
 
 def test_groups_never_cross_splits_and_classes_are_balanced(tmp_path):
-    ds = make_direction_dataset(tmp_path / "d", n_train=12, n_test=8, num_frames=6, size=32, seed=0, codec=CODEC)
+    ds = make_direction_dataset(tmp_path / "d", n_train=12, n_val=6, n_test=8, num_frames=6, size=32, seed=0, codec=CODEC)
     m = pd.read_csv(ds.manifest)
     assert m.groupby("group")["split"].nunique().max() == 1
-    assert m.groupby("split")["label_idx"].mean().tolist() == [0.5, 0.5]
+    assert m.groupby("split")["label_idx"].mean().tolist() == [0.5, 0.5, 0.5]
     # Each scene (shared background) hosts one clip of each class.
     assert (m.groupby("group")["label_idx"].nunique() == 2).all()
 
@@ -262,7 +263,8 @@ def test_cli_generates_each_task(tmp_path, capsys):
         synthetic_main(["--task", task, "--out", str(tmp_path / task), "--n_train", "2", "--n_test", "2",
                         "--n_val", "2", "--size", "32", "--num_frames", "4", "--codec", CODEC])
         report = json.loads(capsys.readouterr().out)
-        assert report["task"] == task and report["codec"] == CODEC and report["clips"] == (6 if task == "scene_bias" else 4)
+        assert report["task"] == task and report["codec"] == CODEC and report["clips"] == 6  # 2 train + 2 val + 2 test
+        assert report["splits"] == {"train": 2, "val": 2, "test": 2}
     synthetic_main(["--task", "untrimmed", "--out", str(tmp_path / "u"), "--n_videos", "2", "--min_length", "60",
                     "--max_length", "70", "--size", "32", "--codec", CODEC])
     report = json.loads(capsys.readouterr().out)
