@@ -1,11 +1,13 @@
 """Benchmark the video data layer (Phase 1): decode backends, old vs new
-dataset, codec motion vectors vs Farneback, DataLoader worker start-up.
+dataset, codec motion vectors vs Farneback, DataLoader worker start-up, and an
+epoch from pixels vs the frame cache vs cached features (token grids included).
 
 Runs on CPU by default (no GPU work at all). Example (from the repo root):
 
     python scripts/bench_video_io.py --clips 200
     python scripts/bench_video_io.py --clips 20 --workers 0 1 2 --json .artifacts/bench/io.json
     python scripts/bench_video_io.py --real "C:/data/ucf/*.avi" --nvdec
+    python scripts/bench_video_io.py --clips 200 --feature_clips 100 --feature_model r3d_18 --feature_pretrained --feature_gpu
 
 Generated clips are H.264 (x264 defaults, with B-frames) and MPEG-4 Part 2,
 ``--frames`` long at ``--size``x``--size``; ``--real`` adds files from a glob
@@ -177,6 +179,102 @@ def bench_workers(dataset, workers, rows):
         del iterator, loader
 
 
+def _train_head_epoch(head, batches, device):
+    """One optimiser pass over `batches` of (features, labels), like a frozen-backbone training epoch."""
+    import torch
+    head.to(device).train()
+    optimizer = torch.optim.Adam(head.parameters(), lr=1e-3)
+    for features, labels in batches:
+        optimizer.zero_grad()
+        torch.nn.functional.cross_entropy(head(features.to(device)), labels.to(device)).backward()
+        optimizer.step()
+
+
+def _folder_bytes(folder: Path) -> int:
+    return sum(path.stat().st_size for path in folder.rglob('*.npy'))
+
+
+def bench_feature_cache(paths, num_frames, rows, work: Path, model='resnet18', pretrained=False, input_size=None,
+                        grids=('none', '8', '8x4x4', '99x99x99'), batch_size=4, snippets_per_video=4):
+    """Epoch from pixels vs from the frame cache vs from cached features, and what token grids cost.
+
+    Every path trains the same kind of head on a frozen `model` with the same batch size. '99x99x99'
+    is capped at the backbone's own grid, i.e. the unpooled tokens. These are timing numbers only:
+    `pretrained=False` features are random projections, and pooling's accuracy cost is not measured here.
+    """
+    import torch
+    from torch.utils.data import DataLoader
+    from torchvision import transforms
+    import helpers  # noqa: F401  (imported here so its slow first import is not charged to the first grid below)
+    from datasets.feature_dataset import CachedFeatureDataset
+    from datasets.snippet_features import FeatureStore
+    from datasets.video_datasets import VideoDataOptions, VideoDataset, collate_video_samples
+    from extract_features import extract_features
+    from options import DEVICE
+    from src.video.feature_backbones import SnippetBackbone
+    from src.video.feature_heads import build_feature_head
+
+    frame = pd.DataFrame({'videos': [str(p) for p in paths], 'labels': [i % 2 for i in range(len(paths))]})
+    backbone = SnippetBackbone(model, pretrained=pretrained).to(DEVICE)
+    size = input_size or backbone.default_input_size
+    transform = transforms.Compose([transforms.Resize((size, size)), transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    weights = 'pretrained' if pretrained else 'random weights'
+    setup = f'{len(paths)} clips, {model} ({weights}), {size}px, batch {batch_size}, device {DEVICE.type}'
+
+    def pixel_epoch(options):
+        dataset = VideoDataset(frame, transform, num_frames, options=options)
+        loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_video_samples)
+
+        def embedded():
+            for clips, labels in loader:
+                with torch.no_grad():
+                    features = backbone(clips.to(DEVICE))
+                yield features, labels
+
+        with torch.no_grad():
+            dim = backbone(torch.zeros(1, num_frames, 3, size, size, device=DEVICE)).shape[-1]
+        head = build_feature_head('linear_probe', dim, 2)
+        start = time.perf_counter()
+        _train_head_epoch(head, embedded(), DEVICE)
+        return time.perf_counter() - start
+
+    seconds = pixel_epoch(VideoDataOptions())
+    rows.append(('epoch, frozen backbone + head', 'from pixels (decode every epoch)', f'{seconds:.2f} s', setup))
+    pixel_seconds = seconds
+    cache_options = VideoDataOptions(frame_cache=str(work / 'frames'), frame_cache_size=max(size, 256))
+    first = pixel_epoch(cache_options)
+    cached = pixel_epoch(cache_options)
+    rows.append(('epoch, frozen backbone + head', '--frame_cache, 2nd epoch', f'{cached:.2f} s',
+                 f'1st epoch (fills it) {first:.2f} s; {_folder_bytes(work / "frames") / 1e6 / len(paths):.2f} MB/clip; {setup}'))
+    del backbone, cache_options
+    for grid in grids:
+        out = work / f'features_{grid}'
+        report = extract_features(frame, out, model_version=model, feature_weights='pretrained' if pretrained else 'none',
+                                  snippet_frames=num_frames, cache_tokens=grid, batch_size=batch_size,
+                                  feature_input_size=input_size)
+        if report.failed:
+            rows.append((f'snippet features, tokens={grid}', 'extract', 'failed', report.failed[0]['error'][:80]))
+            continue
+        store = FeatureStore(out)
+        stored = store.info()['streams']['rgb']
+        head_name = 'linear_probe' if grid == 'none' else 'attentive_probe'
+        data = CachedFeatureDataset(frame, out, num_snippets=snippets_per_video, train=True)
+        head = build_feature_head(head_name, data.feature_dim(), 2)
+        loader = DataLoader(data, batch_size=batch_size, shuffle=True)
+        start = time.perf_counter()
+        _train_head_epoch(head, loader, DEVICE)
+        seconds = time.perf_counter() - start
+        size_mb = _folder_bytes(out) / 1e6 / len(paths)
+        shape = 'vector' if stored['token_grid'] is None else 'x'.join(str(n) for n in stored['token_grid'])
+        rows.append((f'snippet features, tokens={grid}', f'stored grid {shape} x {stored["dim"]}',
+                     f'{size_mb:.3f} MB/video', f'extract once {report.seconds / len(paths) * 1000:.0f} ms/video'))
+        rows.append(('epoch, frozen backbone + head', f'from cached features, tokens={grid} ({head_name})', f'{seconds:.3f} s',
+                     f'{pixel_seconds / max(seconds, 1e-9):.0f}x faster than pixels; {snippets_per_video} snippets/video; '
+                     f'{setup}. Timing only, not accuracy.'))
+        del head, data, loader
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--clips', type=int, default=200)
@@ -189,8 +287,14 @@ def main(argv=None):
     parser.add_argument('--workers', type=int, nargs='*', default=[0, 1, 2])
     parser.add_argument('--nvdec', action='store_true', help='Also try PyAV NVDEC decoding (needs CUDA).')
     parser.add_argument('--json', type=Path)
+    parser.add_argument('--feature_clips', type=int, default=20,
+                        help='Clips for the pixels vs frame cache vs cached features epochs (default 20; 0 skips them).')
+    parser.add_argument('--feature_model', default='resnet18', help='Frozen backbone of that comparison (default resnet18).')
+    parser.add_argument('--feature_pretrained', action='store_true', help='Use pretrained weights there (default: random, timing only).')
+    parser.add_argument('--feature_input_size', type=int, default=None, help="Input size there (default: the backbone's own).")
+    parser.add_argument('--feature_gpu', action='store_true', help='Allow the GPU for that comparison (default: CPU only).')
     args = parser.parse_args(argv)
-    if not args.nvdec:
+    if not (args.nvdec or args.feature_gpu):
         os.environ.setdefault('CUDA_VISIBLE_DEVICES', '-1')
 
     import av
@@ -217,7 +321,9 @@ def main(argv=None):
         bench_motion(h264[:max(1, len(h264) // 2)], mpeg4, args.num_frames, rows)
         if args.workers:
             bench_workers(dataset, args.workers, rows)
-        rows.append(('epoch from cached snippet features', 'n/a', 'n/a until B1', 'feature cache is Phase 1 task 8'))
+        if args.feature_clips:
+            bench_feature_cache(h264[:args.feature_clips], args.num_frames, rows, Path(folder), model=args.feature_model,
+                                pretrained=args.feature_pretrained, input_size=args.feature_input_size)
     print('\n' + ' | '.join(f'{k}={v}' for k, v in env.items()))
     print('\n| Measurement | Variant | Result | Notes |\n|---|---|---|---|')
     for row in rows:
