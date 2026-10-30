@@ -486,3 +486,64 @@ def test_cache_modules_do_not_import_torch():
     code = ("import sys, datasets.frame_cache, datasets.snippet_features, handlers.video_args;"
             "sys.exit('torch' in sys.modules)")
     assert subprocess.run([sys.executable, '-c', code], cwd=REPO).returncode == 0
+
+
+# -- Windows file locks (V-044) -------------------------------------------------------
+_LOCKED = PermissionError(13, 'Permission denied')
+
+
+def test_a_locked_entry_is_a_miss_and_is_not_deleted(tmp_path):
+    cache = FrameCache(tmp_path / 'cache', size=0)
+    frames = np.full((4, 8, 8, 3), 7, np.uint8)
+    key = 'ab' + '0' * 38
+    cache.put_frames(key, frames)
+    with mock.patch('datasets.frame_cache.valid_npy_memmap', side_effect=_LOCKED):
+        assert cache.get_frames(key, 4) is None
+    assert cache.path(key).is_file()
+    assert np.array_equal(cache.get_frames(key, 4), frames)
+
+
+def test_a_damaged_entry_is_still_dropped(tmp_path):
+    cache = FrameCache(tmp_path / 'cache', size=0)
+    key = 'ab' + '0' * 38
+    cache.put_frames(key, np.full((4, 8, 8, 3), 7, np.uint8))
+    cache.path(key).write_bytes(cache.path(key).read_bytes()[:40])
+    assert cache.get_frames(key, 4) is None
+    assert not cache.path(key).exists()
+
+
+def _locked_twice_then_real():
+    real = os.replace
+    outcomes = [_LOCKED, _LOCKED]
+
+    def replace(source, target):
+        if outcomes:
+            raise outcomes.pop()
+        real(source, target)
+    return replace
+
+
+def test_atomic_write_waits_for_a_lock_to_clear(tmp_path):
+    path = tmp_path / 'x.npy'
+    with mock.patch('datasets.frame_cache.os.replace', side_effect=_locked_twice_then_real()):
+        atomic_save_npy(path, np.arange(3))
+    assert np.load(path).tolist() == [0, 1, 2]
+    assert not list(tmp_path.glob('*.part'))
+
+
+def test_atomic_write_gives_up_on_a_lasting_lock_and_keeps_the_old_file(tmp_path):
+    path = tmp_path / 'x.npy'
+    atomic_save_npy(path, np.arange(3))
+    with mock.patch('datasets.frame_cache.os.replace', side_effect=_LOCKED) as replace, pytest.raises(PermissionError):
+        atomic_save_npy(path, np.arange(9))
+    assert replace.call_count > 1
+    assert np.load(path).tolist() == [0, 1, 2]
+    assert not list(tmp_path.glob('*.part'))
+
+
+def test_the_clip_store_waits_for_a_lock_to_clear(tmp_path):
+    from datasets.video_datasets import ArrowBytesStore
+    with mock.patch('datasets.video_datasets.os.replace', side_effect=_locked_twice_then_real()):
+        store = ArrowBytesStore.from_batches([[b'clip']], tmp_path / 'clips.arrow')
+    assert store[0] == b'clip'
+

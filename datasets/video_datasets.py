@@ -43,7 +43,7 @@ from pandas import DataFrame
 from PIL import Image
 from torch.utils.data import Dataset
 
-from datasets.frame_cache import (DEFAULT_FRAME_CACHE_SIZE, FrameCache, clip_sampling_is_cacheable, frame_cache_key,
+from datasets.frame_cache import (DEFAULT_FRAME_CACHE_SIZE, FrameCache, clip_sampling_is_cacheable, frame_cache_key, retry_while_locked,
                                   motion_curve_key, resize_short_side)
 from datasets.video_augment import ClipAugment, ClipAugmentConfig
 from datasets.video_io import (BACKEND_CHOICES, CURVE_METHODS, VideoDecodeError, VideoReader, describe_source,
@@ -269,7 +269,7 @@ class ArrowBytesStore:
                 array = pa.array(values, type=pa.large_binary())
                 writer.write_batch(pa.record_batch([array], schema=schema))
                 rows += len(array)
-        os.replace(tmp, path)
+        retry_while_locked(lambda: os.replace(tmp, path))
         return cls(path, rows)
 
 

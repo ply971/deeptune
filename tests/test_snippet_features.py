@@ -971,3 +971,19 @@ def test_load_snippet_features_refuses_older_motion(videos, tmp_path, version):
             load_snippet_features(tmp_path / 'f', 'v0', streams=streams)
     assert list(load_snippet_features(tmp_path / 'f', 'v0', streams=['rgb']).split) == ['rgb']  # rgb is unaffected
 
+
+def test_writing_waits_for_a_locked_sidecar(tmp_path):
+    store = FeatureStore(tmp_path / 'f')
+    (tmp_path / 'f' / 'rgb').mkdir(parents=True)
+    store.write('rgb', 'v', np.zeros((1, 2), np.float16), {'video_id': 'v'})
+    real, outcomes = Path.unlink, [PermissionError(13, 'Permission denied')]
+
+    def unlink(path, *args, **kwargs):
+        if outcomes:
+            raise outcomes.pop()
+        real(path, *args, **kwargs)
+    with mock.patch.object(Path, 'unlink', unlink):
+        store.write('rgb', 'v', np.ones((1, 2), np.float16), {'video_id': 'v'})
+    assert not outcomes
+    assert np.load(store.array_path('rgb', 'v')).tolist() == [[1.0, 1.0]]
+

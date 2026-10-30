@@ -37,7 +37,8 @@ cache, on the resized frames, and stays random per epoch.
 disk, and moved into place with ``os.replace``, so readers see the complete old
 state or the complete new one, even with concurrent writers or a killed
 process. Reads also check dtype, shape and exact file size; anything invalid
-counts as a miss and is rewritten. The cache has no size limit: delete the
+counts as a miss and is rewritten. A file that is only locked (Windows refuses
+to open one while it is being replaced) is a miss too, and is left in place. The cache has no size limit: delete the
 folder to reclaim the space (it is always safe to do so between runs).
 """
 from __future__ import annotations
@@ -62,6 +63,19 @@ STALE_PART_SECONDS = 24 * 3600
 _REPLACE_ATTEMPTS = 5
 
 
+def retry_while_locked(action: Callable) -> None:
+    """Run `action`, retrying briefly on PermissionError: on Windows a file another thread or
+    process has open cannot be replaced or deleted for a moment. Raises if it stays locked."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            action()
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(0.02 * (attempt + 1))
+
+
 def atomic_write(path, write: Callable) -> None:
     """Call ``write(stream)`` on a temporary file, flush it to disk, then move it to `path`.
 
@@ -77,14 +91,7 @@ def atomic_write(path, write: Callable) -> None:
             write(stream)
             stream.flush()
             os.fsync(stream.fileno())
-        for attempt in range(_REPLACE_ATTEMPTS):
-            try:
-                os.replace(temporary, path)
-                return
-            except PermissionError:
-                if attempt == _REPLACE_ATTEMPTS - 1:
-                    raise
-                time.sleep(0.02 * (attempt + 1))
+        retry_while_locked(lambda: os.replace(temporary, path))
     finally:
         try:
             temporary.unlink()
@@ -184,7 +191,7 @@ class FrameCache:
         path = self.path(key)
         try:
             mapped = valid_npy_memmap(path)
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):  # a locked file is not a damaged one: keep it
             return None
         except (ValueError, OSError, EOFError) as exc:
             self._drop_invalid(path, exc)

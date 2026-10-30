@@ -62,7 +62,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from datasets.frame_cache import atomic_save_npy, atomic_write, valid_npy_memmap
+from datasets.frame_cache import atomic_save_npy, atomic_write, retry_while_locked, valid_npy_memmap
 
 LOGGER = logging.getLogger('deeptune.video')
 
@@ -315,7 +315,7 @@ class FeatureStore:
             raise TypeError('Snippet features are stored as float16; use to_float16 first.')
         side_path = self.sidecar_path(stream, video_id)
         try:  # never let a stale sidecar describe the new array
-            side_path.unlink()
+            retry_while_locked(side_path.unlink)
         except FileNotFoundError:
             pass
         atomic_save_npy(self.array_path(stream, video_id), features)
