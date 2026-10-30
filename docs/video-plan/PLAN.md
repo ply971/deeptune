@@ -228,7 +228,7 @@ licence of every set of weights it used.
 | A4 | Per-prediction `expected_error` fitted on validation, calibration table | — |
 | R1 | Modern video backbones as frozen features or PEFT: VideoMAE (V2), V-JEPA 2, SigLIP 2 / DINOv3 frame features; ensembles; multi-clip TTA | Phase 1, 3 |
 | R2 | Conformal prediction + abstention ("not sure") with a target error rate; selective-risk curves | A4, Phase 5 |
-| R3 | Auto model selection: try backbones and settings with grouped CV, keep the best, report CIs | Phase 5, R1 |
+| R3 | Auto model selection: try backbones and settings with grouped CV, keep the best, report CIs. **`--search smart`** (default): screen on cached features, then train the top candidates with early stopping. **`--search exhaustive`** (user request, 2026-10-30): train every combination in the chosen grid of backbones, temporal heads, trainable layers and settings. Both print the run count and a time estimate before starting, can stop and resume, report models that don't fit in memory as skipped, keep a ranked leaderboard, and score only the final winner on the sealed test set | Phase 5, R1, B1, B2, T1 |
 | S0 | Spatial data layer: box/mask/track labels (COCO JSON, YOLO txt, MOT txt, CVAT export import); **auto-labelling** = Grounding DINO boxes → SAM 2 masks → user corrects | Phase 1 |
 | S1 | Detection on video frames: fine-tune RT-DETR v2 / D-FINE (+ torchvision Faster R-CNN baseline); zero-shot open-vocabulary detection (Grounding DINO, OWLv2: "lobster" with no training) | S0 |
 | S2 | Segmentation: promptable video object segmentation (SAM 2 click/box → masks through the video; SAM 3 text prompts optional); semantic/instance fine-tune (SegFormer, Mask2Former) | S0 |
@@ -264,8 +264,8 @@ them that way. Real-data gate: each step runs once on a real video on the GPU.
 1. Waves 1–2 as planned (A1, A2, A3, A4; B1, B2, B3).
 2. Spatial core: S0 → S1 → S3 → S5, with zero-shot detection + tracking
    first, so a user can say "track the lobsters" with no labels; then pose.
-3. R1 + R2 (the best models, plus abstention), then Wave 3 (timeline, CtxPL,
-   unsupervised, explainability), then S2, S6 and S4, then R3.
+3. R1 + R2 (the best models, plus abstention), then R3, then Wave 3 (timeline, CtxPL,
+   unsupervised, explainability), then S2, S6 and S4.
 4. GUI (Wave 4) covers everything that landed. Course report in December;
    the paper follows if the measured results support one.
 
@@ -308,7 +308,7 @@ P-001…P-012 (an id clash, see P-113).
     confidence (P-112, L).
 - **Placement:** P-105, P-106 and P-108 go in Wave 2 with B3. P-107 and P-109
   come after B3's out-of-fold predictions. P-112 goes after Wave 3 and is
-  the first to cut after S6/R3 if time is short.
+  the first to cut after S6 if time is short.
 - **Wave 2 additions (user accepted P-115 to P-118, 2026-10-30):**
   - R1 registers V-JEPA 2 through `transformers` only; 2.1 stays a note until its weights have a stated licence and a native loader (P-115, F-015).
   - T1 adds `--freeze_bn auto|on|off`; `auto` stays off without pretrained weights, and the batch-size cutoff is checked on real data (P-116).
@@ -333,7 +333,7 @@ P-001…P-012 (an id clash, see P-113).
    and reliability → localisation → GUI) is finished and validated before the
    spatial extras grow. Detection, segmentation and pose stay thin,
    well-tested wrappers around foundation models. If time is short, cut
-   S6 fusion and R3 auto-select first, then S2 fine-tuning and S5's
+   S6 fusion first, then S2 fine-tuning and S5's
    graph-conv head.
 4. **Review per merge.** Every agent branch gets a review by the **`ml-critic`**
    agent (`.claude/agents/ml-critic.md`, added 2026-10-30 at the user's request):
