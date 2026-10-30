@@ -28,7 +28,7 @@ Snippet ``k`` starts at ``start_frame + k * R``, which is ``k * R / fps``
 seconds into the range when the frame rate is constant.
 
 **Sidecar** keys: ``fps, snippet_frames, stride, backbone, weights,
-weights_licence, stream`` plus ``video_id, source`` (absolute path, or ``<N bytes>``)``, source_fingerprint,
+weights_licence, stream`` plus ``video_id, source`` (absolute path, or ``<N bytes>``), ``source_fingerprint,
 config_hash, frame_count, start_frame, end_frame, duration_sec, variable_fps,
 num_snippets, last_snippet_valid_frames, shape, dim, token_grid, dtype,
 float16, seconds, bytes, source_range, field_of_view``. The motion stream adds
