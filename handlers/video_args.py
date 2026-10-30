@@ -59,8 +59,10 @@ motion: MGSampler, evenly spaced along the cumulative motion curve (more frames 
                    help='Frame step inside a dense clip (default 1).')
     g.add_argument('--clip_duration_sec', type=_positive_float, default=None,
                    help='Sample from a window this many seconds long (random position in training, centred at test). Default: whole clip.')
-    g.add_argument('--motion_source', choices=['auto', 'codec', 'framediff'], default='auto',
-                   help='Motion curve for --temporal_sampling motion: codec motion vectors (PyAV) or frame differences; auto = codec if available.')
+    g.add_argument('--motion_source', choices=['auto', 'codec', 'framediff', 'farneback', 'mv'], default='auto',
+                   help='''Motion curve for --temporal_sampling motion: codec motion vectors (PyAV) or frame differences; auto = codec if available.
+For --video_arch two_stream, the motion stream: farneback (OpenCV optical flow; also auto) or mv (codec motion vectors; also codec).
+As a curve, farneback means framediff and mv means codec.''')
     g.add_argument('--test_clips', type=_positive_int, default=1,
                    help='Clips per video at test/embedding/inference time; predictions average the clip probabilities (default 1).')
     g.add_argument('--num_workers', type=_workers, default='auto',
