@@ -83,14 +83,6 @@ def test_stated_error_matches_observed_per_decile_on_held_out_data():
         assert row['n'] == 400
         assert abs(row['gap']) < 0.1, row
     assert report['summary']['calibration_error'] < 0.05
-    # Noise-free check against the truth: per decile, the stated error must
-    # match the generator's true P(wrong) of the same samples (no test-set
-    # sampling noise in this comparison).
-    order = np.argsort(stated, kind='mergesort')
-    truth_gaps = np.array([abs(stated[idx].mean() - test_oracle[idx].mean())
-                           for idx in np.array_split(order, 10)])
-    assert truth_gaps.max() < 0.04, truth_gaps
-    assert truth_gaps.mean() < 0.015, truth_gaps
     # Against observed outcomes, it may lose only a little calibration
     # relative to the oracle itself on the same held-out draws.
     oracle = calibration_table(test_oracle, test_wrong, n_bins=10)
@@ -100,6 +92,47 @@ def test_stated_error_matches_observed_per_decile_on_held_out_data():
     raw = calibration_table(1 - test_probs.max(axis=1), test_wrong)
     assert raw['summary']['calibration_error'] > 0.15
     assert report['summary']['auroc_error_detection'] > 0.75
+
+
+def _truth_gap_medians(scale=1.0, seeds=range(10)):
+    """Noise-free check against the truth: per decile of stated error, the
+    gap between the stated error and the generator's true P(wrong) of the
+    same held-out samples (no test-set sampling noise). Returns the medians,
+    over `seeds`, of the worst-decile gap and the mean-decile gap.
+    `scale` multiplies the stated error to simulate a mis-calibrated model."""
+    worst, mean = [], []
+    for seed in seeds:
+        rng = np.random.default_rng(seed)
+        fit_probs, fit_wrong = _overconfident(4000, rng)
+        test_probs, _, truth = _overconfident(4000, rng, return_oracle=True)
+        model = ErrorModel('cls').fit(prediction_features(fit_probs, 'cls'), fit_wrong)
+        stated = scale * model.predict(prediction_features(test_probs, 'cls'))
+        order = np.argsort(stated, kind='mergesort')
+        gaps = np.array([abs(stated[idx].mean() - truth[idx].mean()) for idx in np.array_split(order, 10)])
+        worst.append(gaps.max())
+        mean.append(gaps.mean())
+    return float(np.median(worst)), float(np.median(mean))
+
+
+# Bounds come from the multi-seed spread, not one seed. Over 200 seeds a
+# single seed's worst-decile gap has median 0.044 / p95 0.071 and its
+# mean-decile gap median 0.016 / p95 0.022; 10-seed medians range
+# 0.035-0.052 and 0.014-0.019 over 20 disjoint seed blocks.
+TRUTH_GAP_MAX, TRUTH_GAP_MEAN = 0.07, 0.025
+
+
+def test_stated_error_tracks_the_true_error_rate_over_seeds():
+    worst, mean = _truth_gap_medians()
+    assert worst < TRUTH_GAP_MAX, worst
+    assert mean < TRUTH_GAP_MEAN, mean
+
+
+def test_truth_gap_check_catches_a_miscalibrated_model():
+    # Under-stating every error by 15% must fail the same check, clearly
+    # (10-seed medians ~0.145 / ~0.08 over 20 seed blocks).
+    worst, mean = _truth_gap_medians(scale=0.85)
+    assert worst > 2 * TRUTH_GAP_MAX or mean > 2 * TRUTH_GAP_MEAN, (worst, mean)
+    assert worst >= TRUTH_GAP_MAX and mean >= TRUTH_GAP_MEAN, (worst, mean)
 
 
 def test_logistic_error_model_is_also_calibrated():
