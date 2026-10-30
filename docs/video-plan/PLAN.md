@@ -312,8 +312,12 @@ P-001…P-012 (an id clash, see P-113).
    well-tested wrappers around foundation models. If time is short, cut
    S6 fusion and R3 auto-select first, then S2 fine-tuning and S5's
    graph-conv head.
-4. **Review per merge.** Every agent branch gets a code review (correctness
-   pass) before merging, in addition to the coordinator's diff, test-diff and
+4. **Review per merge.** Every agent branch gets a review by the **`ml-critic`**
+   agent (`.claude/agents/ml-critic.md`, added 2026-10-30 at the user's request):
+   a senior ML / data-analysis methodologist covering data leakage and splits,
+   evaluation validity, baselines and CIs, calibration and conformal validity,
+   ML implementation correctness, claim reproducibility, and feature gaps vs
+   the best ML tools. This happens before merging, in addition to the coordinator's diff, test-diff and
    targeted-test checks. The full suite runs after each wave.
 
 ---
