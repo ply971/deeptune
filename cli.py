@@ -44,6 +44,11 @@ class DeepTuneVisionOptions:
         self.mode : Optional[str] = parsed_args.mode
         self.grouper: Optional[str] = parsed_args.grouper
         self.fixed_seed: bool = parsed_args.fixed_seed
+        # Per-prediction error model (A4): recorded in cli_arguments.json and
+        # applied process-wide so the shared Trainer honours it.
+        self.no_error_model: bool = parsed_args.no_error_model
+        from evaluators.error_model import set_fit_by_default
+        set_fit_by_default(not self.no_error_model)
 
         if run_type == RunType.TabPFNTRAIN:
             self.target_column: Optional[str] = parsed_args.target_column
@@ -211,6 +216,11 @@ class DeepTuneVisionOptions:
         # Video-modality args (ignored for other modalities)
         p.add_argument('--num_frames', type=int, default=8, help='Number of frames to uniformly sample per video clip (video modality only).')
         p.add_argument('--pooling', type=str, choices=['mean', 'attention'], default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). Ignored for DeepTune's native video architectures.")
+
+        # Per-prediction error estimate (images/video). On by default.
+        p.add_argument('--no_error_model', action='store_true',
+                       help='Do not fit the per-prediction error model (error_model.json) on the validation split after '
+                            'training. Without it, eval/inference outputs have no expected_error column.')
 
     def _add_tabpfn_train_args(self):
         p = self.parser
