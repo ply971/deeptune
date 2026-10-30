@@ -519,6 +519,25 @@ def find_history_paths(run_dir: Path) -> list[Path]:
     return paths
 
 
+def checkpoint_arguments(results: RunResults) -> dict:
+    """A run's recorded settings. For a video run, the record next to the checkpoint
+    wins over `results.cli_arguments` (which prefers the eval record), since it is the
+    one that describes these weights. Other modalities and runs whose records agree
+    are unchanged."""
+    args = dict(results.cli_arguments or {})
+    if results.checkpoint_path is None:
+        return args
+    checkpoint = Path(results.checkpoint_path)
+    path = (checkpoint if checkpoint.is_dir() else checkpoint.parent) / 'cli_arguments.json'
+    try:
+        record = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return args
+    if not isinstance(record, dict) or (args.get('modality') or record.get('modality')) != 'video':
+        return args
+    return {**args, **{key: value for key, value in record.items() if value is not None}}
+
+
 def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size: int = 16) -> InferenceConfig:
     """Builds an InferenceConfig for testing `results`'s trained model
     against `data`, pulling every model-build setting from the run's own
@@ -527,7 +546,7 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
     itself sets args.mode to the already-resolved effective mode (e.g.
     GANDALF regression vs. classification, timeseries always 'reg') before
     that file is saved, so `mode` below needs no further resolution here."""
-    cli_args = results.cli_arguments or {}
+    cli_args = checkpoint_arguments(results)
     modality = cli_args.get('modality', 'images')
     model_version = cli_args.get('model_version') or 'resnet18'
     cfg = InferenceConfig(
@@ -641,7 +660,9 @@ def read_inference_results(out_dir: Path) -> InferenceResults:
     predictions_path = out_dir / 'predictions.csv'
     if predictions_path.exists():
         try:
-            results.predictions = pd.read_csv(predictions_path)
+            # As text: a class called 007, 1 or NA is a name, not a number or a missing value.
+            # Per column, because keep_default_na=False would turn empty numeric cells into text.
+            results.predictions = pd.read_csv(predictions_path, converters={'predicted_label': str, 'true_label': str})
         except (OSError, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
             results.warnings.append(f'predictions.csv: {exc}')
     metrics_path = out_dir / 'inference_metrics.json'
