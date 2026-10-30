@@ -17,10 +17,10 @@ import math
 import os
 from handlers.training_args import TrainingOptions
 from trainers.training_basics import (
-    FREEZE_BN_AUTO_BELOW, ExperimentLogger, ModelEma, autocast_context, backbone_batchnorm_layers, build_scheduler,
-    decide_freeze_bn, get_rng_state, install_worker_seeding,
-    layer_wise_param_groups, mix_batch, peak_memory_mb, reset_peak_memory, resolve_precision, set_rng_state,
-    trajectory_differences,
+    FREEZE_BN_AUTO_BELOW, PEAK_MEMORY_MEANING, ExperimentLogger, ModelEma, autocast_context, backbone_batchnorm_layers,
+    build_scheduler, decide_freeze_bn, get_rng_state, install_worker_seeding,
+    layer_wise_param_groups, mix_batch, peak_memory_mb, reset_peak_memory, resolve_precision, run_environment,
+    run_peak_memory, set_rng_state, trajectory_differences,
 )
 print = functools.partial(print, flush=True)
 
@@ -181,7 +181,6 @@ class Trainer:
         self.resumed_from = None
         self.epoch_times = []
         self.total_time = 0.0
-        self.peak_memory = {}
         self.experiment = None
         # --- end training basics ---
 
@@ -299,6 +298,11 @@ class Trainer:
             raise ValueError(f"--resume: {path} has checkpoint format {state['format_version']}, "
                              f'this DeepTune reads format {CHECKPOINT_FORMAT_VERSION}.')
         self._check_resume_data(state)
+        if state['best_epoch'] is not None and not self.options.selects_best:
+            raise ValueError(f"--resume: {path} selected its best weights on validation (best epoch {state['best_epoch']}"
+                             f"{', stopped early' if state['stopped_early'] else ''}), but this run does not select. It "
+                             f'would hand on the last weights and record that validation chose nothing. Pass --select_best '
+                             f'or the original --early_stopping_patience.')
         saved_setup = dict(state['options'], learning_rate=state['learning_rate'], num_epochs=state['num_epochs'],
                            batch_size=state['batch_size'])
         current_setup = dict(self.options.to_dict(), learning_rate=self.learning_rate, num_epochs=self.num_epochs,
@@ -403,7 +407,9 @@ class Trainer:
             'freeze_bn': self.freeze_bn_info,
             'resumed_from': self.resumed_from,
             'data_identity': self.data_identity,
-            'peak_memory': self.peak_memory,
+            'peak_memory': run_peak_memory(self.experiment.rows),
+            'peak_memory_meaning': PEAK_MEMORY_MEANING,
+            'environment': run_environment(),
         }
         (Path(self.output_dir) / RUN_RECORD_FILENAME).write_text(json.dumps(record, indent=2), encoding='utf-8')
     # --- end training basics ---
@@ -565,12 +571,11 @@ class Trainer:
             # --- training basics (T1) ---
             self.completed_epochs = epoch + 1
             self.total_time = total_time
-            self.peak_memory = peak_memory_mb(DEVICE)
             self.experiment.log_epoch({
                 'epoch': epoch + 1, 'train_loss': epoch_loss, 'train_accuracy': epoch_accuracy if self.mode == 'cls' else None,
                 'val_loss': val_loss, 'val_accuracy': val_accuracy, 'lr': self._current_lr(),
                 'optimizer_updates': self.global_updates, 'seconds': epoch_duration, 'is_best': improved,
-                **self.peak_memory,
+                **peak_memory_mb(DEVICE),
             })
             if patience > 0 and self.epochs_without_improvement >= patience:
                 self.stopped_early = True
@@ -722,7 +727,8 @@ class Trainer:
                 with autocast_context(self.amp_dtype):
                     output = self.model(input)
 
-                loss = self.criterion(output, labels)
+                # Outside autocast, so in float32: the selection metric must not depend on --precision.
+                loss = self.criterion(output.float(), labels)
                 
                 val_loss += loss.item() * labels.size(0)
                 

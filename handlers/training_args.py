@@ -162,7 +162,8 @@ The validation split then becomes a selection set, and training_run.json and err
     g.add_argument('--early_stopping_patience', type=int, default=0, metavar='EPOCHS',
                    help='Stop after this many epochs without improvement and reload the best weights (implies --select_best). Default 0 = off.')
     g.add_argument('--early_stopping_min_delta', type=float, default=0.0,
-                   help='Smallest change in the selection metric that counts as an improvement (default 0).')
+                   help='Smallest change in the selection metric that counts as an improvement (default 0). Its units are those of '
+                        '--selection_metric: percentage points for val_accuracy, loss units for val_loss.')
     g.add_argument('--selection_metric', choices=SELECTION_METRIC_CHOICES, default='val_loss',
                    help='What --select_best and early stopping compare (default val_loss). Validation loss never includes label smoothing or mixup.')
     g.add_argument('--lr_scheduler', choices=LR_SCHEDULER_CHOICES, default='none',

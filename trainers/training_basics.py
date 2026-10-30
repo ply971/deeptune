@@ -15,6 +15,7 @@ import importlib
 import math
 import os
 import random
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -363,8 +364,11 @@ def data_fingerprint(path) -> str | None:
 
 # --- memory ----------------------------------------------------------------------
 def peak_memory_mb(device) -> dict:
-    """Peak memory since the last :func:`reset_peak_memory`. GPU values are None
-    without CUDA, and the process value is None without psutil."""
+    """Memory figures for one epoch. The GPU values are peaks since the last
+    :func:`reset_peak_memory`, and None without CUDA. ``peak_process_rss_mb`` is
+    what the OS offers through psutil, see :data:`PEAK_MEMORY_MEANING`: not a peak
+    of this epoch, and on other systems than Windows not a peak at all. None
+    without psutil."""
     use_cuda = getattr(device, 'type', str(device)) == 'cuda'
     peak = {
         'peak_gpu_allocated_mb': torch.cuda.max_memory_allocated() / 2 ** 20 if use_cuda else None,
@@ -383,6 +387,49 @@ def peak_memory_mb(device) -> dict:
 def reset_peak_memory(device) -> None:
     if getattr(device, 'type', str(device)) == 'cuda':
         torch.cuda.reset_peak_memory_stats()
+
+
+PEAK_MEMORY_KEYS = ('peak_gpu_allocated_mb', 'peak_gpu_reserved_mb', 'peak_process_rss_mb')
+PEAK_MEMORY_MEANING = {
+    'peak_gpu_allocated_mb': 'Largest per-epoch peak of torch.cuda.max_memory_allocated.',
+    'peak_gpu_reserved_mb': 'Largest per-epoch peak of torch.cuda.max_memory_reserved.',
+    'peak_process_rss_mb': 'Largest value sampled at the end of each epoch. On Windows the sample is the process '
+                           'lifetime high-water mark (peak_wset), so it includes anything done before training. '
+                           'Elsewhere it is the current RSS at that moment, so a higher peak inside an epoch is missed.',
+}
+
+
+def run_peak_memory(rows) -> dict:
+    """The run's maximum of each memory figure over the per-epoch metric rows,
+    which a resume restores, so the epochs before it count too. None if never measured."""
+    peak = {}
+    for key in PEAK_MEMORY_KEYS:
+        values = [row[key] for row in rows if row.get(key) is not None]
+        peak[key] = max(values) if values else None
+    return peak
+
+
+def run_environment() -> dict:
+    """What the run card (P-106) needs to reproduce a run: the code's commit and
+    the settings that decide whether a GPU run is deterministic. ``commit`` is None
+    outside a git checkout, and ``commit_dirty`` says whether files had changed."""
+    commit, dirty = None, None
+    root = Path(__file__).resolve().parent
+    try:
+        commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True, text=True,
+                                timeout=10, check=True).stdout.strip() or None
+        dirty = bool(subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=root,
+                                    capture_output=True, text=True, timeout=10, check=True).stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {
+        'commit': commit,
+        'commit_dirty': dirty,
+        'torch_version': torch.__version__,
+        'cuda_version': torch.version.cuda,
+        'cudnn_deterministic': bool(torch.backends.cudnn.deterministic),
+        'cudnn_benchmark': bool(torch.backends.cudnn.benchmark),
+    }
 
 
 # --- experiment logging ------------------------------------------------------

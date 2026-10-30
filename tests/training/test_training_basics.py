@@ -1240,3 +1240,105 @@ def test_real_r3d_18_layout_is_found_with_and_without_peft():
     from src.video.video3d_peft import adjustedPeftVideo3D
     assert len(tb.backbone_batchnorm_layers(adjustedVideo3D(2, 'dummy_video3d', 1, 4))) == 20
     assert len(tb.backbone_batchnorm_layers(adjustedPeftVideo3D(2, 'dummy_video3d', 1, 1))) == 20
+
+
+# ---------------------------------------------------------------------------
+# V-040: fix round
+# ---------------------------------------------------------------------------
+class HalfOutputs(nn.Module):
+    """Outputs in float16, as a model does under fp16 autocast."""
+
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(3 * 8 * 8, 2)
+
+    def forward(self, x):
+        return self.linear(x.flatten(1)).half()
+
+
+def test_validation_loss_is_computed_in_float32(tmp_path):
+    trainer = make_trainer(tmp_path, model=HalfOutputs())
+    dtypes = []
+    plain = trainer.criterion
+    trainer.criterion = lambda output, labels: (dtypes.append(output.dtype), plain(output, labels))[1]
+    val_loss, _ = trainer.validate()
+    assert set(dtypes) == {torch.float32}
+    inputs = torch.cat([batch[0] for batch in trainer.val_loader])
+    labels = torch.cat([batch[1] for batch in trainer.val_loader])
+    with torch.no_grad():
+        expected = nn.functional.cross_entropy(trainer.model(inputs).float(), labels)
+    assert val_loss == pytest.approx(expected.item(), rel=1e-6)
+
+
+@pytest.mark.parametrize('saved', [TrainingOptions(early_stopping_patience=1, checkpoint_every=1),
+                                   TrainingOptions(select_best=True, checkpoint_every=1)],
+                         ids=['early_stopped', 'select_best'])
+def test_resuming_a_selecting_run_without_selection_is_refused(tmp_path, saved):
+    first = make_trainer(tmp_path / 'a', saved, epochs=5)
+    scripted(first, [(0.5, 0.0), (0.9, 0.0), (0.9, 0.0), (0.9, 0.0), (0.9, 0.0)])
+    first.train()
+    second = make_trainer(tmp_path / 'b', TrainingOptions(resume=str(tmp_path / 'a' / CHECKPOINT_FILENAME)), epochs=5)
+    with pytest.raises(ValueError, match='--select_best'):
+        second.train()
+    assert not (tmp_path / 'b' / RUN_RECORD_FILENAME).exists(), 'nothing may be recorded for a refused resume'
+
+
+def test_resuming_a_selecting_run_with_select_best_alone_keeps_the_selection(tmp_path):
+    first = make_trainer(tmp_path / 'a', TrainingOptions(early_stopping_patience=1, checkpoint_every=1), epochs=5)
+    snapshots = scripted(first, [(0.5, 0.0), (0.9, 0.0)])
+    first.train()
+    second = make_trainer(tmp_path / 'b', TrainingOptions(select_best=True, resume=str(tmp_path / 'a' / CHECKPOINT_FILENAME)), epochs=5)
+    second.train()
+    selection = read_run(tmp_path / 'b')['selection']
+    assert selection['validation_used_for_model_selection'] is True and selection['best_epoch'] == 1
+    assert_same_state(cpu_state(second.model), snapshots[0])
+
+
+def test_min_delta_help_states_its_units():
+    import argparse
+    from handlers.training_args import add_training_basics_arguments
+    parser = argparse.ArgumentParser()
+    add_training_basics_arguments(parser)
+    help_text = next(action.help for action in parser._actions if '--early_stopping_min_delta' in action.option_strings)
+    assert 'percentage points for val_accuracy' in help_text and 'loss units for val_loss' in help_text
+
+
+def _scripted_memory(monkeypatch, values):
+    import trainers.vision.trainer as trainer_module
+    remaining = iter(values)
+    monkeypatch.setattr(trainer_module, 'peak_memory_mb', lambda device: {
+        'peak_gpu_allocated_mb': None, 'peak_gpu_reserved_mb': None, 'peak_process_rss_mb': next(remaining)})
+
+
+def test_run_record_keeps_the_runs_maximum_not_the_last_epochs_memory(tmp_path, monkeypatch):
+    _scripted_memory(monkeypatch, [10.0, 30.0, 20.0])
+    make_trainer(tmp_path, epochs=3).train()
+    record = read_run(tmp_path)
+    assert record['peak_memory'] == {'peak_gpu_allocated_mb': None, 'peak_gpu_reserved_mb': None, 'peak_process_rss_mb': 30.0}
+    meaning = record['peak_memory_meaning']['peak_process_rss_mb']
+    assert 'lifetime high-water' in meaning and 'current RSS' in meaning
+
+
+def test_the_runs_maximum_survives_a_resume(tmp_path, monkeypatch):
+    _scripted_memory(monkeypatch, [10.0, 30.0])
+    make_trainer(tmp_path / 'a', TrainingOptions(checkpoint_every=1), epochs=2).train()
+    _scripted_memory(monkeypatch, [5.0])
+    make_trainer(tmp_path / 'b', TrainingOptions(resume=str(tmp_path / 'a' / CHECKPOINT_FILENAME)), epochs=3).train()
+    assert read_run(tmp_path / 'b')['peak_memory']['peak_process_rss_mb'] == 30.0
+
+
+def test_run_record_states_commit_torch_and_cudnn_settings(tmp_path):
+    make_trainer(tmp_path, epochs=1).train()
+    environment = read_run(tmp_path)['environment']
+    assert environment['torch_version'] == torch.__version__
+    assert environment['cudnn_deterministic'] == bool(torch.backends.cudnn.deterministic)
+    assert environment['cudnn_benchmark'] == bool(torch.backends.cudnn.benchmark)
+    assert environment['commit'] is None or len(environment['commit']) == 40
+
+
+def test_run_environment_without_git(monkeypatch):
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError('git')
+    monkeypatch.setattr(tb.subprocess, 'run', no_git)
+    environment = tb.run_environment()
+    assert environment['commit'] is None and environment['commit_dirty'] is None
