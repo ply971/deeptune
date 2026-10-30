@@ -118,3 +118,106 @@ def test_pick_device():
     assert pick_device('cpu') == 'cpu'
     assert pick_device('auto') in {'cpu', 'cuda'}
     assert pick_device('auto') == ('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+# --- review V-003: stub models with crafted outputs pin down coordinates and labels ---
+
+class _StubModel(torch.nn.Module):
+    """Returns fixed ``logits`` / ``pred_boxes`` (normalised cx, cy, w, h) for every frame."""
+
+    def __init__(self, logits_fn, boxes, config=None):
+        super().__init__()
+        self.logits_fn = logits_fn
+        self.boxes = torch.tensor(boxes, dtype=torch.float32)
+        self.config = config
+        self.dummy = torch.nn.Parameter(torch.zeros(1))  # so .to(device) has something to move
+
+    def forward(self, input_ids=None, pixel_values=None, **_):
+        from types import SimpleNamespace
+        b = pixel_values.shape[0]
+        logits = self.logits_fn(input_ids, b)
+        return SimpleNamespace(logits=logits, pred_boxes=self.boxes.expand(b, -1, -1).clone())
+
+
+H, W = 48, 80  # non-square: a (h, w) swap or a wrong rescale changes every box
+
+
+def test_grounding_dino_stub_exact_boxes_labels_and_scores():
+    _, proc = tiny_grounding_dino()
+    ids = proc(images=[np.zeros((H, W, 3), np.uint8)], text=[PROMPTS], return_tensors='pt')['input_ids'][0]
+    tok = proc.tokenizer
+    assert tok.convert_ids_to_tokens(ids.tolist()) == ['[CLS]', 'lobster', '.', 'fish', '.', '[SEP]']
+    LOB, DOT, FISH, SEP = 1, 2, 3, 5
+    rows = [  # (logit per token position, box)
+        ({FISH: 3.0}, (0.25, 0.50, 0.25, 0.50)),            # fish
+        ({LOB: 2.0}, (0.75, 0.25, 0.10, 0.20)),             # lobster
+        ({DOT: 5.0, LOB: 0.5, FISH: -1.0}, (0.50, 0.75, 0.20, 0.25)),  # '.' holds the global max -> lobster
+        ({SEP: 4.0, FISH: 1.0}, (0.10, 0.10, 0.10, 0.10)),  # [SEP] holds the global max -> fish
+        ({SEP: 4.0}, (0.30, 0.30, 0.10, 0.10)),             # only [SEP] fires: no prompt matches -> dropped
+        ({}, (0.60, 0.60, 0.10, 0.10)),                     # nothing fires -> dropped
+    ]
+
+    def logits_fn(input_ids, b):
+        out = torch.full((b, len(rows), input_ids.shape[1]), -5.0)
+        for q, (vals, _) in enumerate(rows):
+            for pos, v in vals.items():
+                out[:, q, pos] = v
+        return out
+
+    model = _StubModel(logits_fn, [box for _, box in rows])
+    det = GroundingDinoDetector(model, proc, device='cpu', box_threshold=0.3, text_threshold=0.25,
+                                batch_size=2, nms_iou=None)
+    frames = np.zeros((3, H, W, 3), np.uint8)
+    results = det.detect(frames, PROMPTS)
+    sig = lambda v: 1 / (1 + np.exp(-v))  # noqa: E731
+    want = [('fish', sig(3.0), (10.0, 12.0, 30.0, 36.0)),
+            ('lobster', sig(2.0), (56.0, 7.2, 64.0, 16.8)),
+            ('fish', sig(1.0), (4.0, 2.4, 12.0, 7.2)),
+            ('lobster', sig(0.5), (32.0, 30.0, 48.0, 42.0))]
+    for dets in results:
+        assert [d.label for d in dets] == [w[0] for w in want]
+        assert [d.score for d in dets] == pytest.approx([w[1] for w in want], abs=1e-4)
+        for d, w in zip(dets, want):
+            assert d.box == pytest.approx(w[2], abs=1e-3)
+
+
+def test_grounding_dino_stub_dotted_prompt_keeps_original_label():
+    _, proc = tiny_grounding_dino()
+
+    def logits_fn(input_ids, b):
+        out = torch.full((b, 1, input_ids.shape[1]), -5.0)
+        out[:, 0, 1] = 3.0  # first prompt's first token
+        return out
+
+    model = _StubModel(logits_fn, [(0.5, 0.5, 0.5, 0.5)])
+    det = GroundingDinoDetector(model, proc, device='cpu', box_threshold=0.3, nms_iou=None)
+    (dets,) = det.detect(np.zeros((1, H, W, 3), np.uint8), ['Red. Lobster', 'fish'])
+    assert [d.label for d in dets] == ['Red. Lobster']
+    assert dets[0].box == pytest.approx((20.0, 12.0, 60.0, 36.0), abs=1e-3)
+
+
+def test_owlv2_stub_exact_boxes_and_labels_on_padded_square():
+    from types import SimpleNamespace
+    _, proc = tiny_owlv2()
+    # OWLv2 boxes are normalised to the padded square S = max(H, W) = 80.
+    rows = [((-5.0, 2.0), (0.25, 0.25, 0.25, 0.25)),   # fish
+            ((1.0, -5.0), (0.75, 0.40, 0.10, 0.10)),   # lobster
+            ((0.5, -5.0), (0.50, 0.55, 0.20, 0.20)),   # lobster, runs past the bottom edge -> clipped to H
+            ((-4.0, -4.0), (0.20, 0.20, 0.10, 0.10))]  # below threshold
+
+    def logits_fn(input_ids, b):
+        return torch.tensor([r[0] for r in rows], dtype=torch.float32).expand(b, -1, -1).clone()
+
+    cfg = SimpleNamespace(text_config=SimpleNamespace(max_position_embeddings=16))
+    model = _StubModel(logits_fn, [r[1] for r in rows], config=cfg)
+    det = Owlv2Detector(model, proc, device='cpu', box_threshold=0.3, batch_size=2, nms_iou=None)
+    results = det.detect(np.zeros((3, H, W, 3), np.uint8), PROMPTS)
+    sig = lambda v: 1 / (1 + np.exp(-v))  # noqa: E731
+    want = [('fish', sig(2.0), (10.0, 10.0, 30.0, 30.0)),
+            ('lobster', sig(1.0), (56.0, 28.0, 64.0, 36.0)),
+            ('lobster', sig(0.5), (32.0, 36.0, 48.0, 48.0))]
+    for dets in results:
+        assert [d.label for d in dets] == [w[0] for w in want]
+        assert [d.score for d in dets] == pytest.approx([w[1] for w in want], abs=1e-4)
+        for d, w in zip(dets, want):
+            assert d.box == pytest.approx(w[2], abs=1e-3)
