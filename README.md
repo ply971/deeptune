@@ -332,7 +332,7 @@ Finished videos are skipped, so an interrupted run continues where it stopped.
 
 | flag | default | meaning |
 |---|---|---|
-| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files. One id cannot stand for two videos or trims, and ids may not differ only by case |
+| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files. Within one manifest an id cannot stand for two videos or trims. Ids may not differ only by case, across runs and streams too. A later run may give an id another video in one stream only; loading both streams then refuses, as does a row whose path is not the one extracted |
 | `--out` | required | feature folder; a folder holds one configuration per stream |
 | `--streams` | `rgb` | `rgb` and/or `motion` |
 | `--model_version` | `r3d_18` | `rgb` backbone: any DeepTune video or frame backbone |
