@@ -35,8 +35,11 @@ def main(argv=None):
     values["added_layers"] = args.added_layers or 2
     values["embed_size"] = args.embed_size if args.embed_size is not None else 1000
     values["num_classes"] = args.num_classes if args.num_classes is not None else 2
+    values["trainable_params"] = "" if args.trainable_params is None else str(args.trainable_params)
     cfg = RunConfig(**values)
     issues = validate_config(cfg)
+    if args.trainable_params is not None and args.modality not in ('images', 'video'):
+        issues.append('--trainable_params is only supported for the images and video modalities.')
     if issues:
         args.parser.error("\n".join(issues))
     args.mode = effective_mode(cfg)
@@ -220,8 +223,12 @@ def main(argv=None):
             args=args,
             mode=defaults['mode'],
             model_str=args.model_version,
-            model_version=args.model_version
+            model_version=args.model_version,
+            trainable_params=args.trainable_params,
         )
+        if args.trainable_params is not None and args.embed_size is not None:
+            # A PEFT budget picks the LoRA rank (= embed_size); eval/embed must rebuild that shape.
+            defaults['embed_size'] = args.embed_size
 
         metrics_dict = evaluate_images(
             eval_df=test_data_path,
@@ -285,7 +292,11 @@ def main(argv=None):
             model_version=args.model_version,
             num_frames=args.num_frames,
             pooling=args.pooling,
+            trainable_params=args.trainable_params,
         )
+        if args.trainable_params is not None and args.embed_size is not None:
+            # A PEFT budget picks the LoRA rank (= embed_size); eval/embed must rebuild that shape.
+            defaults['embed_size'] = args.embed_size
 
         metrics_dict = evaluate_video(
             eval_df=test_data_path,
