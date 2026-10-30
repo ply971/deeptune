@@ -184,6 +184,8 @@ class VideoTSM(nn.Module):
     def __init__(self, frame_model_cls, version, num_classes, added_layers=2, embed_size=1000, freeze_backbone=False,
                  task_type='cls', tsm_fold_div=8):
         super().__init__()
+        if tsm_fold_div < 2:
+            raise ValueError(f'--tsm_fold_div must be at least 2: 1/N of the channels shift each way, got {tsm_fold_div}.')
         self.tsm_fold_div = tsm_fold_div
         self.backbone, size = _feature_backbone(frame_model_cls, version, num_classes, embed_size, freeze_backbone, task_type)
         core = _resnet_core(self.backbone, 'tsm', version)
@@ -295,6 +297,8 @@ class VideoTwoStream(nn.Module):
             raise ValueError(f"fusion must be 'avg' or 'fc', got {fusion!r}.")
         self.fusion = fusion
         self.motion_length = motion_length or num_frames
+        if self.motion_length > num_frames:
+            raise ValueError(f'--motion_length ({self.motion_length}) cannot exceed the frames per clip ({num_frames}).')
         rgb, rgb_size = _feature_backbone(frame_model_cls, version, num_classes, embed_size, freeze_backbone, task_type)
         motion, motion_size = _feature_backbone(frame_model_cls, version, num_classes, embed_size, freeze_backbone, task_type)
         _resnet_core(rgb, 'two_stream', version)

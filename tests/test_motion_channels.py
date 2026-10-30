@@ -140,3 +140,32 @@ def test_options_follow_the_architecture():
         video_options_from_args({'pooling': 'two_stream', 'motion_source': 'framediff'})
     assert video_options_from_args({}).clip_motion is None
     assert video_options_from_args().clip_motion is None
+
+
+def test_a_crop_scales_the_motion_by_its_zoom(tmp_path, monkeypatch):
+    """A crop of half the width doubles the apparent motion, in the same units as the uncropped clip."""
+    import datasets.video_augment as augment
+    path = translating_clip(tmp_path / 'clip.mp4', 12, 1, 0, size=SIZE, seed=2)
+    frame = pd.DataFrame({'videos': [str(path)], 'labels': [1]})
+
+    def draw(crop):
+        def params(self, height, width, generator=None):
+            return augment.ClipAugmentParams(crop=crop, size=(height, width), flipped=False)
+        monkeypatch.setattr(augment.ClipAugment, 'sample_params', params)
+        torch.manual_seed(0)
+        return open_video_dataset(frame, num_frames=4, train=True, options=VideoDataOptions(clip_motion='farneback', video_augment=True))[0][0]
+    whole = draw((0, 0, SIZE, SIZE))[1:, 3][..., 16:-16, 16:-16].median()
+    half = draw((0, 16, SIZE, SIZE // 2))[1:, 3][..., 16:-16, 16:-16].median()
+    assert whole > 0.1
+    assert abs(half / whole - 2) < 0.4
+
+
+def test_a_file_without_motion_vectors_fails_clearly_instead_of_giving_zero_motion(tmp_path, monkeypatch):
+    from datasets.video_io import MotionVectorsUnavailable
+    _, frame, _ = _dataset(tmp_path)
+
+    def unavailable(*args, **kwargs):
+        raise MotionVectorsUnavailable('no motion vectors in this file')
+    monkeypatch.setattr(VideoReader, 'get_motion_vectors', unavailable)
+    with pytest.raises(ValueError, match='no motion vectors'):
+        open_video_dataset(frame, num_frames=4, options=VideoDataOptions(clip_motion='mv'))[0]
