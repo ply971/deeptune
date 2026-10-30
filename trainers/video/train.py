@@ -7,6 +7,7 @@ from options import UNIQUE_ID, DEVICE, NUM_WORKERS, PERSIST_WORK, PIN_MEM
 from datasets.video_datasets import ParquetVideoDataset, native_video_transform
 from cli import DeepTuneVisionOptions
 from utils import RunType, set_seed, build_video_model
+from trainers.param_budget import build_with_budget
 
 
 def main():
@@ -50,7 +51,8 @@ def main():
         fixed_seed=FIXED_SEED,
         num_frames=NUM_FRAMES,
         pooling=POOLING,
-        args=args
+        args=args,
+        trainable_params=args.trainable_params,
     )
 
 
@@ -73,6 +75,7 @@ def train(
         args: DeepTuneVisionOptions,
         num_frames: int = 8,
         pooling: str = "mean",
+        trainable_params: int | None = None,
 ):
     """
     Trains a DeepTune video classifier - either one of DeepTune's native
@@ -84,6 +87,10 @@ def train(
     This mirrors trainers/vision/train.py's `train`, reusing the exact same
     Trainer class - both model families expose forward(x) -> [B, num_classes],
     so no video-specific training loop is needed.
+
+    `trainable_params` (optional) caps how many parameters are trained - see
+    trainers/param_budget.py. With PEFT it picks the LoRA rank, which is then
+    written back to `args.embed_size` before the arguments are saved.
     """
 
     if fixed_seed:
@@ -115,16 +122,25 @@ def train(
         persistent_workers=PERSIST_WORK
     )
 
-    model = build_video_model(
-        model_version=model_version,
-        num_classes=num_classes,
-        added_layers=added_layers,
-        embed_size=embed_size,
-        freeze_backbone=freeze_backbone,
-        mode=mode,
-        use_peft=use_peft,
-        pooling=pooling,
-    )
+    if trainable_params is None:
+        model = build_video_model(
+            model_version=model_version,
+            num_classes=num_classes,
+            added_layers=added_layers,
+            embed_size=embed_size,
+            freeze_backbone=freeze_backbone,
+            mode=mode,
+            use_peft=use_peft,
+            pooling=pooling,
+        )
+    else:
+        def build(rank):
+            return build_video_model(
+                model_version=model_version, num_classes=num_classes, added_layers=added_layers,
+                embed_size=rank, freeze_backbone=freeze_backbone, mode=mode, use_peft=use_peft, pooling=pooling,
+            )
+        model, embed_size = build_with_budget(build, trainable_params, use_peft, embed_size, freeze_backbone)
+        args.embed_size = embed_size
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

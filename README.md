@@ -58,6 +58,36 @@ app with every dependency bundled in.
 - Fine-tuning video classifiers on raw video clips, either by sampling frames through the existing 2D vision backbones (with pooling over time), or through native spatio-temporal architectures (3D-CNNs and video transformers) that learn motion directly.
 - Providing PEFT with LoRA support for Computer Vision and Video algorithms implemented, enabling state-of-the-art models that typically require substantial computational resources to perform efficiently on lower-powered devices. This approach not only reduces computational overhead but also enhances performance.
 - Leveraging fine-tuned and pretrained state-of-the-art vision, video, and language models to generate robust knowledge representations for downstream visual, temporal, and textual tasks.
+- Reporting how many of a model's parameters are actually trained, and letting you cap that number (images and video).
+
+## Trainable-parameter budget (images and video)
+
+Every image and video training run logs one line such as
+`trainable params: 98,304 || all params: 33,231,000 || trainable%: 0.2958` and writes
+`parameter_summary.json` (total, trainable, frozen, and a backbone / LoRA / head
+breakdown) next to `model_weights.pth`.
+
+`--trainable_params COUNT` sets how many parameters may be trained. COUNT accepts
+`250000`, `100k`, `1.5M`, `2m` (underscores and thousands commas are fine).
+
+- **Without `--use-peft`**: the new head (`fc1`/`fc2`, and the attention layer of
+  frame-pooling video models) is always trained; then backbone layers are unfrozen
+  from the output side down while they fit. The rest stays frozen.
+- **With `--use-peft`**: DeepTune picks the largest LoRA rank that fits. In DeepTune
+  the LoRA rank is also the head's hidden width (`--embed_size`), so the chosen rank
+  is saved as `embed_size` in `cli_arguments.json`, and evaluation, embedding and
+  the Test page rebuild the same model.
+
+The budget overrides `--freeze-backbone`. If even the head (or LoRA rank 1) does not
+fit, the run stops with the smallest achievable count and suggests `--added_layers 1`
+or a smaller `--embed_size`. SigLIP, text, tabular and timeseries runs do not support it.
+
+```powershell
+# images: train the head plus as many top ResNet layers as fit in 500k parameters
+.venv\Scripts\python.exe deeptune.py --modality images --df data\images --raw-data --out results --model_version resnet18 --trainable_params 500k
+# video: LoRA on r3d_18, rank chosen so that at most 100k parameters train
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --use-peft --trainable_params 100k
+```
   
 ## Models *DeepTune* Supports (Up to Date)
 

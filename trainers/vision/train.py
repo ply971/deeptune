@@ -8,6 +8,7 @@ from datasets.image_datasets import ParquetImageDataset
 from trainers.vision.custom_siglip_train import train_siglip
 from cli import DeepTuneVisionOptions
 from utils import get_model_cls, RunType,set_seed
+from trainers.param_budget import build_with_budget
 
 def main():
     args = DeepTuneVisionOptions(RunType.TRAIN)
@@ -46,7 +47,8 @@ def main():
         num_epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
         fixed_seed=FIXED_SEED,
-        args=args
+        args=args,
+        trainable_params=args.trainable_params,
     )
 
 
@@ -69,9 +71,12 @@ def train(
         embed_size: int,
         model_str: str,
         args: DeepTuneVisionOptions,
-
+        trainable_params: int | None = None,
 ):
-    
+    """Trains an image model. `trainable_params` (optional) caps how many
+    parameters are trained - see trainers/param_budget.py; with PEFT the chosen
+    LoRA rank is written back to `args.embed_size` before the arguments are saved."""
+
     MODEL_ARCHITECTURE = args.model_architecture
     if fixed_seed:
         set_seed(fixed_seed)
@@ -82,6 +87,8 @@ def train(
     TRAINVAL_OUTPUT_DIR = (out / f"trainval_output_{model_str}_{UNIQUE_ID}")
 
     if MODEL_ARCHITECTURE.lower() == "siglip" and model_version == "siglip":
+        if trainable_params is not None:
+            raise ValueError('--trainable_params is not supported for SigLIP; remove the budget or choose another model.')
         _ = train_siglip(
             num_classes=num_classes,
             added_layers=added_layers,
@@ -120,7 +127,13 @@ def train(
     )
 
     chosen_model = get_model_cls(model_architecture=MODEL_ARCHITECTURE, use_peft=use_peft)
-    model = chosen_model(num_classes, model_version, added_layers, embed_size, freeze_backbone, task_type=mode)
+    if trainable_params is None:
+        model = chosen_model(num_classes, model_version, added_layers, embed_size, freeze_backbone, task_type=mode)
+    else:
+        def build(rank):
+            return chosen_model(num_classes, model_version, added_layers, rank, freeze_backbone, task_type=mode)
+        model, embed_size = build_with_budget(build, trainable_params, use_peft, embed_size, freeze_backbone)
+        args.embed_size = embed_size
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
