@@ -41,6 +41,7 @@ class TrainingOptions:
     mix_prob: float = 1.0
     layer_decay: float = 1.0
     ema_decay: float = 0.0
+    freeze_bn: str = 'off'
 
     @classmethod
     def from_args(cls, args) -> 'TrainingOptions':
@@ -81,6 +82,8 @@ class TrainingOptions:
             found.append(f"--experiment_logger must be one of {', '.join(EXPERIMENT_LOGGER_CHOICES)}.")
         if self.seed is not None and self.seed < 0:
             found.append('--seed must not be negative.')
+        if self.freeze_bn not in FREEZE_BN_CHOICES:
+            found.append(f"--freeze_bn must be one of {', '.join(FREEZE_BN_CHOICES)}.")
         if self.grad_accum_steps < 1:
             found.append('--grad_accum_steps must be at least 1.')
         if self.checkpoint_every < 0:
@@ -129,6 +132,7 @@ PRECISION_CHOICES = ('no', 'bf16', 'fp16')
 LR_SCHEDULER_CHOICES = ('none', 'cosine', 'step')
 SELECTION_METRIC_CHOICES = ('val_loss', 'val_accuracy')
 EXPERIMENT_LOGGER_CHOICES = ('none', 'mlflow', 'wandb')
+FREEZE_BN_CHOICES = ('off', 'on', 'auto')
 
 TRAINING_BASICS_ARG_NAMES = tuple(f.name for f in fields(TrainingOptions))
 
@@ -172,6 +176,11 @@ The validation split then becomes a selection set, and training_run.json and err
     g.add_argument('--grad_accum_steps', type=int, default=1, metavar='N',
                    help="""Update the weights every N batches (default 1). Gradients are averaged over all samples of the window, and a
 shorter last window is still applied. BatchNorm still sees the small batches.""")
+    g.add_argument('--freeze_bn', choices=FREEZE_BN_CHOICES, default='off',
+                   help="""Backbone BatchNorm during training. off (default): as before, it updates its statistics from each batch.
+on: eval mode and frozen parameters, keeping the pretrained statistics.
+auto: on when --batch_size is under 16 and the backbone has BatchNorm and pretrained weights; otherwise off.
+The cutoff of 16 is a starting guess. The choice is logged and saved in training_run.json.""")
     g.add_argument('--experiment_logger', choices=EXPERIMENT_LOGGER_CHOICES, default='none',
                    help='Also log to MLflow or W&B if already installed (DeepTune does not install them). training_metrics.csv is always written.')
     g.add_argument('--experiment_name', type=str, default=None, help='Run name for --experiment_logger.')

@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.modules.batchnorm import _BatchNorm
 
 from trainers.param_budget import parameter_group
 
@@ -107,6 +108,43 @@ def set_rng_state(state: dict, warn=print) -> None:
 def _as_python_state(state):
     version, internal, gauss = state
     return version, tuple(internal), gauss
+
+
+# --- BatchNorm at small batch sizes ---------------------------------------------
+FREEZE_BN_AUTO_BELOW = 16  # a starting guess (P-116), to be checked on real data
+
+
+def is_pretrained_version(model_version: str) -> bool:
+    """False for the 'dummy*' test versions, the only ones DeepTune builds with weights=None."""
+    return not str(model_version).startswith('dummy')
+
+
+def backbone_batchnorm_layers(model: nn.Module) -> list:
+    """The BatchNorm layers of the pretrained backbone. A BN in a new head has
+    no pretrained statistics to keep, so it stays out."""
+    return [module for name, module in model.named_modules()
+            if isinstance(module, _BatchNorm) and parameter_group(name + '.') == 'backbone']
+
+
+def decide_freeze_bn(setting: str, physical_batch, n_layers: int, pretrained: bool) -> tuple[bool, str]:
+    """Whether to freeze backbone BatchNorm, and why, as a sentence for the log."""
+    if setting == 'off':
+        return False, '--freeze_bn off: BatchNorm updates its statistics from each batch.'
+    if n_layers == 0:
+        return False, f'--freeze_bn {setting}: the backbone has no BatchNorm layers, nothing to freeze.'
+    if setting == 'on':
+        if not pretrained:
+            return True, ('--freeze_bn on: freezing BatchNorm WITHOUT pretrained weights, so its statistics stay at '
+                          'their initial values and are never learned.')
+        return True, '--freeze_bn on: BatchNorm keeps its pretrained statistics.'
+    if not pretrained:
+        return False, 'Freeze_bn auto: off, the backbone has no pretrained weights, so the statistics must be learned.'
+    if physical_batch is None:
+        return False, 'Freeze_bn auto: off, the loader has no fixed batch size to judge.'
+    if physical_batch < FREEZE_BN_AUTO_BELOW:
+        return True, (f'Freeze_bn auto: on, batch size {physical_batch} is under {FREEZE_BN_AUTO_BELOW}, so BatchNorm '
+                      f'keeps its pretrained statistics.')
+    return False, f'Freeze_bn auto: off, batch size {physical_batch} is at least {FREEZE_BN_AUTO_BELOW}.'
 
 
 # --- learning-rate schedules ---------------------------------------------------

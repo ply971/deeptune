@@ -2,6 +2,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.nn.modules.batchnorm import _BatchNorm
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import sys
@@ -16,7 +17,8 @@ import math
 import os
 from handlers.training_args import TrainingOptions
 from trainers.training_basics import (
-    ExperimentLogger, ModelEma, autocast_context, build_scheduler, get_rng_state, install_worker_seeding,
+    FREEZE_BN_AUTO_BELOW, ExperimentLogger, ModelEma, autocast_context, backbone_batchnorm_layers, build_scheduler,
+    decide_freeze_bn, get_rng_state, install_worker_seeding,
     layer_wise_param_groups, mix_batch, peak_memory_mb, reset_peak_memory, resolve_precision, set_rng_state,
     trajectory_differences,
 )
@@ -55,6 +57,7 @@ class Trainer:
         num_epochs: int,
         output_dir: Path = TRAINVAL_OUTPUT_DIR,
         training_options: TrainingOptions | None = None,
+        backbone_pretrained: bool = False,
     ):
         """
         Performs Training & Validation on the input image dataset.
@@ -70,6 +73,7 @@ class Trainer:
             output_dir (str): The directory to save the training logs and model checkpoints.
             training_options (TrainingOptions): Mixed precision, resume, early stopping, schedules and the rest of the
                 training-basics flags (handlers/training_args.py). None means the defaults, i.e. a plain Adam loop.
+            backbone_pretrained (bool): Whether the backbone holds pretrained weights. --freeze_bn auto stays off without them.
 
         Attributes:
         
@@ -96,6 +100,16 @@ class Trainer:
         else: # then regression if not classification
             self.criterion = nn.MSELoss()
         self.options = (training_options or TrainingOptions()).validate(mode)
+        # Before the optimizer is built, so that it never sees the frozen BN parameters.
+        bn_layers = backbone_batchnorm_layers(self.model)
+        physical_batch = getattr(train_loader, 'batch_size', None)
+        freeze_bn, bn_reason = decide_freeze_bn(self.options.freeze_bn, physical_batch, len(bn_layers), backbone_pretrained)
+        self.frozen_bn_layers = bn_layers if freeze_bn else []
+        for layer in self.frozen_bn_layers:
+            layer.requires_grad_(False)
+        self.freeze_bn_info = {'requested': self.options.freeze_bn, 'active': freeze_bn, 'reason': bn_reason,
+                               'frozen_layers': len(self.frozen_bn_layers), 'physical_batch': physical_batch,
+                               'backbone_pretrained': bool(backbone_pretrained), 'auto_cutoff': FREEZE_BN_AUTO_BELOW}
         params = list(filter(lambda p: p.requires_grad, model.parameters()))
         if not params:
             raise ValueError("No trainable parameters found in the model!")
@@ -130,6 +144,14 @@ class Trainer:
 
         # --- training basics (T1) ---
         options = self.options
+        if options.freeze_bn != 'off':
+            self.logger.info(bn_reason)
+        if freeze_bn and not backbone_pretrained:
+            self.logger.warning(bn_reason)
+        if options.grad_accum_steps > 1 and not freeze_bn and any(isinstance(m, _BatchNorm) for m in self.model.modules()):
+            self.logger.warning(f'--grad_accum_steps {options.grad_accum_steps} raises the batch size for the gradients only. '
+                                f'BatchNorm still computes its statistics from each batch of {physical_batch}; '
+                                f'see --freeze_bn.')
         # The smoothed loss trains; self.criterion stays the plain one that
         # validation reports and selects on, so scores remain comparable.
         self.train_criterion = nn.CrossEntropyLoss(label_smoothing=options.label_smoothing) if options.label_smoothing > 0 else None
@@ -378,6 +400,7 @@ class Trainer:
             'updates_per_epoch': self.updates_per_epoch,
             'final_lr': self._current_lr(),
             'selection': self.selection_info(),
+            'freeze_bn': self.freeze_bn_info,
             'resumed_from': self.resumed_from,
             'data_identity': self.data_identity,
             'peak_memory': self.peak_memory,
@@ -410,6 +433,8 @@ class Trainer:
                 break
 
             self.model.train()
+            for layer in self.frozen_bn_layers:  # model.train() switched them back on
+                layer.eval()
             epoch_start = time.time()
             reset_peak_memory(DEVICE)
             window_samples = 0

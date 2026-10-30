@@ -1089,3 +1089,154 @@ def test_cli_rejects_a_bad_combination_before_any_work(tmp_path, capsys):
         deeptune.main(['--modality', 'tabular', '--out', str(tmp_path), '--df', str(df), '--raw-data', '--seed', '1',
                        '--type', 'classification', '--target', 'x'])
     assert 'only supported for the images and video' in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --freeze_bn (P-116)
+# ---------------------------------------------------------------------------
+class BackboneWithBN(nn.Module):
+    """Backbone under model., like DeepTune's models, plus a BatchNorm in the new head."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = nn.Sequential(nn.Conv2d(3, 4, 1), nn.BatchNorm2d(4), nn.ReLU())
+        self.head_norm = nn.BatchNorm1d(4)
+        self.fc1 = nn.Linear(4, 2)
+
+    def forward(self, x, extract_embed=False):
+        return self.fc1(self.head_norm(self.model(x).mean(dim=(2, 3))))
+
+
+def _bn_trainer(tmp_path, setting, batch_size=2, pretrained=True, epochs=2, **options):
+    torch.manual_seed(0)
+    model = BackboneWithBN()
+    train = DataLoader(images(), batch_size=batch_size, shuffle=True)
+    trainer = Trainer(model, train, DataLoader(images(4, seed=1), batch_size=2), 1e-2, 'cls', epochs, tmp_path,
+                      training_options=TrainingOptions(freeze_bn=setting, **options), backbone_pretrained=pretrained)
+    trainer.fit_error_model = False
+    return trainer
+
+
+def _backbone_bn_state(trainer):
+    return {key: value for key, value in cpu_state(trainer.model).items() if key.startswith('model.1.')}
+
+
+def test_frozen_bn_keeps_running_stats_and_parameters_through_training(tmp_path):
+    trainer = _bn_trainer(tmp_path, 'on')
+    before, conv_before = _backbone_bn_state(trainer), cpu_state(trainer.model)['model.0.weight']
+    assert sum(float(v.abs().sum()) for v in before.values()) > 0
+    trainer.train()
+    assert_same_state(_backbone_bn_state(trainer), before)
+    assert not torch.equal(cpu_state(trainer.model)['model.0.weight'], conv_before), 'the rest of the backbone trains'
+    assert not any(p.requires_grad for p in trainer.model.model[1].parameters())
+    optimized = {id(p) for group in trainer.optimizer.param_groups for p in group['params']}
+    assert not any(id(p) in optimized for p in trainer.model.model[1].parameters())
+
+
+def test_bn_stays_frozen_in_every_epoch_and_the_head_bn_still_learns(tmp_path):
+    trainer = _bn_trainer(tmp_path, 'on', epochs=2)
+    head_before = cpu_state(trainer.model)['head_norm.running_mean']
+    seen = []
+    original = trainer.model.forward
+
+    def forward(x, extract_embed=False):
+        if torch.is_grad_enabled():
+            seen.append((trainer.model.model[1].training, trainer.model.head_norm.training, trainer.model.model[0].training))
+        return original(x, extract_embed)
+
+    trainer.model.forward = forward
+    trainer.train()
+    assert len(seen) == 8 and all(entry == (False, True, True) for entry in seen)
+    assert not torch.equal(cpu_state(trainer.model)['head_norm.running_mean'], head_before)
+
+
+def test_off_is_the_default_and_bn_updates_as_before(tmp_path):
+    assert TrainingOptions().freeze_bn == 'off'
+    trainer = _bn_trainer(tmp_path, 'off')
+    before = _backbone_bn_state(trainer)
+    trainer.train()
+    assert not torch.equal(_backbone_bn_state(trainer)['model.1.running_mean'], before['model.1.running_mean'])
+    assert read_run(tmp_path)['freeze_bn']['active'] is False
+
+
+@pytest.mark.parametrize('setting,batch,layers,pretrained,expected', [
+    ('auto', 15, 3, True, True),
+    ('auto', 16, 3, True, False),     # the cutoff itself is not under
+    ('auto', 2, 3, False, False),     # never without pretrained weights
+    ('auto', 2, 0, True, False),      # no BatchNorm
+    ('auto', None, 3, True, False),   # no fixed batch size
+    ('on', 64, 3, True, True),
+    ('on', 2, 3, False, True),        # an explicit request is followed, with a warning
+    ('on', 2, 0, True, False),
+    ('off', 2, 3, True, False),
+])
+def test_freeze_bn_decision(setting, batch, layers, pretrained, expected):
+    assert tb.decide_freeze_bn(setting, batch, layers, pretrained)[0] is expected
+
+
+def test_auto_is_off_for_a_trainer_that_does_not_know_about_pretrained_weights(tmp_path):
+    train = DataLoader(images(), batch_size=2)
+    trainer = Trainer(BackboneWithBN(), train, train, 1e-3, 'cls', 1, tmp_path, training_options=TrainingOptions(freeze_bn='auto'))
+    assert trainer.frozen_bn_layers == []
+
+
+def test_auto_choice_is_logged_and_recorded(tmp_path, caplog):
+    with caplog.at_level(logging.INFO):
+        trainer = _bn_trainer(tmp_path, 'auto', epochs=1)
+    assert 'Freeze_bn auto: on, batch size 2 is under 16' in caplog.text
+    trainer.train()
+    record = read_run(tmp_path)['freeze_bn']
+    assert record['active'] is True and record['frozen_layers'] == 1 and record['physical_batch'] == 2
+
+
+def test_auto_without_pretrained_weights_keeps_bn_learning(tmp_path, caplog):
+    with caplog.at_level(logging.INFO):
+        trainer = _bn_trainer(tmp_path, 'auto', pretrained=False)
+    assert 'no pretrained weights' in caplog.text
+    before = _backbone_bn_state(trainer)
+    trainer.train()
+    assert not torch.equal(_backbone_bn_state(trainer)['model.1.running_mean'], before['model.1.running_mean'])
+
+
+def test_on_without_pretrained_weights_warns(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING):
+        _bn_trainer(tmp_path, 'on', pretrained=False)
+    assert 'never learned' in caplog.text
+
+
+def test_accumulation_warns_about_bn_unless_it_is_frozen(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING):
+        _bn_trainer(tmp_path / 'a', 'off', grad_accum_steps=2)
+    assert 'BatchNorm still computes its statistics from each batch of 2' in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        _bn_trainer(tmp_path / 'b', 'on', grad_accum_steps=2)
+    assert 'BatchNorm still computes' not in caplog.text
+    caplog.clear()
+    data = TensorDataset(torch.randn(4, 4), torch.arange(4) % 3)
+    with caplog.at_level(logging.WARNING):
+        Trainer(Linear(), DataLoader(data, batch_size=2), DataLoader(data, batch_size=2), 1e-3, 'cls', 1, tmp_path / 'c',
+                training_options=TrainingOptions(grad_accum_steps=2))
+    assert 'BatchNorm still computes' not in caplog.text
+
+
+def test_frozen_bn_resumes_exactly(tmp_path):
+    whole = _bn_trainer(tmp_path / 'whole', 'on', epochs=3, checkpoint_every=1)
+    whole.train()
+    first = _bn_trainer(tmp_path / 'first', 'on', epochs=2, checkpoint_every=1)
+    first.train()
+    second = _bn_trainer(tmp_path / 'second', 'on', epochs=3, resume=str(tmp_path / 'first' / CHECKPOINT_FILENAME))
+    second.train()
+    assert_same_state(cpu_state(whole.model), cpu_state(second.model))
+
+
+def test_pretrained_is_false_only_for_the_test_versions():
+    assert tb.is_pretrained_version('r3d_18') and tb.is_pretrained_version('resnet50')
+    assert not tb.is_pretrained_version('dummy_video3d') and not tb.is_pretrained_version('dummy')
+
+
+def test_real_r3d_18_layout_is_found_with_and_without_peft():
+    from src.video.video3d import adjustedVideo3D
+    from src.video.video3d_peft import adjustedPeftVideo3D
+    assert len(tb.backbone_batchnorm_layers(adjustedVideo3D(2, 'dummy_video3d', 1, 4))) == 20
+    assert len(tb.backbone_batchnorm_layers(adjustedPeftVideo3D(2, 'dummy_video3d', 1, 1))) == 20

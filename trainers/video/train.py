@@ -10,7 +10,7 @@ from utils import RunType, set_seed, build_video_model
 from trainers.param_budget import build_with_budget
 from src.video.multi_clip import wrap_for_test_clips
 from handlers.training_args import TrainingOptions
-from trainers.training_basics import data_fingerprint, seed_everything
+from trainers.training_basics import data_fingerprint, is_pretrained_version, seed_everything
 
 
 def main():
@@ -150,7 +150,8 @@ def train(
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR, training_options=training_options)
+    trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR, training_options=training_options,
+                      backbone_pretrained=is_pretrained_version(model_version))
     trainer.fit_error_model = not getattr(args, 'no_error_model', False)
     trainer.data_identity.update(train_file=data_fingerprint(train_df), val_file=data_fingerprint(val_df))
     # The error model must see what evaluation sees: with --test_clips N it is

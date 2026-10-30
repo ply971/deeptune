@@ -121,6 +121,7 @@ tabular and timeseries runs do not support them.
 | `--select_best`, `--early_stopping_patience N`, `--early_stopping_min_delta`, `--selection_metric` | Keep the best validation weights and reload them after training. Early stopping also stops the run after N epochs without improvement. |
 | `--lr_scheduler cosine\|step`, `--warmup_epochs`, `--lr_step_size`, `--lr_gamma`, `--min_lr` | Learning-rate schedule, updated at every optimizer step. |
 | `--grad_accum_steps N` | Update every N batches. The gradient is the mean over the samples of the window, and a shorter last window is still applied. BatchNorm still sees the small batches. |
+| `--freeze_bn auto\|on` | Keep backbone BatchNorm in eval mode with frozen parameters, so small batches do not disturb the pretrained statistics. `auto` does this when `--batch_size` is under 16 (a starting guess, not a measured cutoff) and the backbone has BatchNorm and pretrained weights. |
 | `--seed N` | Seeds python, numpy, torch, CUDA and DataLoader workers. In `deeptune.py` it also fixes the data split, so it varies training and keeps the test set. |
 | `--config FILE` | JSON or YAML defaults, keyed by flag name without the dashes. Flags on the command line win, and an unknown key is an error. |
 | `--experiment_logger mlflow\|wandb`, `--experiment_name` | Also log to MLflow or W&B if already installed. DeepTune does not install them. |
