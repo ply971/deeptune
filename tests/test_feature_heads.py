@@ -1,5 +1,7 @@
 """Heads on cached features (P-102): model contract, learning, the feature dataset, end-to-end training."""
 import json
+import os
+import shutil
 from pathlib import Path
 from unittest import mock
 
@@ -13,9 +15,9 @@ pytest.importorskip('av')
 
 import extract_features as ef
 import train_feature_head as tfh
-from datasets.feature_dataset import CachedFeatureDataset, snippet_indices
+from datasets.feature_dataset import CachedFeatureDataset, open_feature_source, snippet_indices
 from datasets.snippet_features import FeatureStore, same_path
-from datasets.video_datasets import open_video_dataset
+from datasets.video_datasets import ArrowBytesStore, open_video_dataset
 from datasets.video_io import VideoReader
 from datasets.video_synth import translating_clip
 from src.video.feature_heads import FEATURE_HEADS, AttentiveProbe, LinearProbe, build_feature_head
@@ -493,12 +495,15 @@ def _bytes_row(path, video_id, label):
 
 
 @pytest.fixture(params=['dataframe', 'parquet'])
-def as_source(request, tmp_path):
-    """A bytes table as given, or as a parquet file, which reaches the memory-mapped clip store."""
+def as_source(request, tmp_path, monkeypatch):
+    """A bytes table as given, or as a parquet file read through the memory-mapped clip store. Real files only
+    reach that store above LAZY_PARQUET_BYTES, 256 MiB, so the limit is lowered here."""
     def convert(frame, name):
         if request.param == 'dataframe':
             return frame
+        monkeypatch.setattr('datasets.video_datasets.LAZY_PARQUET_BYTES', 0)
         frame.to_parquet(tmp_path / f'{name}.parquet')
+        assert isinstance(open_feature_source(tmp_path / f'{name}.parquet', features_only=True)[0]._store, ArrowBytesStore)
         return tmp_path / f'{name}.parquet'
     return convert
 
@@ -539,4 +544,121 @@ def test_id_only_row_stays_allowed_whatever_the_features_came_from(videos, tmp_p
     ef.extract_features(extracted_from(videos['videos'].iloc[0], 'z', 0), tmp_path / 'f', **SMALL)
     id_only = pd.DataFrame({'video_id': ['z'], 'labels': [1]})
     assert len(CachedFeatureDataset(id_only, tmp_path / 'f', num_snippets=1)) == 1
+
+
+# -- fourth fix round (V-047): files are compared, not only paths -----------------------
+def _id_only(video_id, label=0):
+    return pd.DataFrame({'video_id': [video_id], 'labels': [label]})
+
+
+def _working_copy(videos, tmp_path, name='work.mp4'):
+    folder = tmp_path / 'clips'
+    folder.mkdir(exist_ok=True)
+    return Path(shutil.copy(videos['videos'].iloc[0], folder / name))
+
+
+def _make_sources_relative(root, video_id, source):
+    """What folders written before this round hold when extraction was given a relative path."""
+    for stream in FeatureStore(root).streams():
+        path = FeatureStore(root).sidecar_path(stream, video_id)
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), source=source)))
+
+
+def test_a_file_rewritten_at_the_same_path_is_refused(videos, tmp_path):
+    work = _working_copy(videos, tmp_path)
+    ef.extract_features(_row(work, 'w', 0), tmp_path / 'f', **SMALL)
+    shutil.copy(videos['videos'].iloc[1], work)
+    os.utime(work, (2e9, 2e9))
+    with pytest.raises(ValueError, match='changed since.*video_id.*extract_features.py'):
+        CachedFeatureDataset(_row(work, 'w', 1), tmp_path / 'f', num_snippets=1)
+    assert len(CachedFeatureDataset(_id_only('w', 1), tmp_path / 'f', num_snippets=1)) == 1  # the way out, on your own head
+    ef.extract_features(_row(work, 'w', 1), tmp_path / 'f', **SMALL)  # the other way out
+    assert len(CachedFeatureDataset(_row(work, 'w', 1), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_a_touched_file_is_refused_with_the_way_out(videos, tmp_path):
+    work = _working_copy(videos, tmp_path)
+    ef.extract_features(_row(work, 'w', 0), tmp_path / 'f', **SMALL)
+    os.utime(work, (2e9, 2e9))
+    with pytest.raises(ValueError, match='changed since.*video_id.*extract_features.py'):
+        CachedFeatureDataset(_row(work, 'w', 0), tmp_path / 'f', num_snippets=1)
+
+
+def test_an_unchanged_file_is_accepted_with_forward_slashes(videos, tmp_path):
+    work = _working_copy(videos, tmp_path)
+    ef.extract_features(_row(work, 'w', 0), tmp_path / 'f', **SMALL)
+    assert len(CachedFeatureDataset(_row(str(work).replace(os.sep, '/'), 'w', 0), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_extraction_records_an_absolute_source(videos, tmp_path, monkeypatch):
+    work = _working_copy(videos, tmp_path)
+    monkeypatch.chdir(work.parent)
+    ef.extract_features(_row(work.name, 'r', 0), tmp_path / 'f', **SMALL)
+    recorded = FeatureStore(tmp_path / 'f').read_sidecar('rgb', 'r')['source']
+    assert os.path.isabs(recorded) and same_path(recorded, work)
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # the same file, from anywhere
+    assert len(CachedFeatureDataset(_row(work, 'r', 0), tmp_path / 'f', num_snippets=1)) == 1
+
+
+@pytest.fixture
+def old_relative_folder(videos, tmp_path, monkeypatch):
+    """An older folder whose sidecars record the path relative to the extraction's directory; cwd is that directory."""
+    work = _working_copy(videos, tmp_path, 'v0.mp4')
+    monkeypatch.chdir(work.parent)
+    ef.extract_features(_row(work.name, 'r', 0), tmp_path / 'f', **SMALL)
+    _make_sources_relative(tmp_path / 'f', 'r', work.name)
+    return work
+
+
+def test_old_relative_source_accepts_the_same_file_from_its_own_directory(old_relative_folder, tmp_path):
+    assert len(CachedFeatureDataset(_row(old_relative_folder.name, 'r', 0), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_old_relative_source_accepts_the_same_file_by_absolute_path_from_another_directory(old_relative_folder, tmp_path, monkeypatch):
+    (tmp_path / 'elsewhere').mkdir()
+    monkeypatch.chdir(tmp_path / 'elsewhere')
+    assert len(CachedFeatureDataset(_row(old_relative_folder, 'r', 0), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_old_relative_source_refuses_another_file_of_that_name_from_another_directory(old_relative_folder, videos, tmp_path, monkeypatch):
+    (tmp_path / 'elsewhere').mkdir()
+    shutil.copy(videos['videos'].iloc[1], tmp_path / 'elsewhere' / old_relative_folder.name)
+    monkeypatch.chdir(tmp_path / 'elsewhere')
+    with pytest.raises(ValueError, match='is not the file its features were extracted from'):
+        CachedFeatureDataset(_row(old_relative_folder.name, 'r', 1), tmp_path / 'f', num_snippets=1)
+
+
+def test_old_relative_source_cannot_vouch_for_a_deleted_file(old_relative_folder, tmp_path):
+    old_relative_folder.unlink()
+    with pytest.raises(ValueError, match='features were extracted from.*video_id.*extract_features.py'):
+        CachedFeatureDataset(_row(old_relative_folder.name, 'r', 0), tmp_path / 'f', num_snippets=1)
+    assert len(CachedFeatureDataset(_id_only('r'), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_a_deleted_file_falls_back_to_comparing_paths(videos, tmp_path):
+    work = _working_copy(videos, tmp_path)
+    ef.extract_features(_row(work, 'w', 0), tmp_path / 'f', **SMALL)
+    work.unlink()
+    assert len(CachedFeatureDataset(_row(work, 'w', 0), tmp_path / 'f', num_snippets=1)) == 1
+    with pytest.raises(ValueError, match='features were extracted from'):
+        CachedFeatureDataset(_row(work.with_name('other.mp4'), 'w', 1), tmp_path / 'f', num_snippets=1)
+
+
+def test_an_array_without_its_sidecar_is_refused(videos, tmp_path):
+    first = videos['videos'].iloc[0]
+    ef.extract_features(_row(first, 'k', 0), tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    FeatureStore(tmp_path / 'f').sidecar_path('rgb', 'k').unlink()
+    for rows in (_row(first, 'k', 0), _id_only('k')):
+        with pytest.raises(ValueError, match='feature files are missing.*rgb/k.*extract_features.py'):
+            CachedFeatureDataset(rows, tmp_path / 'f', num_snippets=1)
+
+
+def test_an_unreadable_sidecar_is_refused(videos, tmp_path):
+    first = videos['videos'].iloc[0]
+    ef.extract_features(_row(first, 'k', 0), tmp_path / 'f', **SMALL)
+    FeatureStore(tmp_path / 'f').sidecar_path('rgb', 'k').write_text('{not json')
+    with pytest.raises(ValueError, match='rgb sidecar .* cannot be read'):
+        CachedFeatureDataset(_row(first, 'k', 0), tmp_path / 'f', num_snippets=1)
 

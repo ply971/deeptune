@@ -8,6 +8,7 @@ clip bytes, the sha1 of the bytes (so such rows are read once).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -19,6 +20,7 @@ from torch.utils.data import Dataset
 
 from datasets.snippet_features import FeatureStore, check_streams_agree, safe_video_id, same_path, video_id_for_path
 from datasets.video_datasets import ParquetVideoDataset, VideoDataset, detect_video_storage, open_video_dataset
+from datasets.video_io import source_fingerprint
 
 
 def _finite_or_none(values, i: int):
@@ -63,7 +65,11 @@ def row_video_id(dataset, columns: pd.DataFrame, i: int) -> str:
 
 def check_row_matches_features(dataset, i: int, vid: str, sidecar: dict) -> None:
     """Refuse a row holding another video than its features came from. A row with only an id has nothing to compare.
-    Rows of clip bytes are hashed, which reads each clip once."""
+
+    Rows of clip bytes are hashed, which reads each clip once. A row naming an existing file is compared by fingerprint
+    (resolved path, size, modified time), so a file rewritten with the same size and modified time goes undetected. For a
+    file that is gone only the paths are left to compare, and a relative `source` from an older folder says nothing
+    without the directory it was relative to, so that is refused."""
     source = sidecar.get('source')
     if not source or not isinstance(dataset, (VideoDataset, ParquetVideoDataset)):
         return
@@ -73,7 +79,12 @@ def check_row_matches_features(dataset, i: int, vid: str, sidecar: dict) -> None
         if from_bytes:
             raise ValueError(f'Video {vid!r}: this row names the file {dataset.paths[i]}, but its features were extracted '
                              f'from clip bytes, so they cannot be matched to it. {remedy}')
-        if not same_path(dataset.paths[i], source):
+        recorded = sidecar.get('source_fingerprint')
+        if recorded and os.path.isfile(dataset.paths[i]):
+            if source_fingerprint(dataset.paths[i]) != recorded:
+                raise ValueError(f'Video {vid!r}: {dataset.paths[i]} is not the file its features were extracted from '
+                                 f'({source}): it is another file, or its size or modified time changed since. {remedy}')
+        elif not os.path.isabs(source) or not same_path(dataset.paths[i], source):
             raise ValueError(f'Video {vid!r}: this row names {dataset.paths[i]}, but its features were extracted from '
                              f'{source}. {remedy}')
     elif not from_bytes:
@@ -132,8 +143,18 @@ class CachedFeatureDataset(Dataset):
                         if isinstance(dataset, VideoDataset) else list(self.video_ids))
         trims = {name: pd.to_numeric(columns[name], errors='coerce').to_numpy(dtype=float)
                  for name in ('start_sec', 'end_sec') if name in columns}
+        # An array without its sidecar is an interrupted write: the sidecar is what says which video it is.
+        missing = [(stream, vid) for vid in self.video_ids for stream in self.streams
+                   if not self.store.array_path(stream, vid).is_file() or not self.store.sidecar_path(stream, vid).is_file()]
+        if missing:
+            raise ValueError(f'{len(missing)} of {len(self.video_ids) * len(self.streams)} feature files are missing in '
+                             f'{features_dir} (first: {missing[0][0]}/{missing[0][1]}). Run extract_features.py on these videos.')
         for i, vid in enumerate(self.video_ids):
-            sidecars = {stream: self.store.read_sidecar(stream, vid) or {} for stream in self.streams}
+            sidecars = {stream: self.store.read_sidecar(stream, vid) for stream in self.streams}
+            unreadable = [stream for stream, side in sidecars.items() if not side]
+            if unreadable:
+                raise ValueError(f'Video {vid!r}: the {unreadable[0]} sidecar in {features_dir} cannot be read, so its features '
+                                 'cannot be checked. Run extract_features.py on this video again.')
             check_streams_agree(vid, sidecars)
             sidecar = sidecars[self.streams[0]]
             source = sidecar.get('source')
@@ -147,11 +168,6 @@ class CachedFeatureDataset(Dataset):
                 if name in extracted and extracted[name] != _finite_or_none(values, i):
                     raise ValueError(f'Video {vid!r}: this row asks for {name}={_finite_or_none(values, i)}, but its features '
                                      f'were extracted with {extracted[name]}. Run extract_features.py on these rows again.')
-        missing = [(stream, vid) for vid in self.video_ids for stream in self.streams
-                   if not self.store.array_path(stream, vid).is_file()]
-        if missing:
-            raise ValueError(f'{len(missing)} of {len(self.video_ids) * len(self.streams)} feature files are missing in '
-                             f'{features_dir} (first: {missing[0][0]}/{missing[0][1]}). Run extract_features.py on these videos.')
 
     def __len__(self):
         return len(self.video_ids)

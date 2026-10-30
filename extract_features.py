@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -390,7 +391,8 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
             raise RuntimeError(f'{vid}: {len(stored)} snippets from {count} frames, the formula gives {expected}.')
         meta = reader.metadata()
         sidecar = {
-            'format_version': FORMAT_VERSION, 'video_id': vid, 'stream': stream, 'source': describe_source(source),
+            'format_version': FORMAT_VERSION, 'video_id': vid, 'stream': stream,
+            'source': os.path.abspath(source) if isinstance(source, (str, os.PathLike)) else describe_source(source),
             'source_fingerprint': fingerprint, 'config_hash': extractor.digest, 'fps': meta.fps, 'frame_count': count,
             'source_range': source_range,
             'start_frame': lo, 'end_frame': lo + count, 'duration_sec': count / meta.fps if meta.fps else None,
