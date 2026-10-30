@@ -422,6 +422,8 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
 
     # Checked before anything is decoded: one id cannot stand for two clips, wherever the clash is in the manifest.
     # Case folded, because NTFS and APFS would put Clip and clip in one file.
+    # Every stream's folder, not only the requested ones: load would otherwise join rgb of Clip to motion of clip.
+    on_disk = [{path.stem.casefold(): path.stem for path in (Path(out) / name).glob('*.json')} for name in STREAMS]
     rows: dict = {}
     for i in range(len(dataset)):
         vid = row_video_id(dataset, columns, i)
@@ -432,10 +434,11 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
                              'some file systems; video_id values must be unique ignoring case.')
         if known[2:] != identity:
             raise ValueError(f'Two different videos or trims have the id {vid!r}; video_id values must be unique.')
-        for stream in streams:
-            stored = (store.read_sidecar(stream, vid) or {}).get('video_id', vid)
-            if stored != vid:  # only reachable where the file system ignores case
-                raise ValueError(f'{vid!r} would overwrite the features of {stored!r} in {out}; the ids differ only by case.')
+        for known_ids in on_disk:
+            stored = known_ids.get(vid.casefold(), vid)
+            if stored != vid:
+                raise ValueError(f'{vid!r} would overwrite or mix with the features of {stored!r} in {out}; '
+                                 'the ids differ only by case.')
     if record_arguments is not None:
         write_json_atomic(Path(out) / 'cli_arguments.json', record_arguments)
 

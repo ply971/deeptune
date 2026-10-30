@@ -208,6 +208,23 @@ class SnippetFeatures:
         return self.features[..., start:end]
 
 
+def check_streams_agree(video_id: str, meta: dict[str, dict]) -> None:
+    """Refuse to treat streams as one video unless their sidecars (`meta`, by stream) describe the same frames."""
+    prints = {name: side['source_fingerprint'] for name, side in meta.items() if 'source_fingerprint' in side}
+    if len(set(prints.values())) > 1:
+        sources = {name: meta[name].get('source') for name in prints}
+        raise ValueError(f'Video {video_id!r}: the streams come from different videos, or from a file that has changed '
+                         f'since: {sources}. Run extract_features.py again with all the streams.')
+    ranges = {name: side['source_range'] for name, side in meta.items() if 'source_range' in side}
+    if len({json.dumps(value, sort_keys=True) for value in ranges.values()}) > 1:
+        raise ValueError(f'Video {video_id!r}: the streams come from different trims of the video: {ranges}. '
+                         'Run extract_features.py again with all the streams.')
+    views = {name: side['field_of_view'] for name, side in meta.items() if 'field_of_view' in side}
+    if len({json.dumps(value) for value in views.values()}) > 1:
+        raise ValueError(f'Video {video_id!r}: the streams see different parts of the frame: {views}. Extract them with '
+                         'the same --model_version and --feature_input_size, or load one stream at a time.')
+
+
 class FeatureStore:
     """A feature folder. Pickles as its path, so DataLoader workers do not copy anything."""
 
@@ -322,14 +339,7 @@ class FeatureStore:
             split[name] = (start, start + int(array.shape[-1]))
             start += int(array.shape[-1])
             meta[name] = self.read_sidecar(name, video_id) or {}
-        ranges = {name: side['source_range'] for name, side in meta.items() if 'source_range' in side}
-        if len({json.dumps(value, sort_keys=True) for value in ranges.values()}) > 1:
-            raise ValueError(f'Video {video_id!r}: the streams come from different trims of the video: {ranges}. '
-                             'Run extract_features.py again with all the streams.')
-        views = {name: side['field_of_view'] for name, side in meta.items() if 'field_of_view' in side}
-        if len({json.dumps(value) for value in views.values()}) > 1:
-            raise ValueError(f'Video {video_id!r}: the streams see different parts of the frame: {views}. Extract them with '
-                             'the same --model_version and --feature_input_size, or load one stream at a time.')
+        check_streams_agree(video_id, meta)
         if len({a.shape[:-1] for a in arrays}) > 1:
             shapes = {name: a.shape for name, a in zip(names, arrays)}
             raise ValueError(f'Video {video_id!r}: streams cannot be concatenated, their shapes differ: {shapes}. '

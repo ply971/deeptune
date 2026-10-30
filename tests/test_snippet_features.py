@@ -916,3 +916,41 @@ def test_what_the_check_refuses_really_cannot_run(version, size, frames):
     model = SnippetBackbone(version, pretrained=False)
     with pytest.raises((AssertionError, RuntimeError)), torch.inference_mode():
         model.token_grid(torch.zeros(1, frames, 3, size, size))
+
+
+# -- third fix round (V-043) ---------------------------------------------------------
+@pytest.fixture
+def same_length_clips(tmp_path):
+    """Two different videos with the same frame count, so only the fingerprint can tell them apart."""
+    return [translating_clip(tmp_path / f'same{seed}.mp4', 16, 2, 0, size=32, seed=seed) for seed in (1, 2)]
+
+
+def _one_row(path, video_id):
+    return pd.DataFrame({'videos': [str(path)], 'video_id': [video_id]})
+
+
+def test_streams_from_different_videos_are_not_concatenated(same_length_clips, tmp_path):
+    first, second = same_length_clips
+    ef.extract_features(_one_row(first, 'x'), tmp_path / 'f', streams=('rgb',), **SMALL)
+    ef.extract_features(_one_row(second, 'x'), tmp_path / 'f', streams=('motion',), **SMALL)
+    with pytest.raises(ValueError, match='different videos'):
+        load_snippet_features(tmp_path / 'f', 'x')
+    assert Path(load_snippet_features(tmp_path / 'f', 'x', streams=['rgb']).meta['rgb']['source']).name == first.name
+    assert Path(load_snippet_features(tmp_path / 'f', 'x', streams=['motion']).meta['motion']['source']).name == second.name
+    ef.extract_features(_one_row(second, 'x'), tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)  # the way out it names
+    assert {Path(side['source']).name for side in load_snippet_features(tmp_path / 'f', 'x').meta.values()} == {second.name}
+
+
+@pytest.mark.parametrize('stored,asked', [(('rgb',), ('motion',)), (('motion',), ('rgb',))])
+def test_a_later_run_of_another_stream_cannot_mix_ids_differing_only_by_case(same_length_clips, tmp_path, stored, asked):
+    first, second = same_length_clips
+    ef.extract_features(_one_row(first, 'Clip'), tmp_path / 'f', streams=stored, **SMALL)
+    with pytest.raises(ValueError, match='differ only by case'):
+        ef.extract_features(_one_row(second, 'clip'), tmp_path / 'f', streams=asked, **SMALL)
+    assert not list((tmp_path / 'f' / asked[0]).glob('*'))
+
+
+def test_rerunning_the_same_id_in_another_stream_is_still_allowed(same_length_clips, tmp_path):
+    ef.extract_features(_one_row(same_length_clips[0], 'Clip'), tmp_path / 'f', streams=('rgb',), **SMALL)
+    ef.extract_features(_one_row(same_length_clips[0], 'Clip'), tmp_path / 'f', streams=('motion',), **SMALL)
+    assert list(load_snippet_features(tmp_path / 'f', 'Clip').split) == ['rgb', 'motion']
