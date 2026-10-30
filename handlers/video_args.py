@@ -6,7 +6,7 @@ import it too (it must never import torch)."""
 # and infer.py, so inference rebuilds exactly the pipeline the run recorded.
 VIDEO_DATA_ARG_NAMES = ('video_backend', 'video_storage', 'temporal_sampling', 'clip_stride', 'clip_duration_sec',
                         'motion_source', 'video_augment', 'video_flip', 'video_speed_perturb', 'test_clips',
-                        'num_workers', 'frame_cache', 'frame_cache_size')
+                        'num_workers', 'frame_cache', 'frame_cache_size', 'frame_resize')
 
 
 def _positive_int(text):
@@ -76,10 +76,13 @@ motion: MGSampler, evenly spaced along the cumulative motion curve (more frames 
 datasets under 500 clips (each spawned worker re-imports torch, 15-40 s) and up to 4 above; min(8, cpu/2) elsewhere.""")
     g.add_argument('--frame_cache', default=None, metavar='DIR',
                    help="""Keep sampled, resized frames of deterministic clips in this folder (memory-mapped) and decode
-them only once (default: off). Randomly sampled training clips are not cached; see datasets/frame_cache.py.""")
+them once apart from metadata probing (default: off). Randomly sampled training clips are not cached; see datasets/frame_cache.py.""")
     g.add_argument('--frame_cache_size', type=_non_negative_int, default=256,
                    help="""With --frame_cache: shrink frames so the short side is this many pixels before the model's own
 resize (default 256; never enlarges; 0 keeps the decoded size). Use a value at least as large as the model input.""")
+    g.add_argument('--frame_resize', type=_non_negative_int, default=None,
+                   help='Pre-model short-side resize independent of the cache folder; 0 disables it. '
+                        'Default: frame_cache_size when caching, otherwise 0. Inference inherits the trained resize.')
     if training:
         g.add_argument('--video_storage', choices=['paths', 'bytes'], default='paths',
                        help="""With --raw-data: keep file paths in the dataset parquet (default; clips are read lazily and
@@ -110,7 +113,7 @@ def add_snippet_feature_arguments(parser):
     parser.add_argument('--model_version', default='r3d_18',
                         help='rgb backbone: any DeepTune video or frame backbone, e.g. r3d_18, swin3d_t, resnet18 (default r3d_18).')
     parser.add_argument('--motion_backbone', default='r3d_18',
-                        help='motion backbone; its first convolution is inflated to 2 channels (default r3d_18).')
+                        help='motion backbone: dx, dy and magnitude go through its RGB filters, which were not trained on motion (default r3d_18).')
     parser.add_argument('--feature_weights', choices=['pretrained', 'none'], default='pretrained',
                         help='pretrained (default; may download) or none = fixed random weights, for tests and timing only.')
     parser.add_argument('--snippet_frames', type=_positive_int, default=16, help='Frames per snippet (default 16).')

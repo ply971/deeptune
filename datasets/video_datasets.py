@@ -44,7 +44,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from datasets.frame_cache import (DEFAULT_FRAME_CACHE_SIZE, FrameCache, clip_sampling_is_cacheable, frame_cache_key,
-                                  motion_curve_key)
+                                  motion_curve_key, resize_short_side)
 from datasets.video_augment import ClipAugment, ClipAugmentConfig
 from datasets.video_io import (BACKEND_CHOICES, CURVE_METHODS, VideoDecodeError, VideoReader, describe_source,
                                source_fingerprint)
@@ -108,6 +108,7 @@ class VideoDataOptions:
     num_workers: object = 'auto'
     frame_cache: Optional[str] = None
     frame_cache_size: int = DEFAULT_FRAME_CACHE_SIZE
+    frame_resize: Optional[int] = None
 
     def __post_init__(self):
         if self.video_backend not in BACKEND_CHOICES:
@@ -122,6 +123,13 @@ class VideoDataOptions:
             raise ValueError('--video_flip only applies together with --video_augment.')
         if int(self.frame_cache_size) < 0:
             raise ValueError('frame_cache_size must be 0 (keep the decoded size) or positive.')
+        if self.frame_resize is not None and int(self.frame_resize) < 0:
+            raise ValueError('frame_resize must be 0 (keep the decoded size) or positive.')
+
+    @property
+    def effective_frame_resize(self):
+        return int(self.frame_resize if self.frame_resize is not None else
+                   self.frame_cache_size if self.frame_cache else 0)
 
     def sampling_spec(self, num_frames: int, train: bool) -> SamplingSpec:
         return SamplingSpec(strategy=self.temporal_sampling, num_frames=num_frames, clip_stride=self.clip_stride,
@@ -137,7 +145,7 @@ class VideoDataOptions:
 _OPTION_TYPES = {
     'video_backend': str, 'temporal_sampling': str, 'clip_stride': int, 'clip_duration_sec': float,
     'motion_source': str, 'video_augment': bool, 'video_flip': bool, 'video_speed_perturb': float,
-    'test_clips': int, 'num_workers': (int, str), 'frame_cache': str, 'frame_cache_size': int,
+    'test_clips': int, 'num_workers': (int, str), 'frame_cache': str, 'frame_cache_size': int, 'frame_resize': int,
 }
 
 
@@ -341,7 +349,7 @@ class _VideoClipDataset(Dataset):
         self._ends = self._time_column(df, 'end_sec')
         self._motion_cache: dict = {}
         self._warned: set = set()
-        self.frame_cache = (FrameCache(self.options.frame_cache, self.options.frame_cache_size)
+        self.frame_cache = (FrameCache(self.options.frame_cache, self.options.effective_frame_resize)
                             if self.options.frame_cache else None)
         self._frames_cacheable = clip_sampling_is_cacheable(self.spec, self.train)
         if self.frame_cache is not None and not self._frames_cacheable:
@@ -375,7 +383,7 @@ class _VideoClipDataset(Dataset):
     def _decode_frames(self, i: int, reader: VideoReader, indices: np.ndarray) -> np.ndarray:
         cache = self.frame_cache
         if cache is None:
-            return reader.get_frames(indices, clamp_to_end=True)
+            return resize_short_side(reader.get_frames(indices, clamp_to_end=True), self.options.effective_frame_resize)
         if not self._frames_cacheable:  # same resize as cached clips, so train and val see the same pipeline
             return cache.resize(reader.get_frames(indices, clamp_to_end=True))
         key = frame_cache_key(self.clip_key(i), self.spec, indices, cache.size, reader.backend)

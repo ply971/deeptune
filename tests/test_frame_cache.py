@@ -75,13 +75,22 @@ def test_multi_clip_samples_are_cached_with_their_shape(clip, tmp_path):
         assert torch.equal(first, _dataset(clip, tmp_path / 'cache', num_clips=2)[0][0])
 
 
-def test_motion_sampling_hit_decodes_nothing_at_all(tmp_path):
+def test_motion_sampling_hit_reads_no_frames_and_no_curve(tmp_path):
     path = translating_clip(tmp_path / 'moving.mp4', 24, 2, 0, size=48, static_frames=12)
     first = _dataset(path, tmp_path / 'cache', temporal_sampling='motion')[0][0]
     assert len(_entries(tmp_path / 'cache')) == 2  # the clip and its motion curve
     with mock.patch.object(VideoReader, 'get_frames', side_effect=AssertionError('decoded frames')), \
             mock.patch.object(VideoReader, 'motion_curve', side_effect=AssertionError('recomputed the motion curve')):
         assert torch.equal(first, _dataset(path, tmp_path / 'cache', temporal_sampling='motion')[0][0])
+
+
+def test_a_hit_still_probes_the_source_metadata(clip, tmp_path):
+    """The honest limit of a hit: metadata() demuxes the file and decodes a frame (README, V-039 item 7)."""
+    first = _dataset(clip, tmp_path / 'cache')[0][0]
+    with mock.patch.object(VideoReader, 'metadata', autospec=True, side_effect=VideoReader.metadata) as probe, \
+            mock.patch.object(VideoReader, 'get_frames', side_effect=AssertionError('decoded on a cache hit')):
+        assert torch.equal(first, _dataset(clip, tmp_path / 'cache')[0][0])
+    assert probe.called
 
 
 def test_cache_works_through_a_pickled_dataset(clip, tmp_path):
@@ -342,7 +351,75 @@ def test_inference_rebuilds_the_recorded_cache_settings(tmp_path):
     argv = ['--modality', 'video', '--checkpoint', str(tmp_path / 'weights.pth'), '--data', '.', '--out', str(tmp_path)]
     args = infer.build_parser().parse_args(argv)
     infer.apply_recorded_video_settings(args, argv)
-    assert args.frame_cache == 'C:/somewhere' and args.frame_cache_size == 128
+    assert args.frame_cache is None and args.frame_resize == 128
+
+
+@pytest.mark.parametrize('trained_cache,size,new_cache', [(True, 24, ''), (True, 24, 'new-cache'),
+                                                       (False, 256, 'new-cache')])
+def test_inference_cache_location_does_not_change_pixels(clip, tmp_path, trained_cache, size, new_cache):
+    import infer
+    trained_options = VideoDataOptions(frame_cache=str(tmp_path / 'old') if trained_cache else None,
+                                      frame_cache_size=size)
+    (tmp_path / 'cli_arguments.json').write_text(json.dumps({
+        'frame_cache': trained_options.frame_cache, 'frame_cache_size': size}), encoding='utf-8')
+    argv = ['--modality', 'video', '--checkpoint', str(tmp_path), '--data', '.', '--out', str(tmp_path),
+            '--frame_cache', str(tmp_path / new_cache) if new_cache else '']
+    args = infer.build_parser().parse_args(argv)
+    infer.apply_recorded_video_settings(args, argv)
+    frame = pd.DataFrame({'videos': [str(clip)], 'labels': [1]})
+    trained = VideoDataset(frame, num_frames=4, options=trained_options)[0][0]
+    predicted = VideoDataset(frame, num_frames=4, options=video_options_from_args(args))[0][0]
+    assert torch.equal(trained, predicted)
+
+
+def test_explicit_inference_resize_mismatch_is_reported(tmp_path, capsys):
+    import infer
+    (tmp_path / 'cli_arguments.json').write_text(json.dumps({'frame_cache': None}), encoding='utf-8')
+    argv = ['--modality', 'video', '--checkpoint', str(tmp_path), '--data', '.', '--out', str(tmp_path),
+            '--frame_cache_size', '32']
+    args = infer.build_parser().parse_args(argv)
+    infer.apply_recorded_video_settings(args, argv)
+    assert args.frame_resize == 32
+    assert 'frame resize mismatch: trained=0, inference=32' in capsys.readouterr().out
+
+
+def test_inference_refuses_abbreviated_flags_that_would_count_as_not_given(tmp_path):
+    import infer
+    argv = ['--modality', 'video', '--checkpoint', str(tmp_path), '--data', '.', '--out', str(tmp_path), '--frame_resi', '32']
+    with pytest.raises(SystemExit):
+        infer.build_parser().parse_args(argv)
+
+
+def test_inference_warns_when_a_cache_meets_a_run_without_a_record(tmp_path, capsys):
+    import infer
+    argv = ['--modality', 'video', '--checkpoint', str(tmp_path), '--data', '.', '--out', str(tmp_path), '--frame_cache', 'D']
+    args = infer.build_parser().parse_args(argv)
+    assert infer.apply_recorded_video_settings(args, argv) == {}
+    assert 'trained frame resize is unknown' in capsys.readouterr().out
+
+
+def test_desktop_test_page_keeps_old_runs_argv_and_never_inherits_the_folder(tmp_path):
+    from desktop.config import RunResults, build_infer_argv, infer_config_from_run
+
+    def argv_for(saved):
+        results = RunResults(run_dir=tmp_path, checkpoint_path=tmp_path / 'w.pth',
+                             cli_arguments={'modality': 'video', 'model_version': 'r3d_18', 'num_classes': 2, **saved})
+        return build_infer_argv(infer_config_from_run(results, tmp_path / 'data', tmp_path / 'out'))
+    assert not any(flag in argv_for({}) for flag in ('--frame_resize', '--frame_cache', '--frame_cache_size'))
+    assert '--frame_resize' not in argv_for({'frame_cache': None, 'frame_cache_size': 256})
+    cached = argv_for({'frame_cache': 'C:/elsewhere', 'frame_cache_size': 64})
+    assert '--frame_cache' not in cached and cached[cached.index('--frame_resize') + 1] == '64'
+
+
+def test_a_recorded_resize_applies_without_any_cache(clip, tmp_path):
+    frame = pd.DataFrame({'videos': [str(clip)], 'labels': [1]})
+    resized = VideoDataset(frame, num_frames=2, options=VideoDataOptions(frame_resize=24))
+    with VideoReader(clip) as reader:
+        frames = resized._decode_frames(0, reader, np.arange(2))
+    assert min(frames.shape[1:3]) == 24
+    with VideoReader(clip) as reader:
+        untouched = VideoDataset(frame, num_frames=2)._decode_frames(0, reader, np.arange(2))
+    assert np.array_equal(untouched, _plain_frames(clip, 2))
 
 
 def test_desktop_test_page_passes_the_cache_settings_on():
@@ -352,6 +429,11 @@ def test_desktop_test_page_passes_the_cache_settings_on():
                           video_options={'frame_cache': 'C:/c', 'frame_cache_size': 128})
     argv = build_infer_argv(cfg)
     assert argv[argv.index('--frame_cache') + 1] == 'C:/c' and argv[argv.index('--frame_cache_size') + 1] == '128'
+
+
+def _plain_frames(path, count):
+    with VideoReader(path) as reader:
+        return reader.get_frames(np.arange(count))
 
 
 # -- whole pipeline ---------------------------------------------------------------------
@@ -393,7 +475,8 @@ def test_deeptune_and_the_test_page_run_through_the_cache(tmp_path, monkeypatch)
     data = tmp_path / 'new.csv'
     test_rows[['videos', 'labels']].to_csv(data, index=False)
     argv = config.build_infer_argv(config.infer_config_from_run(config.read_run_results(run), data, tmp_path / 'infer'))
-    assert argv[argv.index('--frame_cache') + 1] == str(cache) and argv[argv.index('--frame_cache_size') + 1] == '24'
+    assert '--frame_cache' not in argv and argv[argv.index('--frame_resize') + 1] == '24'
+    argv += ['--frame_cache', str(cache)]  # explicit local cache reuse is still supported
     with mock.patch.object(VideoReader, 'get_frames', side_effect=AssertionError('test clips were cached by the evaluation')):
         assert infer.main(argv) == 0
     assert len(pd.read_csv(tmp_path / 'infer' / 'predictions.csv')) == len(test_rows)
