@@ -71,23 +71,36 @@ breakdown) next to `model_weights.pth`.
 `250000`, `100k`, `1.5M`, `2m` (underscores and thousands commas are fine).
 
 - **Without `--use-peft`**: the new head (`fc1`/`fc2`, and the attention layer of
-  frame-pooling video models) is always trained; then backbone layers are unfrozen
-  from the output side down while they fit. The rest stays frozen.
+  frame-pooling video models) is always trained; then backbone parameter tensors are
+  unfrozen in reverse registration order (roughly output side first; for ViT, for
+  example, `class_token`/`pos_embedding` are registered first, so the order is
+  approximate) while they fit. The rest of the parameters stay frozen. BatchNorm
+  running statistics are buffers, not parameters, so they still update in frozen
+  layers during training.
 - **With `--use-peft`**: DeepTune picks the largest LoRA rank that fits. In DeepTune
   the LoRA rank is also the head's hidden width (`--embed_size`), so the chosen rank
   is saved as `embed_size` in `cli_arguments.json`, and evaluation, embedding and
-  the Test page rebuild the same model.
+  the Test page rebuild the same model. The log and `parameter_summary.json`
+  (`lora_coverage`) also report how many backbone conv/linear modules received LoRA.
+  For the native 3D CNNs this is currently only some of them (r3d_18: 4 of 20 Conv3d
+  layers, the stem and the downsample convs), so most of the budget goes to the head.
 
-The budget overrides `--freeze-backbone`. If even the head (or LoRA rank 1) does not
-fit, the run stops with the smallest achievable count and suggests `--added_layers 1`
-or a smaller `--embed_size`. SigLIP, text, tabular and timeseries runs do not support it.
+The head alone has `fc1_in × embed_size + embed_size + embed_size × classes + classes`
+parameters with the default `--added_layers 2`. With the default `--embed_size 1000`
+a ResNet-18 head is already about 515k, so choose the budget and `--embed_size`
+together. The budget overrides `--freeze-backbone`. If even the head (or LoRA rank 1)
+does not fit, the run stops with the smallest achievable count and suggests
+`--added_layers 1` or a smaller `--embed_size`. SigLIP, text, tabular and timeseries
+runs do not support it.
 
 ```powershell
-# images: train the head plus as many top ResNet layers as fit in 500k parameters
-.venv\Scripts\python.exe deeptune.py --modality images --df data\images --raw-data --out results --model_version resnet18 --trainable_params 500k
+# images: a 256-wide head (~132k) plus as many top ResNet-18 layers as fit in 500k parameters
+.venv\Scripts\python.exe deeptune.py --modality images --df data\images --raw-data --out results --model_version resnet18 --embed_size 256 --trainable_params 500k
 # video: LoRA on r3d_18, rank chosen so that at most 100k parameters train
 .venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --use-peft --trainable_params 100k
 ```
+`tests/training/test_param_budget.py` checks the arithmetic of every example in this
+block, so keep it in sync when you change them.
   
 ## Models *DeepTune* Supports (Up to Date)
 

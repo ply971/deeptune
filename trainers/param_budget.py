@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+import torch
 import torch.nn as nn
 
 from trainers.param_count import ParamCountError, param_count_issue, parse_param_count
@@ -32,6 +33,8 @@ __all__ = [
     "parameter_group",
     "summarize_parameters",
     "format_summary",
+    "lora_coverage",
+    "format_lora_coverage",
     "apply_top_down_budget",
     "lora_rank_line",
     "choose_lora_rank",
@@ -75,6 +78,33 @@ def summarize_parameters(model: nn.Module) -> dict:
         "frozen": total - trainable,
         "trainable_pct": (100.0 * trainable / total) if total else 0.0,
         "breakdown": breakdown,
+        "lora_coverage": lora_coverage(model),
+    }
+
+
+ELIGIBLE_LORA_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear)
+
+
+def lora_coverage(model: nn.Module) -> dict:
+    """How many pretrained-backbone conv/linear modules carry a LoRA adapter.
+
+    ``eligible_modules`` counts every nn.Conv1d/2d/3d/nn.Linear (subclasses
+    included, e.g. torchvision's Conv3DSimple) in the backbone, not counting
+    LoRA's own A/B layers; a LoRA-wrapped layer is counted once, through its
+    ``base_layer``. ``lora_modules`` counts the layers that have a ``lora_A``.
+    Reporting both makes partial coverage visible (e.g. r3d_18 PEFT currently
+    puts LoRA on 4 of its 20 Conv3d layers, review V-007).
+    """
+    eligible: dict[str, int] = {}
+    for name, module in model.named_modules():
+        if name and parameter_group(name + ".") == "backbone" and isinstance(module, ELIGIBLE_LORA_TYPES):
+            kind = next(t.__name__ for t in ELIGIBLE_LORA_TYPES if isinstance(module, t))
+            eligible[kind] = eligible.get(kind, 0) + 1
+    adapted = {name.split(".lora_A")[0] for name, _ in model.named_parameters() if ".lora_A" in name}
+    return {
+        "lora_modules": len(adapted),
+        "eligible_modules": sum(eligible.values()),
+        "eligible_by_type": dict(sorted(eligible.items())),
     }
 
 
@@ -84,6 +114,19 @@ def format_summary(summary: dict) -> str:
         f"trainable params: {summary['trainable']:,} || all params: {summary['total']:,} "
         f"|| trainable%: {summary['trainable_pct']:.4f}"
     )
+
+
+def format_lora_coverage(summary: dict) -> str | None:
+    """One line on LoRA coverage, or None for a model without LoRA."""
+    coverage = summary.get("lora_coverage") or {}
+    if not coverage.get("lora_modules"):
+        return None
+    by_type = ", ".join(f"{count} {kind}" for kind, count in coverage["eligible_by_type"].items())
+    line = (f"LoRA adapters on {coverage['lora_modules']} of {coverage['eligible_modules']} "
+            f"eligible backbone modules ({by_type})")
+    if coverage["lora_modules"] < coverage["eligible_modules"]:
+        line += "; the other backbone modules stay frozen without LoRA"
+    return line
 
 
 def apply_top_down_budget(model: nn.Module, budget: int) -> dict:
@@ -163,60 +206,66 @@ def _largest_rank(slope: int, intercept: int, budget: int) -> int:
     return (budget - intercept) // slope if slope > 0 else 0
 
 
-def choose_lora_rank(build_fn: Callable[[int], nn.Module], budget: int, start_rank: int) -> tuple[nn.Module, int]:
+def choose_lora_rank(build_fn: Callable[[int], nn.Module], budget: int, start_rank: int | None = None) -> tuple[nn.Module, int]:
     """Largest LoRA rank r >= 1 whose model has at most ``budget`` trainable
     parameters. ``build_fn(r)`` must build the PEFT model with rank r.
 
     The trainable count is affine in r (LoRA A/B tensors and the head's hidden
-    layer grow linearly with it), so one build at ``start_rank`` gives the
-    slope and intercept (``lora_rank_line``) and the rank is solved for. The
-    model is then rebuilt at that rank and its real count compared with the
-    prediction. If they differ (a head dimension that merely happened to equal
-    r), the line is refitted exactly from the two real builds and the model
-    rebuilt once more. The returned model's real trainable count is always
-    checked: an over-budget model is never returned (RuntimeError).
+    layer grow linearly with it). Two cheap probe builds at r = 1 and r = 2
+    give the exact slope and intercept from real counts, the largest fitting r
+    is solved for, and the model is built at that rank (the r = 2 probe is
+    reused when it is the answer). If the real count differs from the line,
+    the line is refitted from the two latest real builds and the model rebuilt
+    once more. The returned model's real trainable count is always checked: an
+    over-budget model is never returned (RuntimeError).
+
+    Every build starts from the torch RNG state at entry, so the returned
+    model's initial weights (head and LoRA) and the RNG state afterwards are
+    the same as for a single ``build_fn(rank)`` call: the search path does not
+    change initialisation. ``start_rank`` is accepted for compatibility and
+    no longer used (probing at the user's embed_size, 1000 by default, built
+    rank-1000 LoRA just to measure it).
 
     Returns (model, rank). Raises ValueError when even r = 1 does not fit.
     """
     budget = parse_param_count(budget)
-    start_rank = max(1, int(start_rank or 1))
+    rng_state = torch.random.get_rng_state()
 
-    def too_small(minimum: int) -> ValueError:
-        return ValueError(
-            f"Even LoRA rank 1 needs {minimum:,} trainable parameters, more than the budget of "
-            f"{budget:,}. Raise --trainable_params to at least {minimum:,} or use --added_layers 1."
+    def build(rank: int) -> tuple[nn.Module, int]:
+        torch.random.set_rng_state(rng_state)
+        model = build_fn(rank)
+        return model, summarize_parameters(model)["trainable"]
+
+    model, count_1 = build(1)
+    if count_1 > budget:
+        raise ValueError(
+            f"Even LoRA rank 1 needs {count_1:,} trainable parameters, more than the budget of "
+            f"{budget:,}. Raise --trainable_params to at least {count_1:,} or use --added_layers 1."
         )
-
-    model = build_fn(start_rank)
-    first_count = summarize_parameters(model)["trainable"]
-    slope, intercept = lora_rank_line(model, start_rank)
+    del model
+    model, count_2 = build(2)
+    slope, intercept = count_2 - count_1, count_1 - (count_2 - count_1)
 
     if slope <= 0:  # nothing depends on r (should not happen for DeepTune's PEFT classes)
-        if first_count > budget:
-            raise ValueError(
-                f"This PEFT model has {first_count:,} trainable parameters whatever the LoRA rank, "
-                f"more than the budget of {budget:,}. Raise the budget or use --added_layers 1."
-            )
-        return model, start_rank
+        model, count = build(1)
+        return model, 1
 
     rank = max(1, _largest_rank(slope, intercept, budget))
-    count = first_count
-    if rank != start_rank:
-        model = build_fn(rank)
-        count = summarize_parameters(model)["trainable"]
+    last_rank, count = 2, count_2
+    if rank != 2:
+        del model
+        model, count = build(rank)
         if count != slope * rank + intercept:
-            # The shape-based line was off: refit it exactly from the two real builds.
-            slope = (count - first_count) // (rank - start_rank)
+            # Not affine after all: refit from the two latest real builds.
+            slope = (count - count_2) // (rank - last_rank)
             intercept = count - slope * rank
             refit = max(1, _largest_rank(slope, intercept, budget)) if slope > 0 else rank
             if refit != rank:
                 rank = refit
-                model = build_fn(rank)
-                count = summarize_parameters(model)["trainable"]
+                del model
+                model, count = build(rank)
 
     if count > budget:
-        if rank == 1:
-            raise too_small(count)
         raise RuntimeError(
             f"Could not find a LoRA rank within the budget of {budget:,}: the model built at rank "
             f"{rank} has {count:,} trainable parameters."
@@ -254,5 +303,9 @@ def build_with_budget(
         log(f"Trainable-parameter budget {budget:,}: head plus the top "
             f"{summary['unfrozen_backbone_tensors']} of {summary['backbone_tensors']} backbone "
             f"tensors are trainable.")
-    log(format_summary(summarize_parameters(model)))
+    summary = summarize_parameters(model)
+    log(format_summary(summary))
+    coverage = format_lora_coverage(summary)
+    if coverage:
+        log(coverage)
     return model, embed_size
