@@ -199,6 +199,14 @@ block, so keep it in sync when you change them.
       <td>Video</td>
       <td>'r3d_18', 'mc3_18', 'r2plus1d_18', 'mvit_v2_s', 'swin3d_t', 'swin3d_s', or 'swin3d_b'</td>
     <tr>
+      <td>Temporal Video (--video_arch)</td>
+      <td>✅</td>
+      <td>✅</td>
+      <td>✅</td>
+      <td>Classification & Regression</td>
+      <td>Video</td>
+      <td>'late_fusion' (first and last frames), 'cnn_rnn' (LSTM or GRU over frames) and 'temporal_transformer' (transformer over frames): any 2D version above, or 'siglip'. 'early_fusion' (frames stacked on the first convolution), 'tsm' (temporal shift in each residual block) and 'two_stream' (RGB + motion fields): ResNet versions. 'slow_fusion': a native 3D CNN, 'r2plus1d_18' by default. 'single_frame': the middle frame, as a baseline</td>
+    <tr>
       <td>GPT</td>
       <td>✅</td>
       <td>—</td>

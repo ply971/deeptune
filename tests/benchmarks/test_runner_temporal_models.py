@@ -32,3 +32,18 @@ def test_every_temporal_spec_runs_and_reports_speed(tmp_path):
 def test_unknown_temporal_spec_is_refused():
     with pytest.raises(SystemExit):
         bench.parse_spec('fancy_fusion:resnet18')
+
+
+@pytest.mark.parametrize('task,columns', [('scene_bias', ['biased_val_acc', 'unbiased_test_acc']), ('speed', ['test_r2', 'test_mae'])])
+def test_other_tasks_run_the_temporal_models(tmp_path, task, columns):
+    specs = ['tsm:resnet_tiny', 'two_stream:resnet_tiny']
+    out = bench.main(['--task', task, '--out', str(tmp_path), '--models', *specs, '--epochs', '1', *TINY])
+    table = pd.read_csv(out / 'results.csv')
+    assert table['model'].tolist() == specs
+    assert table[columns].notna().all().all()
+
+
+def test_siglip_gets_its_own_preprocessing(tmp_path):
+    """siglip_tiny takes 32 px only, so this fails if the runner's --resize transform reaches it."""
+    out = bench.main(['--task', 'direction', '--out', str(tmp_path), '--models', 'mean:siglip_tiny', '--epochs', '1', *TINY, '--resize', '64'])
+    assert pd.read_csv(out / 'results.csv')['test_acc'].between(0, 1).all()

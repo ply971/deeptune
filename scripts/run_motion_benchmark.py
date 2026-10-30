@@ -180,7 +180,8 @@ def make_loaders(ds, kind, version, num_frames, args):
     from datasets.video_datasets import ParquetVideoDataset, VideoDataOptions, collate_video_samples, native_video_transform
     from handlers.video_manifest import load_video_manifest
 
-    clip_transform = native_video_transform(version) if kind == "native" else None
+    # Native 3D models and SigLIP have their own preprocessing; other 2D backbones use the per-frame transform below.
+    clip_transform = native_video_transform(version) if kind == "native" or version.startswith("siglip") else None
     frame_transform = None if clip_transform is not None else transforms.Compose([
         transforms.Resize((args.resize, args.resize)),
         transforms.ToTensor(),
