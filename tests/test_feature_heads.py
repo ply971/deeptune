@@ -280,6 +280,88 @@ def test_training_refuses_leaking_splits_before_it_writes_anything(videos, tmp_p
     assert not (tmp_path / 'probe').exists()
 
 
+def test_two_trims_of_one_bytes_clip_across_splits_are_refused(videos, tmp_path):
+    """Bytes have no path to compare, so the sidecar fingerprint identifies the source."""
+    clip = Path(videos.videos.iloc[3]).read_bytes()
+    other = Path(videos.videos.iloc[2]).read_bytes()
+    rows = pd.DataFrame({'videos': [clip, clip, other], 'labels': [0, 1, 0], 'video_id': ['t1', 't2', 'o'],
+                         'start_sec': [0.0, 0.3, 0.0], 'end_sec': [0.3, 0.6, 0.3]})
+    ef.extract_features(rows, tmp_path / 'f', **SMALL)
+    paths = {}
+    for name, picked in (('train', [0]), ('val', [2]), ('test', [1])):
+        paths[name] = tmp_path / f'{name}.parquet'
+        rows.iloc[picked].to_parquet(paths[name])
+    with pytest.raises(ValueError, match='Split leakage.*share sources'):
+        tfh.main(['--features', str(tmp_path / 'f'), '--train_df', str(paths['train']), '--val_df', str(paths['val']),
+                  '--test_df', str(paths['test']), '--out', str(tmp_path / 'probe'), '--head', 'linear_probe', '--num_epochs', '1'])
+    audit = tfh.audit_splits({'train': CachedFeatureDataset(paths['train'], tmp_path / 'f', num_snippets=1),
+                              'val': CachedFeatureDataset(paths['val'], tmp_path / 'f', num_snippets=1)})
+    assert audit['video_and_source_overlap'] is False  # a different clip is not flagged
+
+
+def test_split_audit_treats_ids_differing_only_by_case_as_one():
+    from types import SimpleNamespace
+    left, right = (SimpleNamespace(video_ids=[vid], sources=[vid + '.mp4'], groups=None) for vid in ('Clip', 'clip'))
+    with pytest.raises(ValueError, match='share video_ids'):
+        tfh.audit_splits({'train': left, 'test': right})
+
+
+def _rewrite_motion_version(root, version):
+    path = Path(root) / 'features.json'
+    info = json.loads(path.read_text())
+    config = info['streams']['motion']['config']
+    config.pop('preprocessing_version', None)
+    if version is not None:
+        config['preprocessing_version'] = version
+    path.write_text(json.dumps(info))
+
+
+@pytest.mark.parametrize('version', [None, 2])
+def test_older_motion_features_are_refused_at_load(videos, tmp_path, version):
+    ef.extract_features(videos, tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    assert len(CachedFeatureDataset(videos, tmp_path / 'f', num_snippets=1)) == 4
+    _rewrite_motion_version(tmp_path / 'f', version)
+    with pytest.raises(ValueError, match='motion features from preprocessing version .*extract_features.py again'):
+        CachedFeatureDataset(videos, tmp_path / 'f', num_snippets=1)
+    with pytest.raises(ValueError, match='extract_features.py again'):
+        CachedFeatureDataset(videos, tmp_path / 'f', streams=['motion'], num_snippets=1)
+    assert len(CachedFeatureDataset(videos, tmp_path / 'f', streams=['rgb'], num_snippets=1)) == 4  # rgb is unaffected
+
+
+def test_chance_row_uses_the_training_labels(tmp_path):
+    from torch.utils.data import TensorDataset
+    data = TensorDataset(torch.tensor([[3., 0.], [0., 3.], [0., 3.], [0., 3.]]), torch.tensor([0, 1, 1, 1]))
+    data.video_ids = list('abcd')
+    result = tfh.evaluate_head(torch.nn.Identity(), DataLoader(data, batch_size=2), 'cls', train_labels=[0, 0, 0, 1])
+    assert result['accuracy'] == 1.0
+    assert result['chance']['predicts'] == 'training majority class 0'  # not the majority of the test rows
+    assert result['chance']['accuracy'] == pytest.approx(0.25)
+    assert result['chance']['balanced_accuracy'] == pytest.approx(0.5)
+    assert result['chance']['macro_f1'] == pytest.approx(0.2)
+    regression = TensorDataset(torch.tensor([[1.], [3.]]), torch.tensor([1., 3.]))
+    regression.video_ids = ['a', 'b']
+    chance = tfh.evaluate_head(torch.nn.Identity(), DataLoader(regression, batch_size=2), 'reg', train_labels=[0., 4.])['chance']
+    assert chance['predicts'] == 'training mean 2' and chance['mse'] == pytest.approx(1.0) and chance['mae'] == pytest.approx(1.0)
+
+
+def test_the_probe_run_records_what_its_features_were_made_with(videos, tmp_path, capsys):
+    ef.extract_features(videos, tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    paths = {name: tmp_path / f'{name}.csv' for name in ('train', 'val', 'test')}
+    videos.iloc[:2].to_csv(paths['train'], index=False)
+    videos.iloc[2:3].to_csv(paths['val'], index=False)
+    videos.iloc[3:].to_csv(paths['test'], index=False)
+    assert tfh.main(['--features', str(tmp_path / 'f'), '--train_df', str(paths['train']), '--val_df', str(paths['val']),
+                     '--test_df', str(paths['test']), '--out', str(tmp_path / 'probe'), '--head', 'linear_probe', '--num_epochs', '1',
+                     '--batch_size', '2', '--num_snippets', '2', '--fixed-seed']) == 0
+    saved = json.loads((tmp_path / 'probe' / 'cli_arguments.json').read_text())
+    streams = json.loads((tmp_path / 'f' / 'features.json').read_text())['streams']
+    assert saved['seed'] == 42
+    assert saved['feature_config_hash'] == {name: streams[name]['config_hash'] for name in ('rgb', 'motion')}
+    assert saved['motion_weights_trained_on_motion'] is False
+    assert 'not trained on motion' in capsys.readouterr().out
+    assert 'chance' in json.loads((tmp_path / 'probe' / 'metrics.json').read_text())
+
+
 def test_a_missing_group_column_is_reported_not_passed_off_as_checked(capsys):
     from types import SimpleNamespace
     left = SimpleNamespace(video_ids=['a'], sources=['a.mp4'], groups=None)

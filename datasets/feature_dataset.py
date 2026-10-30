@@ -90,6 +90,7 @@ class CachedFeatureDataset(Dataset):
         self.streams = list(streams) if streams else self.store.streams()
         if not self.streams:
             raise FileNotFoundError(f'{features_dir} has no extracted features; run extract_features.py first.')
+        self.store.check_motion_is_current(self.streams)
         self.num_snippets = int(num_snippets)
         self.train = bool(train)
         dataset, columns = open_feature_source(source, features_only=True)
@@ -102,7 +103,7 @@ class CachedFeatureDataset(Dataset):
         self.float_labels = bool(pd.api.types.is_float_dtype(columns[target]))
         self.video_ids = [row_video_id(dataset, columns, i) for i in range(len(dataset))]
         self.groups = columns['group'].tolist() if 'group' in columns else None
-        # A source path catches disjoint trims of one video and aliases with distinct IDs.
+        # The source catches disjoint trims of one video under distinct ids: its path, or for bytes the fingerprint.
         self.sources = ([str(Path(p).resolve()).casefold() for p in dataset.paths]
                         if isinstance(dataset, VideoDataset) else list(self.video_ids))
         trims = {name: pd.to_numeric(columns[name], errors='coerce').to_numpy(dtype=float)
@@ -112,6 +113,8 @@ class CachedFeatureDataset(Dataset):
             source = sidecar.get('source')
             if source and not source.startswith('<'):
                 self.sources[i] = str(Path(source).resolve()).casefold()
+            elif source and sidecar.get('source_fingerprint'):
+                self.sources[i] = sidecar['source_fingerprint']
             extracted = sidecar.get('source_range') or {}
             for name, values in trims.items():
                 if name in extracted and extracted[name] != _finite_or_none(values, i):

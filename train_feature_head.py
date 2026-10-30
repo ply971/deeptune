@@ -53,7 +53,8 @@ def audit_splits(splits):
             a, b = getattr(left, field), getattr(right, field)
             if a is None or b is None:
                 continue
-            shared = {str(v) for v in a if pd.notna(v)} & {str(v) for v in b if pd.notna(v)}
+            key = str.casefold if field == 'video_ids' else str  # Clip and clip are one file on NTFS
+            shared = {key(str(v)) for v in a if pd.notna(v)} & {key(str(v)) for v in b if pd.notna(v)}
             if shared:
                 raise ValueError(f'Split leakage: {left_name} and {right_name} share {field}: '
                                  f'{sorted(shared)[:3]}. Use disjoint videos and groups.')
@@ -65,7 +66,25 @@ def audit_splits(splits):
             'group_check': 'checked' if grouped else 'incomplete: group column missing from one or more splits'}
 
 
-def evaluate_head(model, loader, mode, predictions_path=None):
+def _chance_row(truth, train_labels, mode):
+    """The score of a model that learned only the training labels: the majority class, or the mean for regression."""
+    import numpy as np
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
+    truth, train_labels = np.asarray(truth), np.asarray(train_labels)
+    if mode == 'cls':
+        values, counts = np.unique(train_labels, return_counts=True)
+        majority = values[counts.argmax()]
+        constant = np.full(len(truth), majority)
+        return {'predicts': f'training majority class {int(majority)}', 'accuracy': accuracy_score(truth, constant),
+                'balanced_accuracy': balanced_accuracy_score(truth, constant),
+                'macro_f1': f1_score(truth, constant, average='macro', zero_division=0)}
+    constant = np.full(len(truth), float(train_labels.mean()))
+    return {'predicts': f'training mean {float(train_labels.mean()):g}', 'mse': mean_squared_error(truth, constant),
+            'mae': mean_absolute_error(truth, constant), 'r2': r2_score(truth, constant) if len(truth) > 1 else None}
+
+
+def evaluate_head(model, loader, mode, predictions_path=None, train_labels=None):
+    """Metrics and per-video predictions; `train_labels` adds the `chance` row to compare them with."""
     import torch
     import numpy as np
     import pandas as pd
@@ -98,7 +117,21 @@ def evaluate_head(model, loader, mode, predictions_path=None):
                    'r2': r2_score(truth, prediction) if len(truth) > 1 else None}
     if predictions_path is not None:
         pd.DataFrame(rows).to_csv(predictions_path, index=False)
+    if train_labels is not None:
+        metrics['chance'] = _chance_row(truth, train_labels, mode)
     return {**metrics, 'n': len(truth)}
+
+
+def feature_provenance(dataset):
+    """What the probe's features were made with, for its run output."""
+    streams = dataset.store.info()['streams']
+    provenance = {'feature_config_hash': {name: streams[name].get('config_hash') for name in dataset.streams if name in streams}}
+    if 'motion' in dataset.streams:
+        sidecar = dataset.store.read_sidecar('motion', dataset.video_ids[0]) or {}
+        provenance['motion_weights_trained_on_motion'] = sidecar.get('motion_weights_trained_on_motion')
+        if provenance['motion_weights_trained_on_motion'] is False:
+            print('NOTE: the motion stream runs through RGB filters that were not trained on motion.')
+    return provenance
 
 
 def train(args: argparse.Namespace) -> Path:
@@ -106,7 +139,7 @@ def train(args: argparse.Namespace) -> Path:
     from src.video.feature_heads import build_feature_head
     from trainers.vision.trainer import Trainer
     from utils import set_seed
-    set_seed(args.fixed_seed)
+    seed = set_seed(args.fixed_seed)
     common = dict(features_dir=args.features, streams=args.streams, num_snippets=args.num_snippets, target=args.target)
     train_set = CachedFeatureDataset(args.train_df, train=True, **common)
     val_set = CachedFeatureDataset(args.val_df, train=False, **common)
@@ -127,11 +160,11 @@ def train(args: argparse.Namespace) -> Path:
     weights = args.out / 'model_weights.pth'
     trainer.saveModel(path=str(weights))
     arguments = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
-    arguments['input_dim'] = train_set.feature_dim()
+    arguments.update(input_dim=train_set.feature_dim(), seed=seed, **feature_provenance(train_set))
     (args.out / 'cli_arguments.json').write_text(json.dumps(arguments, indent=2), encoding='utf-8')
     if args.test_df:
         metrics = evaluate_head(model, _loader(test_set, args.batch_size, False, 0), args.mode,
-                                predictions_path=args.out / 'predictions.csv')
+                                predictions_path=args.out / 'predictions.csv', train_labels=train_set.labels)
         (args.out / 'metrics.json').write_text(json.dumps(metrics, indent=2), encoding='utf-8')
         print(f'Test: {metrics}')
     return weights
