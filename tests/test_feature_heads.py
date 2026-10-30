@@ -14,6 +14,7 @@ pytest.importorskip('av')
 import extract_features as ef
 import train_feature_head as tfh
 from datasets.feature_dataset import CachedFeatureDataset, snippet_indices
+from datasets.snippet_features import same_path
 from datasets.video_datasets import open_video_dataset
 from datasets.video_io import VideoReader
 from datasets.video_synth import translating_clip
@@ -443,3 +444,45 @@ def test_shared_trainer_learns_cached_signal_on_disjoint_test_rows(tmp_path):
     assert predictions.target.tolist() == [i % 2 for i in range(16)]
     assert (predictions.prediction == predictions.target).mean() == metrics['accuracy']
     assert json.loads((tmp_path / 'learned' / 'split_audit.json').read_text())['group_check'] == 'checked'
+
+
+# -- third fix round (V-043) ---------------------------------------------------------
+def _row(path, video_id, label):
+    return pd.DataFrame({'videos': [str(path)], 'video_id': [video_id], 'labels': [label]})
+
+
+def test_row_naming_another_video_than_its_features_is_refused(videos, tmp_path):
+    first, second = videos['videos'].iloc[:2]
+    ef.extract_features(_row(first, 'y', 0), tmp_path / 'f', **SMALL)
+    with pytest.raises(ValueError, match='features were extracted from'):
+        CachedFeatureDataset(_row(second, 'y', 1), tmp_path / 'f', num_snippets=1)
+    assert len(CachedFeatureDataset(_row(first, 'y', 1), tmp_path / 'f', num_snippets=1)) == 1  # the normal case
+    assert len(CachedFeatureDataset(pd.DataFrame({'video_id': ['y'], 'labels': [1]}), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_row_may_spell_the_path_of_its_features_differently(videos, tmp_path):
+    first = Path(videos['videos'].iloc[0])
+    ef.extract_features(_row(first, 'y', 0), tmp_path / 'f', **SMALL)
+    spelled = first.parent / 'elsewhere' / '..' / first.name
+    assert len(CachedFeatureDataset(_row(spelled, 'y', 0), tmp_path / 'f', num_snippets=1)) == 1
+
+
+def test_same_path_ignores_case_only_where_the_file_system_does(tmp_path):
+    (tmp_path / 'probe').write_text('')
+    ignores_case = (tmp_path / 'PROBE').exists()
+    (tmp_path / 'clip.mp4').write_text('')
+    assert same_path(tmp_path / 'clip.mp4', tmp_path / 'sub' / '..' / 'clip.mp4')
+    assert same_path(tmp_path / 'clip.mp4', tmp_path / 'CLIP.mp4') is ignores_case
+    assert not same_path(tmp_path / 'clip.mp4', tmp_path / 'other.mp4')
+    assert same_path(tmp_path / 'gone.mp4', tmp_path / 'sub' / '..' / 'gone.mp4')  # the videos may have been removed
+    assert not same_path(tmp_path / 'gone.mp4', tmp_path / 'gone2.mp4')
+
+
+def test_dataset_refuses_streams_of_different_videos_when_built(videos, tmp_path):
+    first, second = videos['videos'].iloc[:2]
+    ef.extract_features(_row(first, 'x', 0), tmp_path / 'f', streams=('rgb',), **SMALL)
+    ef.extract_features(_row(second, 'x', 0), tmp_path / 'f', streams=('motion',), **SMALL)
+    id_only = pd.DataFrame({'video_id': ['x'], 'labels': [0]})
+    with pytest.raises(ValueError, match='different videos'):
+        CachedFeatureDataset(id_only, tmp_path / 'f', num_snippets=1)
+    assert len(CachedFeatureDataset(id_only, tmp_path / 'f', streams=['motion'], num_snippets=1)) == 1

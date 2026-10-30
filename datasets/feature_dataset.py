@@ -17,7 +17,7 @@ import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
-from datasets.snippet_features import FeatureStore, safe_video_id, video_id_for_path
+from datasets.snippet_features import FeatureStore, check_streams_agree, safe_video_id, same_path, video_id_for_path
 from datasets.video_datasets import ParquetVideoDataset, VideoDataset, detect_video_storage, open_video_dataset
 
 
@@ -109,9 +109,14 @@ class CachedFeatureDataset(Dataset):
         trims = {name: pd.to_numeric(columns[name], errors='coerce').to_numpy(dtype=float)
                  for name in ('start_sec', 'end_sec') if name in columns}
         for i, vid in enumerate(self.video_ids):
-            sidecar = self.store.read_sidecar(self.streams[0], vid) or {}
+            sidecars = {stream: self.store.read_sidecar(stream, vid) or {} for stream in self.streams}
+            check_streams_agree(vid, sidecars)
+            sidecar = sidecars[self.streams[0]]
             source = sidecar.get('source')
             if source and not source.startswith('<'):
+                if isinstance(dataset, VideoDataset) and not same_path(dataset.paths[i], source):
+                    raise ValueError(f'Video {vid!r}: this row names {dataset.paths[i]}, but its features were extracted from '
+                                     f'{source}. Fix the row, or run extract_features.py on these rows again.')
                 self.sources[i] = str(Path(source).resolve()).casefold()
             elif source and sidecar.get('source_fingerprint'):
                 self.sources[i] = sidecar['source_fingerprint']

@@ -134,6 +134,17 @@ def safe_video_id(value) -> str:
     return cleaned
 
 
+def same_path(left, right) -> bool:
+    """Whether two paths name one file. Existing files are asked directly, which also settles letter case, links and
+    8.3 names as the file system sees them; otherwise the spellings are compared, ignoring case only on Windows."""
+    try:
+        if os.path.samefile(left, right):
+            return True
+    except OSError:
+        pass
+    return os.path.normcase(os.path.realpath(left)) == os.path.normcase(os.path.realpath(right))
+
+
 def video_id_for_path(path, start_sec=None, end_sec=None) -> str:
     """Id of a manifest row without a ``video_id`` column. It depends only on that
     row, so a train split and the full manifest agree on it."""
