@@ -21,6 +21,7 @@ import pandas as pd
 
 # Torch-free (the GUI process must never import torch); see trainers/param_count.py.
 from trainers.param_count import param_count_issue
+from handlers.video_arch import parse_pooling_spec
 
 # ---------------------------------------------------------------------------
 # What each modality actually accepts as --model_version, and what each
@@ -39,10 +40,9 @@ IMAGE_MODEL_VERSIONS: dict[str, list[str]] = {
     "siglip": ["siglip"],
 }
 
-# The frame-pooling video path wraps a 2D backbone via get_model_cls(), which
-# only resolves architectures registered in utils.MODEL_CLS_MAP -- siglip is
-# handled through an entirely separate custom code path and isn't in that
-# map, so it cannot be used as a video frame backbone.
+# Video backbones the GUI offers. SigLIP works as a frame backbone from the CLI
+# (--modality video --model_version siglip, src/video/siglip_backbone.py), but
+# its weights are a separate download, so the GUI does not list it yet.
 VIDEO_FRAME_MODEL_VERSIONS: list[str] = [
     v for family, versions in IMAGE_MODEL_VERSIONS.items() if family != "siglip" for v in versions
 ]
@@ -57,6 +57,8 @@ MODEL_VERSIONS_BY_MODALITY: dict[str, list[str]] = {
     "timeseries": ["deepAR"],
     "video": [*VIDEO_FRAME_MODEL_VERSIONS, *VIDEO_NATIVE_MODEL_VERSIONS],
 }
+# Accepted from the command line, not offered in the GUI: SigLIP, and the untrained tiny models for tests and smoke runs.
+VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d"]
 
 MODALITIES = ["images", "text", "tabular", "timeseries", "video"]
 
@@ -186,7 +188,8 @@ def validate_config(cfg: RunConfig) -> list[str]:
         issues.append('The output directory points to a file. Choose a folder.')
     if cfg.modality not in MODALITIES:
         issues.append('Choose a supported modality.')
-    elif cfg.model_version not in MODEL_VERSIONS_BY_MODALITY[cfg.modality]:
+    elif cfg.model_version not in MODEL_VERSIONS_BY_MODALITY[cfg.modality] and not (
+            cfg.modality == 'video' and cfg.model_version in VIDEO_CLI_ONLY_MODEL_VERSIONS):
         issues.append('Choose a model supported by this modality.')
     if cfg.mode not in ('cls', 'reg'):
         issues.append('Task must be classification (cls) or regression (reg).')
@@ -206,7 +209,7 @@ def validate_config(cfg: RunConfig) -> list[str]:
         issues.append("Added layers must be 1 or 2.")
     if cfg.modality == 'text' and cfg.mode != 'cls':
         issues.append('Text models currently support classification only.')
-    if cfg.model_version == 'siglip' and cfg.mode != 'cls':
+    if cfg.model_version == 'siglip' and cfg.modality != 'video' and cfg.mode != 'cls':
         issues.append('SigLIP currently supports classification only.')
     if cfg.use_peft and (cfg.modality not in NEEDS_TRANSFER_LEARNING_OPTIONS or cfg.model_version == 'gpt2'):
         issues.append('PEFT is not supported for this model.')
@@ -223,7 +226,9 @@ def validate_config(cfg: RunConfig) -> list[str]:
         issues.extend(video_file_split_issues(cfg))
         if cfg.num_frames < 1:
             issues.append('Frames per clip must be at least 1.')
-        if cfg.pooling not in ('mean', 'attention', 'single_frame'):
+        try:
+            parse_pooling_spec(cfg.pooling)
+        except ValueError:
             issues.append('Choose mean, attention or single_frame pooling.')
         if cfg.model_version == 'mvit_v2_s' and cfg.num_frames != 16:
             issues.append('mvit_v2_s requires exactly 16 frames per clip.')

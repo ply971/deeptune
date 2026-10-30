@@ -54,6 +54,9 @@ class adjustedResNet(nn.Module):
             self.model = pretrained_resnet
         elif resnet_version == "dummy": # This is for testing purposes only.
             self.model = torchvision.models.resnet18(weights=None)
+        elif resnet_version == "resnet_tiny": # Untrained and tiny, for tests and CPU smoke runs (src/video/tiny_backbone.py).
+            from src.video.tiny_backbone import TinyResNet
+            self.model = TinyResNet()
         else:
             raise ValueError("Invalid resnet_version. Choose from 'resnet18', 'resnet34', 'resnet50', 'resnet101', or 'resnet152'.")
         

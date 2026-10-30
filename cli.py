@@ -2,9 +2,10 @@ from argparse import ArgumentParser, RawTextHelpFormatter
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-from utils import UseCase, RunType, get_model_architecture, set_seed
+from utils import UseCase, RunType, get_model_architecture, is_native_video_architecture, set_seed
 from trainers.param_count import parse_param_count
 from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
+from handlers.video_arch import VIDEO_ARCH_ARG_NAMES, add_video_arch_arguments, pooling_argument, pooling_from_args, resolve_model_version
 import json
 import os, shutil
 class DeepTuneVisionOptions:
@@ -172,6 +173,7 @@ class DeepTuneVisionOptions:
         if run_type == RunType.EMBED:
             self.use_case: UseCase = UseCase.from_string(parsed_args.use_case)
         
+        self._parse_video_arch_args(parsed_args)  # temporal video architectures (Phase 3)
         self.model = self._parse_model_str(run_type)
         self.model_architecture = ( get_model_architecture(self.model_version) ) if self.model_version else 'not_provided'
     
@@ -215,7 +217,8 @@ class DeepTuneVisionOptions:
 
         # Video-modality args (ignored for other modalities)
         p.add_argument('--num_frames', type=int, default=8, help='Number of frames to uniformly sample per video clip (video modality only).')
-        p.add_argument('--pooling', type=str, choices=['mean', 'attention', 'single_frame'], default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). 'single_frame' is the Karpathy single-frame baseline: the 2D backbone sees only the middle frame. Ignored for DeepTune's native video architectures (which reject 'single_frame').")
+        p.add_argument('--pooling', type=pooling_argument, default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). 'single_frame' is the Karpathy single-frame baseline: the 2D backbone sees only the middle frame. Ignored for DeepTune's native video architectures (which reject 'single_frame'). Other architectures: see --video_arch; a run records its architecture here.")
+        add_video_arch_arguments(p)
         self._add_video_data_args()
 
         # Per-prediction error estimate (images/video). On by default.
@@ -230,6 +233,14 @@ class DeepTuneVisionOptions:
     def _parse_video_data_args(self, parsed_args):
         for name in VIDEO_DATA_ARG_NAMES:
             setattr(self, name, getattr(parsed_args, name))
+
+    # --- temporal video architectures (Phase 3, handlers/video_arch.py) ---
+    def _parse_video_arch_args(self, parsed_args):
+        for name in VIDEO_ARCH_ARG_NAMES:
+            setattr(self, name, getattr(parsed_args, name))
+        self.pooling = pooling_from_args(self)
+        if hasattr(self, 'model_version'):
+            self.model_version = resolve_model_version(self, is_native_video_architecture)
 
     def _add_tabpfn_train_args(self):
         p = self.parser

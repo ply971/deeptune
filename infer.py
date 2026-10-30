@@ -22,6 +22,7 @@ import json
 import sys
 from pathlib import Path
 
+from handlers.video_arch import add_video_arch_arguments, pooling_argument, pooling_from_args, resolve_model_version
 from inference.common import error_calibration_report, summarize_predictions
 from inference.data import (
     IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, load_labeled_or_flat_files, load_single_file,
@@ -50,7 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Video only.
     p.add_argument('--num_frames', type=int, default=8)
-    p.add_argument('--pooling', choices=['mean', 'attention', 'single_frame'], default='mean')
+    p.add_argument('--pooling', type=pooling_argument, default='mean',
+                   help="Frame pooling (mean, attention, single_frame) or the architecture spec the run recorded.")
+    add_video_arch_arguments(p)
     # Video data layer: the run's recorded sampling/decoding settings (cli_arguments.json).
     from handlers.video_args import add_video_data_arguments
     add_video_data_arguments(p, training=False)
@@ -119,7 +122,7 @@ def apply_recorded_video_settings(args: argparse.Namespace, argv: list[str]) -> 
     recorded = _recorded_run_arguments(args.checkpoint)
     parser = build_parser()
     used = {}
-    for name in RECORDED_VIDEO_SETTINGS:
+    for name in (*RECORDED_VIDEO_SETTINGS, 'motion_cache'):
         value = recorded.get(name)
         if name not in given and value is not None:
             try:  # re-validate the recorded value with the flag's own parser
@@ -140,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     if args.modality == 'video':
         used = apply_recorded_video_settings(args, argv)
+        if args.video_arch is not None:  # --video_arch given here; a recorded run's --pooling already holds its architecture
+            from utils import is_native_video_architecture
+            args.pooling = pooling_from_args(args)
+            args.model_version = resolve_model_version(args, is_native_video_architecture)
         if used:
             print('Video settings (flags given here, else the run\'s cli_arguments.json): '
                   + ', '.join(f'{k}={v}' for k, v in used.items()))
