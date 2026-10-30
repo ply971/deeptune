@@ -309,6 +309,12 @@ P-001…P-012 (an id clash, see P-113).
 - **Placement:** P-105, P-106 and P-108 go in Wave 2 with B3. P-107 and P-109
   come after B3's out-of-fold predictions. P-112 goes after Wave 3 and is
   the first to cut after S6/R3 if time is short.
+- **Wave 2 additions (user accepted P-115 to P-118, 2026-10-30):**
+  - R1 registers V-JEPA 2 through `transformers` only; 2.1 stays a note until its weights have a stated licence and a native loader (P-115, F-015).
+  - T1 adds `--freeze_bn auto|on|off`; `auto` stays off without pretrained weights, and the batch-size cutoff is checked on real data (P-116).
+  - B3 resamples whole groups in every bootstrap and reports paired differences between models (P-117).
+  - R2 and the run card state the realised-coverage interval from the effective number of groups (P-118).
+  - V1c uses `facebook/sam2.1-hiera-small` with per-frame pruning (F-014). V1d uses `Qwen/Qwen3.5-2B` with `Qwen/Qwen3.5-0.8B` as fallback, if a test on this GPU peaks under 5.5 GB at 16 or more frames (F-012, F-013). Download approved by the user.
 
 ### Professional-quality rules (agreed 2026-10-30)
 1. **Real-data gate.** A feature is not "done" until the coordinator has run it
