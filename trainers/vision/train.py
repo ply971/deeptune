@@ -138,6 +138,7 @@ def train(
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR)
+    trainer.fit_error_model = not getattr(args, 'no_error_model', False)
     
     print('The Trainer class is loaded successfully.')
     
