@@ -363,5 +363,9 @@ class FeatureStore:
 
 
 def load_snippet_features(root, video_id: str, streams: Optional[Sequence[str]] = None, mmap: bool = True) -> SnippetFeatures:
-    """``[N, D_rgb + D_motion]`` (or one stream) plus the recorded split: see :class:`SnippetFeatures`."""
-    return FeatureStore(root).load(video_id, streams=streams, mmap=mmap)
+    """``[N, D_rgb + D_motion]`` (or one stream) plus the recorded split: see :class:`SnippetFeatures`.
+    Refuses motion features older than the current preprocessing."""
+    store = FeatureStore(root)
+    loaded = store.load(video_id, streams=streams, mmap=mmap)
+    store.check_motion_is_current(list(loaded.split))
+    return loaded

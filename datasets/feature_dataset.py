@@ -90,7 +90,7 @@ class CachedFeatureDataset(Dataset):
         self.streams = list(streams) if streams else self.store.streams()
         if not self.streams:
             raise FileNotFoundError(f'{features_dir} has no extracted features; run extract_features.py first.')
-        self.store.check_motion_is_current(self.streams)
+        self.store.check_motion_is_current(self.streams)  # checked once here, as __getitem__ calls store.load for speed
         self.num_snippets = int(num_snippets)
         self.train = bool(train)
         dataset, columns = open_feature_source(source, features_only=True)

@@ -954,3 +954,20 @@ def test_rerunning_the_same_id_in_another_stream_is_still_allowed(same_length_cl
     ef.extract_features(_one_row(same_length_clips[0], 'Clip'), tmp_path / 'f', streams=('rgb',), **SMALL)
     ef.extract_features(_one_row(same_length_clips[0], 'Clip'), tmp_path / 'f', streams=('motion',), **SMALL)
     assert list(load_snippet_features(tmp_path / 'f', 'Clip').split) == ['rgb', 'motion']
+
+
+@pytest.mark.parametrize('version', [None, 2])
+def test_load_snippet_features_refuses_older_motion(videos, tmp_path, version):
+    ef.extract_features(_manifest(videos[:1]), tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    assert list(load_snippet_features(tmp_path / 'f', 'v0').split) == ['rgb', 'motion']
+    path = tmp_path / 'f' / 'features.json'
+    info = json.loads(path.read_text())
+    info['streams']['motion']['config'].pop('preprocessing_version')
+    if version is not None:
+        info['streams']['motion']['config']['preprocessing_version'] = version
+    path.write_text(json.dumps(info))
+    for streams in (None, ['motion'], ['rgb', 'motion']):
+        with pytest.raises(FeatureConfigError, match='motion features from preprocessing version .*extract_features.py again'):
+            load_snippet_features(tmp_path / 'f', 'v0', streams=streams)
+    assert list(load_snippet_features(tmp_path / 'f', 'v0', streams=['rgb']).split) == ['rgb']  # rgb is unaffected
+
