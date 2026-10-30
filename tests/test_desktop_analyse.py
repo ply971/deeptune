@@ -1216,6 +1216,22 @@ def test_isotonic_estimate_is_worded_as_what_validation_showed(tmp_path):
     assert any('never trained on' in note for note in view.notes)
 
 
+def test_constant_estimate_gives_the_real_count_and_not_the_smoothed_value_as_observed(tmp_path):
+    run_dir = video_run(tmp_path)
+    fitted_error_model(run_dir, method='constant', n_samples=12, n_errors=0, fallback_reason='only 12 fit samples (< 30)')
+    view = stated(run_dir, expected_error=[0.0714])
+    assert '0 of 12 validation clips were wrong' in view.expected_error and '7.1%' in view.expected_error
+    assert '7.1% were wrong' not in view.expected_error
+    assert 'the same for every video' in view.expected_error
+
+
+def test_constant_estimate_without_a_count_does_not_claim_an_observed_share(tmp_path):
+    run_dir = video_run(tmp_path)
+    fitted_error_model(run_dir, method='constant', n_samples=12, fallback_reason='only 12 fit samples (< 30)')
+    view = stated(run_dir)
+    assert 'were wrong' not in view.expected_error
+
+
 def test_constant_estimate_says_it_is_the_same_for_every_video(tmp_path):
     run_dir = video_run(tmp_path)
     fitted_error_model(run_dir, method='constant', n_samples=12, fallback_reason='only 12 fit samples (< 30)')

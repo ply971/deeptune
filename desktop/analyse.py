@@ -380,8 +380,14 @@ def describe_expected_error(estimate: float, is_classifier: bool, fit: dict, tes
     amount = f'{estimate:.1%}' if is_classifier else f'{estimate:.4g}'
     clips = f"{fit['n_samples']} clips" if isinstance(fit.get('n_samples'), int) else ''
     if fit.get('method') == 'constant':
-        reason = '; '.join(str(part) for part in (clips, fit.get('fallback_reason')) if part)
-        stated = f'about {amount} were wrong' if is_classifier else f'about {amount} absolute error, in target units'
+        counted = is_classifier and isinstance(fit.get('n_errors'), int) and isinstance(fit.get('n_samples'), int)
+        reason = '; '.join(str(part) for part in ('' if counted else clips, fit.get('fallback_reason')) if part)
+        if counted:  # the classifier's constant is smoothed, so it is not itself the share that was wrong
+            stated = f"{fit['n_errors']} of {fit['n_samples']} validation clips were wrong, an estimate of {amount} after smoothing"
+        elif is_classifier:
+            stated = f'estimated at {amount}'
+        else:
+            stated = f'about {amount} absolute error, in target units'
         return (f'Expected error: {stated}. This is the run-wide validation rate, the same for every video'
                 + (f' ({reason}).' if reason else '.'))
     count = f' ({clips})' if clips else ''
