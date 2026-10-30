@@ -22,11 +22,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple
 
+from . import analyse
 from . import config as gc
 
 DoneResult = Tuple[str, str]
 DEEPTUNE_SCRIPT = Path(__file__).resolve().parents[1] / "deeptune.py"
 INFER_SCRIPT = Path(__file__).resolve().parents[1] / "infer.py"
+TRACK_SCRIPT = Path(__file__).resolve().parents[1] / "track.py"
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
@@ -124,12 +126,12 @@ class RunHandle:
 
 def _worker_command(script: Path, worker_sentinel: str, args: list[str]) -> Tuple[list[str], Path]:
     """Builds the subprocess command + working directory for running
-    `script` (deeptune.py or infer.py) with `args`, in either a normal
+    `script` (deeptune.py, infer.py or track.py) with `args`, in either a normal
     checkout (a real python.exe handed the script's on-disk path) or a
     packaged build (see packaging/): there, sys.executable is this same
     combined GUI+worker executable rather than a standalone python.exe, so
     there's no on-disk script to hand it -- `worker_sentinel`
-    ("--deeptune-worker" / "--infer-worker") tells desktop/app.py's own
+    ("--deeptune-worker" / "--infer-worker" / "--track-worker") tells desktop/app.py's own
     entry point (see the top of that file) which one to run in-process
     instead, and the executable's own install directory is used as cwd
     rather than the (source-checkout-only) script's parent.
@@ -285,7 +287,45 @@ def start_infer_run(cfg: gc.InferenceConfig) -> RunHandle:
     return handle
 
 
+def start_track_run(cfg: analyse.TrackConfig) -> RunHandle:
+    """Launch track.py for `cfg` (the Analyse Video page's detector action)
+    and return progress queues the GUI polls."""
+    issues = analyse.validate_track_config(cfg)
+    if issues:
+        raise ValueError('\n'.join(issues))
+    Path(cfg.out).mkdir(parents=True, exist_ok=True)
+    log_q: "queue.Queue[str]" = queue.Queue(maxsize=2000)
+    done_q: "queue.Queue[DoneResult]" = queue.Queue()
+    args = analyse.build_track_argv(cfg)
+    state = _ProcessState()
+    thread = threading.Thread(
+        target=_worker_process,
+        args=(TRACK_SCRIPT, "--track-worker", "Tracking", analyse.loading_message(cfg.detector),
+              args, log_q, done_q, state),
+        daemon=True,
+        name="deeptune-track",
+    )
+    handle = RunHandle(thread, log_q, done_q, state, None)
+    thread.start()
+    return handle
+
+
 def _infer_process(
+    args: list[str],
+    log_q: "queue.Queue[str]",
+    done_q: "queue.Queue[DoneResult]",
+    state: _ProcessState,
+) -> None:
+    _worker_process(INFER_SCRIPT, "--infer-worker", "Inference",
+                    "Starting inference. The first import (torch/transformers) can take a moment...\n",
+                    args, log_q, done_q, state)
+
+
+def _worker_process(
+    script: Path,
+    worker_sentinel: str,
+    name: str,
+    start_message: str,
     args: list[str],
     log_q: "queue.Queue[str]",
     done_q: "queue.Queue[DoneResult]",
@@ -293,9 +333,9 @@ def _infer_process(
 ) -> None:
     """Same subprocess/streaming/cancellation shape as _run_process, minus
     the desktop-sessions log file and deeptune-*-run-folder bookkeeping
-    that only apply to deeptune.py's training output layout -- infer.py
-    writes directly into its --out folder (predictions.csv,
-    inference_metrics.json), with no per-run subfolder of its own."""
+    that only apply to deeptune.py's training output layout -- infer.py and
+    track.py write directly into their --out folder, with no per-run
+    subfolder of their own."""
     process: Optional[subprocess.Popen[str]] = None
     result: DoneResult = ('error', 'Run did not finish.')
 
@@ -319,8 +359,8 @@ def _infer_process(
         env.setdefault("OMP_NUM_THREADS", "1")
         env.setdefault("OPENBLAS_NUM_THREADS", "1")
         env.setdefault("MKL_NUM_THREADS", "1")
-        emit("Starting inference. The first import (torch/transformers) can take a moment...\n")
-        cmd, run_cwd = _worker_command(INFER_SCRIPT, "--infer-worker", args)
+        emit(start_message)
+        cmd, run_cwd = _worker_command(script, worker_sentinel, args)
         process = subprocess.Popen(
             cmd,
             cwd=run_cwd,
@@ -347,7 +387,7 @@ def _infer_process(
         elif code == 0:
             result = ('success', '')
         else:
-            result = ('error', f'Inference exited with code {code}. See the run log for details.')
+            result = ('error', f'{name} exited with code {code}. See the run log for details.')
     except BaseException as exc:
         if process is not None and process.poll() is None:
             _terminate_process(process)
