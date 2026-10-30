@@ -87,6 +87,15 @@ def test_path_manifest_with_groups_sampling_augment_and_test_clips(tmp_path, sma
     assert len(inferred) == len(frames['test_split'])
     assert inferred['clip_disagreement'].between(0, 1).all()
     assert 'expected_error' in inferred.columns
+    # V-016: the error model was fitted on 2-clip averages, like evaluation uses.
+    fit = json.loads(next(run.glob('trainval_output_*/error_model_fit.json')).read_text())
+    assert fit['test_clips'] == 2
+    # V-017: plain infer.py with no video flags takes the recorded settings (2 clips).
+    plain = ['--modality', 'video', '--checkpoint', str(cfg.checkpoint_path), '--data', str(data),
+             '--out', str(tmp_path / 'plain'), '--model_version', 'dummy_video3d', '--num_classes', '2',
+             '--added_layers', '1', '--embed_size', '16']
+    assert infer.main(plain) == 0
+    assert 'clip_disagreement' in pd.read_csv(tmp_path / 'plain' / 'predictions.csv').columns
 
 
 def test_original_bytes_parquet_still_trains_evaluates_and_infers(tmp_path, small_pipeline):

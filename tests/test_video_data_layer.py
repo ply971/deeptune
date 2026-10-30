@@ -235,7 +235,7 @@ def test_loader_kwargs_pin_memory_only_on_cuda_and_prepare_workers(clip_files):
     df = pd.DataFrame({'videos': [p.read_bytes() for p in paths]})
     dataset = ParquetVideoDataset(df, num_frames=2)
     kwargs = video_loader_kwargs(dataset, 2, False, num_workers=1)
-    assert kwargs['num_workers'] == 1 and kwargs['persistent_workers'] is True
+    assert kwargs['num_workers'] == 1 and kwargs['persistent_workers'] is False  # one-shot loader (V-019)
     assert kwargs['pin_memory'] is (torch.cuda.is_available())
     assert isinstance(dataset._store, vd.ArrowBytesStore)
     assert video_loader_kwargs(dataset, 2, False)['num_workers'] == 0  # auto on CPU

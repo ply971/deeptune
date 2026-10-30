@@ -93,9 +93,56 @@ def _load_new_data(args: argparse.Namespace):
     return df, args.target in df.columns  # timeseries
 
 
+# Video settings that define how test clips are built. When a flag is not given
+# on the command line, the checkpoint run's cli_arguments.json supplies it (the
+# desktop Test page passes them explicitly). --num_workers is deliberately not
+# inherited: it describes the training machine, not the pipeline.
+RECORDED_VIDEO_SETTINGS = ('num_frames', 'pooling', 'video_backend', 'temporal_sampling', 'clip_stride',
+                           'clip_duration_sec', 'motion_source', 'test_clips')
+
+
+def _recorded_run_arguments(checkpoint: Path) -> dict:
+    """cli_arguments.json saved next to (or inside) the checkpoint, or {}."""
+    checkpoint = Path(checkpoint)
+    path = (checkpoint if checkpoint.is_dir() else checkpoint.parent) / 'cli_arguments.json'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def apply_recorded_video_settings(args: argparse.Namespace, argv: list[str]) -> dict:
+    """Fill video settings the user did not pass with the run's recorded values.
+    Returns {name: value} actually used for every recorded setting."""
+    given = {token.split('=', 1)[0][2:] for token in argv if token.startswith('--')}
+    recorded = _recorded_run_arguments(args.checkpoint)
+    parser = build_parser()
+    used = {}
+    for name in RECORDED_VIDEO_SETTINGS:
+        value = recorded.get(name)
+        if name not in given and value is not None:
+            try:  # re-validate the recorded value with the flag's own parser
+                setattr(args, name, parser.parse_args(_required_stub() + [f'--{name}', str(value)]).__dict__[name])
+            except SystemExit:
+                print(f'Ignoring the recorded {name}={value!r}: not a valid value for this version.')
+        used[name] = getattr(args, name)
+    return used if recorded else {}
+
+
+def _required_stub() -> list[str]:
+    return ['--modality', 'video', '--checkpoint', '.', '--data', '.', '--out', '.']
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.modality == 'video':
+        used = apply_recorded_video_settings(args, argv)
+        if used:
+            print('Video settings (flags given here, else the run\'s cli_arguments.json): '
+                  + ', '.join(f'{k}={v}' for k, v in used.items()))
 
     label_mapping = None
     if args.label_mapping is not None and args.label_mapping.exists():

@@ -164,11 +164,50 @@ class _MemoryBytes:
         return self.values[index]
 
 
+SPILL_PREFIX = 'deeptune-clips-'
+STALE_SPILL_SECONDS = 24 * 3600
+_PENDING_UNLINK: set = set()
+
+
+def _retry_pending_unlinks():
+    for path in list(_PENDING_UNLINK):
+        try:
+            os.unlink(path)
+            _PENDING_UNLINK.discard(path)
+        except FileNotFoundError:
+            _PENDING_UNLINK.discard(path)
+        except OSError:
+            pass
+
+
 def _try_unlink(path):
+    """Remove a spilled clip file. On Windows this fails while a (persistent)
+    worker still maps it; then retry at interpreter exit, and failing that the
+    next run's sweep (`_sweep_stale_spills`) removes it."""
     try:
         os.unlink(path)
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError:
+        if not _PENDING_UNLINK:
+            import atexit
+            atexit.register(_retry_pending_unlinks)
+        _PENDING_UNLINK.add(str(path))
+
+
+def _sweep_stale_spills(folder=None, max_age=STALE_SPILL_SECONDS) -> int:
+    """Delete spilled clip files older than `max_age` left behind by crashed or killed runs."""
+    import time
+    folder = Path(folder or tempfile.gettempdir())
+    removed = 0
+    for path in folder.glob(f'{SPILL_PREFIX}*.arrow'):
+        try:
+            if time.time() - path.stat().st_mtime > max_age:
+                path.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 class ArrowBytesStore:
@@ -451,7 +490,8 @@ class ParquetVideoDataset(_VideoClipDataset):
     def prepare_for_workers(self):
         if not isinstance(self._store, _MemoryBytes) or not len(self._store):
             return
-        handle = tempfile.NamedTemporaryFile(prefix='deeptune-clips-', suffix='.arrow', delete=False)
+        _sweep_stale_spills()
+        handle = tempfile.NamedTemporaryFile(prefix=SPILL_PREFIX, suffix='.arrow', delete=False)
         handle.close()
         values = list(self._store.values)
         self._store = ArrowBytesStore.from_batches((values[i:i + 64] for i in range(0, len(values), 64)), Path(handle.name))
@@ -515,19 +555,36 @@ def open_video_dataset(source, transform=None, num_frames: int = 8, clip_transfo
     return ParquetVideoDataset(pd.read_parquet(path), transform, num_frames, clip_transform, **kwargs)
 
 
-def video_loader_kwargs(dataset, batch_size: int, shuffle: bool, num_workers='auto') -> dict:
+VAL_WORKERS_WINDOWS = 2
+
+
+def video_loader_kwargs(dataset, batch_size: int, shuffle: bool, num_workers='auto', role: Optional[str] = None) -> dict:
     """DataLoader keyword arguments for a video dataset: worker count (see
-    options.resolve_num_workers), pinned memory on CUDA, persistent workers,
-    the None-label-safe collator, and bytes moved out of worker pickles."""
+    options.resolve_num_workers), pinned memory on CUDA, the None-label-safe
+    collator, and bytes moved out of worker pickles.
+
+    `role` (default: 'train' when shuffling, else 'once'):
+    'train' -- persistent workers (iterated every epoch);
+    'val' -- iterated every epoch too, so persistent, but on Windows capped at
+    VAL_WORKERS_WINDOWS workers, so train + val keep at most 4 + 2 spawned
+    processes alive instead of 8 (A2 V-019);
+    'once' -- evaluation, embedding, inference, error-model fit: iterated once,
+    so not persistent (the pool exits as soon as the pass ends)."""
+    import sys
     from options import DEVICE, resolve_num_workers
+    role = role or ('train' if shuffle else 'once')
+    if role not in ('train', 'val', 'once'):
+        raise ValueError("role must be 'train', 'val' or 'once'.")
     try:
         size = len(dataset)
     except TypeError:
         size = 0
     workers = resolve_num_workers(num_workers, size)
+    if role == 'val' and sys.platform.startswith('win') and isinstance(num_workers, str):
+        workers = min(workers, VAL_WORKERS_WINDOWS)
     if workers > 0:
         prepare = getattr(dataset, 'prepare_for_workers', None)
         if callable(prepare):
             prepare()
     return dict(batch_size=batch_size, shuffle=shuffle, num_workers=workers, pin_memory=DEVICE.type == 'cuda',
-                persistent_workers=workers > 0, collate_fn=collate_video_samples)
+                persistent_workers=workers > 0 and role != 'once', collate_fn=collate_video_samples)
