@@ -7,17 +7,36 @@ Keep entries short and factual. This is the handoff between sessions.
 | Phase | Status | Tests (passed/total) | Commit |
 |---|---|---|---|
 | 0 Foundation & GPU setup | done (1 known GPU smoke timeout → Phase 1) | 173/173 CPU and GPU | `video-analysis` |
-| 1 Data layer + MVs + feature cache | tasks 1–6, 9–12 merged (A2); 7–8 feature cache = B1 (Wave 2) | 414 passed, 3 skipped (targeted, CPU) | `966a5c1` |
+| 1 Data layer + MVs + feature cache | merged (A2, B1); B1 GPU and real-video gate open | full suite 1191 passed, 5 skipped (CPU) | `966a5c1`, `05b401b` |
 | 2 Motion / untrimmed / scene-bias benchmarks | merged (A3); fine-tuned single_frame and lossless checks done on the GPU (one seed) | full suite 506 passed, 3 skipped (CPU) | `5bf2588` |
 | + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
-| 3 Temporal models | not started | | |
+| + Training basics (T1), Analyse Video (V1a) | merged with review fixes; GPU and real-video gate open | full suite 1191 passed, 5 skipped (CPU) | `8314d32`, `94c5ecd` |
+| 3 Temporal models | built (B2), fix round for V-046 running, not merged | | |
 | 4 Timeline + CtxPL localisation + unsupervised | not started | | |
-| 5 Evaluation | not started | | |
+| 5 Evaluation | B3 in progress | | |
 | 6 Explainability & background reliance | not started | | |
 | 7 GUI | not started | | |
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
 
 ## Session log
+
+### 2026-10-31 — Wave 2: B1, T1, V1a merged
+- **Merged into `video-analysis`:**
+  - B1, feature cache and snippet features (05b401b). Reviews V-039, V-042, V-043, V-047.
+  - T1, training basics and LoRA coverage (8314d32). Reviews V-040, V-044.
+  - V1a, Analyse Video workspace (94c5ecd). Reviews V-041, V-045.
+- **Full suite (CPU, `CUDA_VISIBLE_DEVICES=-1`, at 94c5ecd):** `1191 passed, 5 skipped, 69 warnings in 368.29s`. `check.ps1` on the GPU has not been re-run.
+- **Review limits, stated plainly:**
+  - B1's last round (f333f25..555a38a) was checked by the coordinator with the critic's repro scripts, not by a fresh ml-critic.
+  - V1a's last fix (6a6d41e, the V-045 count wording) was made and tested by the coordinator, with no fresh review.
+- **Not done:** none of B1, T1 or V1a has run on the GPU or on real video. Per the PLAN 4b rule, they don't count as done until the real-data GPU gate passes. Commands are in `docs/video-plan/reports/`.
+- **Still open from the reviews:**
+  - B1: `--motion_gain` default undecided until real val clips; same size and mtime on a rewritten file goes undetected; `load_snippet_features` accepts an array with no sidecar.
+  - T1: a budget overrides an explicit `--lora_rank`, so don't combine them at the r = 8/16/32 gate; changing the selection metric on resume keeps the old best metric.
+  - V1a: zero-shot false-box counts with `fuse_score=False` need checking on real video.
+- **Running:** B2 fix round (V-046), B3 builder.
+- **Decision for the user:** `late_fusion` provably can't meet PLAN's direction done-when at default speed (Bayes limit 0.548 from two frames). See V-046.
+- **Next:** merge B2 and B3 after review, then R1, R2, R3, then the Wave 2 GPU gates with the user present.
 
 ### 2026-10-30 — Wave 2 start: GPU checks
 - **`scripts\check.ps1` on the GPU: `CHECK FAIL`.**
