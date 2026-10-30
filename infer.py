@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-from inference.common import summarize_predictions
+from inference.common import error_calibration_report, summarize_predictions
 from inference.data import (
     IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, load_labeled_or_flat_files, load_single_file,
     load_tabular_like, load_video_manifest_for_inference,
@@ -144,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
     # above already writes when the input data had labels, regardless of
     # modality, so one call covers all of them.
     metrics = summarize_predictions(predictions, args.mode)
+    # Per-prediction error estimate (A4): with labels and an expected_error
+    # column, check stated vs observed error per decile on this new data.
+    calibration = error_calibration_report(predictions, args.mode)
+    if metrics is not None and calibration is not None:
+        from evaluators.error_model import CALIBRATION_STEM, metrics_summary, save_report
+        json_path, _ = save_report(calibration, args.out, CALIBRATION_STEM, extra={'split': 'inference'})
+        metrics['error_estimate'] = metrics_summary(calibration)
+        print(f'Wrote error calibration to {json_path}')
     if metrics is not None:
         metrics_path = args.out / 'inference_metrics.json'
         metrics_path.write_text(json.dumps(metrics, indent=2), encoding='utf-8')

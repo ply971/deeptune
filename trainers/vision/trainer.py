@@ -198,7 +198,79 @@ class Trainer:
                 self.performance_logger.save_to_csv(f"{self.output_dir}/training_log.csv")
         # record the total training time at the end
         save_process_times(epoch_times, total_time, self.output_dir,"training")
-        
+
+        # --- per-prediction error model (A4) ---
+        # One extra pass over the VALIDATION loader (never test data) with the
+        # final weights -- the ones train.py saves as model_weights.pth -- fits
+        # error_model.json next to them. Opt out with --no_error_model (or
+        # trainer.fit_error_model = False). RNG state and train/eval mode are
+        # restored, so training results are unchanged.
+        enabled = getattr(self, 'fit_error_model', None)
+        if enabled is None:
+            from evaluators.error_model import fit_by_default
+            enabled = fit_by_default()
+        if enabled and self.output_dir:
+            try:
+                self._fit_error_model()
+            except Exception as exc:  # never let the auxiliary estimate break a finished training run
+                self.logger.warning(f'Per-prediction error model was not fitted: {exc}')
+        # --- end per-prediction error model (A4) ---
+
+    # --- per-prediction error model (A4) ---
+    def _fit_error_model(self):
+        """Fit the per-prediction error model on the validation split and
+        save ``error_model.json`` + ``error_model_fit.json`` in output_dir.
+        Returns the fitted ``evaluators.error_model.ErrorModel``."""
+        import json
+        import random
+        import numpy as np
+        from evaluators.error_model import (
+            ERROR_MODEL_FILENAME, ERROR_MODEL_FIT_FILENAME, ErrorModel, error_targets, prediction_features,
+        )
+
+        rng_state = (random.getstate(), np.random.get_state(), torch.get_rng_state(),
+                     torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None)
+        was_training = self.model.training
+        outputs, labels, n_batches = [], [], 0
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                for inputs, batch_labels, *_ in self.val_loader:
+                    outputs.append(self.model(inputs.to(DEVICE)).detach().float().cpu())
+                    labels.append(batch_labels.detach().cpu())
+                    n_batches += 1
+        finally:
+            random.setstate(rng_state[0])
+            np.random.set_state(rng_state[1])
+            torch.set_rng_state(rng_state[2])
+            if rng_state[3] is not None:
+                torch.cuda.set_rng_state_all(rng_state[3])
+            self.model.train(was_training)
+
+        out = torch.cat(outputs)
+        if self.mode == 'cls':
+            scores = torch.softmax(out, dim=1).numpy()
+        else:
+            scores = out.numpy()
+        truth = torch.cat(labels).numpy()
+        error_model = ErrorModel(self.mode).fit(prediction_features(scores, self.mode),
+                                                error_targets(scores, truth, self.mode),
+                                                num_outputs=scores.reshape(len(scores), -1).shape[1])
+        error_model.fit_info.update({
+            'split': 'validation', 'n_batches': n_batches,
+            'val_dataset_size': len(self.val_loader.dataset) if hasattr(self.val_loader, 'dataset') else None,
+        })
+        out_dir = Path(self.output_dir)
+        error_model.save(out_dir / ERROR_MODEL_FILENAME)
+        (out_dir / ERROR_MODEL_FIT_FILENAME).write_text(json.dumps(error_model.to_dict()['fit_info'], indent=2), encoding='utf-8')
+        self.error_model = error_model
+        self.logger.info(
+            f"Per-prediction error model ({error_model.method_used}) fitted on {error_model.fit_info['n_samples']} "
+            f"validation samples; saved to {out_dir / ERROR_MODEL_FILENAME}"
+        )
+        return error_model
+    # --- end per-prediction error model (A4) ---
+
     def validate(self):
         
         """
