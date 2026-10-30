@@ -8,7 +8,7 @@ Keep entries short and factual. This is the handoff between sessions.
 |---|---|---|---|
 | 0 Foundation & GPU setup | done (1 known GPU smoke timeout → Phase 1) | 173/173 CPU and GPU | `video-analysis` |
 | 1 Data layer + MVs + feature cache | tasks 1–6, 9–12 merged (A2); 7–8 feature cache = B1 (Wave 2) | 414 passed, 3 skipped (targeted, CPU) | `966a5c1` |
-| 2 Motion / untrimmed / scene-bias benchmarks | built (A3), fix round in progress, not merged | 60 passed (A3 worktree) | `video/A3-phase2-benchmarks` |
+| 2 Motion / untrimmed / scene-bias benchmarks | merged (A3); GPU checks pending (fine-tuned single_frame, lossless codec) | full suite 506 passed, 3 skipped | `5bf2588` |
 | + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
 | 3 Temporal models | not started | | |
 | 4 Timeline + CtxPL localisation + unsupervised | not started | | |
@@ -18,6 +18,34 @@ Keep entries short and factual. This is the handoff between sessions.
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
 
 ## Session log
+
+### 2026-10-30 — Wave 1 CLOSED
+- **Merged:**
+  - A3, Phase 2 benchmarks (5bf2588). Review chain V-020..V-024 → V-036 → **V-038 merge** (ml-critic).
+  - A seeded val split for every task; the runner never validates on test.
+  - A speed regression task in the runner.
+  - The flip guard is wired into `deeptune.py --video_flip`.
+  - The single-frame claim is scoped to linear pixel probes plus a frozen resnet18, on direction only.
+- **Full suite (CPU, `CUDA_VISIBLE_DEVICES=-1`, cpu 0):** `506 passed, 3 skipped, 26 warnings in 281.41s`. The 3 skips are TorchCodec (not installed).
+- **Codex note (while Claude was rate-limited):**
+  - It merged video-analysis 5cb6293 into A3 (3be531b, default merge message, kept as is).
+  - It made no code edits and ran no tests.
+  - It flagged two stale doc notes, which A3 then fixed.
+  - It worked without creating `.claude/board/LOCK`. Next time, create it first.
+- **Reviewer:**
+  - The Critic is now the `ml-critic` agent type (`.claude/agents/ml-critic.md`, ad1836c), an ML/data-analysis methodologist.
+  - It loads in new sessions. In this session it ran as a general-purpose agent reading that file.
+- **Pending the user's OK:**
+  - GPU: `check.ps1`; `bench_video_io.py --clips 200 --nvdec`; `smoke_track.py` (~1.3 GB); the fine-tuned `single_frame:resnet18` on direction/speed/periodic at 700/400, plus a lossless-codec variant (V-022/V-038).
+  - `pip install trackers`.
+  - Wave 2.
+- **Nice-to-haves left:**
+  - `benchmarks/guards.py:38` should read `utf-8-sig`.
+  - `benchmark.md:121` "val.csv for scene_bias" is stale.
+  - The untrimmed benchmark was not re-audited in the last pass.
+  - GUI pooling radio lacks `single_frame` (Phase 7).
+  - `infer.py allow_abbrev`.
+- **Next:** Wave 2 in a FRESH session, with a fresh ml-critic and Scout: T1, B1, B2, B3 (+P-105, P-106, P-108), R1, R2. Start with the GPU checks above, with the user present.
 
 ### 2026-10-30 — Wave 1 with parallel agents (coordinator session; HANDOFF)
 - **How the work runs:**

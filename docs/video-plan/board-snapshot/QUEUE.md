@@ -52,3 +52,15 @@ Update: A1 fix round done (3ec722c, 97202c1, c7c5b02; V-025) → the Critic is r
   the fine-tuned single_frame:resnet18 run (V-022).
 - pip install `trackers` (P-110 parity check).
 - Starting Wave 2 (B1, B2, B3 + T1, R1, R2, P-105, P-106, P-108).
+
+### 2026-10-30 - Codex A3 continuation stopped by user
+- Read the rules and handoff; A2 is merged, so A3 is the first unfinished item.
+- Worked in .claude/wt/A3. Verified CPU configuration: cpu 0 with CUDA_VISIBLE_DEVICES=-1.
+- Merged current video-analysis (5cb6293) into A3 without conflicts (commit 3be531b). Existing uncommitted A3 documentation/test-docstring edits preserved. No implementation edits made.
+- Pytest: not run in this continuation; no new pytest summary exists.
+- Read-only Critic review interrupted at the user's stop request. Preliminary findings: A3 report has stale open-problem bullets about desktop single_frame validation and flip-guard wiring; src/video/single_frame.py still says it must stay at chance, beyond the V-022 evidence scope.
+- Next: resolve those documentation inconsistencies, finish review, run targeted and full CPU tests, then merge only after review approval. The sync merge used Git's default message; correct it to the required video: prefix when resuming, before publishing. No merge into video-analysis, GPU jobs, installs, downloads or pushes.
+
+## 2026-10-30: WAVE 1 CLOSED (coordinator)
+- A3 merged (5bf2588, V-038). Full suite: 506 passed, 3 skipped, 26 warnings in 281.41s.
+- Next: Wave 2 in a fresh session (see PROGRESS.md). Needs the user's OK for the GPU checks, the `trackers` install, and the Wave 2 start.

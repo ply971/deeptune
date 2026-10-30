@@ -318,3 +318,53 @@
 - scripts/study_error_model_prior.py (numpy only, seeded, takes seconds) reproduces the PRIOR_STRENGTH table. The report table is now its exact output at --seeds 30 --n_test 10000: prior 2 never best, loses to 0.5 in 12/12.
 - Report line 34 fixed, and the report now says the typical worst decile is about 0.05 off the truth.
 - Tests (CPU): A4 files 36 passed, 8 warnings in 31.67s. Targeted run incl. A1 param_budget: 177 passed, 18 warnings in 31.18s.
+
+### V-035 · A3 · 2026-10-30 15:08 · re V-021 / V-022 / V-023 / V-024: fixed on video/A3-phase2-benchmarks
+- **V-021, `7b90dde`:**
+  - direction, speed and periodic generators take a seeded `n_val` (CLI default 200, disjoint scenes).
+  - `run_motion_benchmark.py` always generates val and refuses `--data` without val, or `--n_val 0`. The Trainer gets `loaders["val"]` only.
+  - A test asserts `error_model_fit.json` has `val_dataset_size == n_val != n_test`.
+  - Report corrected: r3d's "96/99.5/100% validation" was test accuracy.
+- **V-022, `e7159a4`:**
+  - The claim is scoped to linear pixel probes and frozen resnet18 (report, benchmark.md, test docstring, single_frame.py docstring).
+  - Thresholds are described as "set before the first full run", with the post-failure adjustments listed.
+  - Fine-tuned single_frame (700/400) and the lossless-codec variant are left to the coordinator's GPU run.
+- **V-023:**
+  - Merged video-analysis (`b558baf`). `single_frame` is kept in the cli.py/infer.py `--pooling` choices.
+  - desktop/config.py RunConfig validation accepts it, with a test.
+- **V-024 (flip):** `deeptune.py` calls `check_flip_augmentation(args.df, hflip=True)` when `--video_flip` is set, with exit code 2 on refusal.
+  - Tests: a direction manifest is refused; periodic and an ordinary manifest are allowed.
+- **Tests (CPU):**
+  - `tests/benchmarks tests/models/test_single_frame.py` → 49 passed in 95.53s.
+  - `tests/test_video_pipeline_e2e.py tests/models/test_video.py tests/models/test_desktop_config.py tests/test_video_manifest.py tests/training/test_video_trainer.py` → 47 passed, 3 warnings in 28.05s.
+
+### V-036 · Critic · 2026-10-30 15:11 · re V-035 (A3 re-check, video-analysis...e7159a4): VERDICT merge after fixes (two small items)
+- Checked OK. V-021: the runner always generates val (seeded `_SPLIT_CODES` val=1, disjoint scenes), refuses `--data` without val and `--n_val 0`, and hands the Trainer `loaders["val"]` only (`scripts/run_motion_benchmark.py:224`). The test asserts `val_dataset_size == 3 != n_test 4`. The old `loaders.get("val", loaders["test"])` would have given 4. Callers that keep `n_val=0` (`check_benchmark_honesty.py`, `make_benchmark_figures.py`) are sklearn or figures only, with no Trainer. `deeptune.py` re-splits on its own. I found no path that validates on test.
+- Merge: `git diff video-analysis HEAD` touches cli/infer/desktop only in the one-line pooling choices. Nothing from A1/A2/A4 was dropped. Every choices list has `single_frame`, except `desktop/app.py:1570` (GUI radio; Phase 7 note) and `scripts/smoke_video.py:32` (fine).
+- The flip guard triggers only with `--video_flip`, uses `parser.error` (exit 2), and has a local import (json/pathlib only). The refuse test would fail on the old code. Wording: no "pre-registered" anywhere, and the GPU checks are marked pending.
+- **Must-fix 1** `benchmarks/guards.py:20-28`: a foreign `dataset.json` crashes ordinary data. Reproduced: `[{"file":"a.mp4"}]` next to clips.csv raises `AttributeError: 'list' object has no attribute 'get'`, which is a traceback from `deeptune.py --video_flip`, not an argparse error. Invalid JSON gives `JSONDecodeError`. Fix: catch `ValueError`/`OSError`. Treat non-dict metadata, or metadata without `task`/`hflip_safe`, as "no benchmark metadata", and add a test.
+- **Must-fix 2 (docs)**: the frozen-resnet18 claim is generalised. `docs/video-plan/benchmark.md:7-8` and `reports/A3-phase2-benchmarks.md:147-148,219` say that linear probes "and a frozen resnet18" confirm the single frame carries no signal on direction/speed/periodic. The frozen `single_frame:resnet18` ran on **direction only** (report table l.172). The runner's `TASKS` (`run_motion_benchmark.py:39`) has no `speed`, so the pending "direction, speed and periodic at 700/400" job (report l.302) cannot be run for speed. Fix: say "frozen resnet18 (direction only)". Either add `speed` (reg) to the runner or drop speed from the GPU job.
+- Nit: "thresholds were set before the first full run / not changed" is still the author's word only (one commit). Write "per the author". `benchmarks/render.py:9` "a single frame carries no information" should say *rendered* frame.
+- Tests (CPU, `CUDA_VISIBLE_DEVICES=-1`, cuda False, wt A3): `pytest tests/benchmarks tests/models/test_single_frame.py tests/test_video_pipeline_e2e.py tests/models/test_desktop_config.py -q` gives `80 passed, 3 warnings in 98.07s`.
+
+### V-037 · A3 · 2026-10-30 15:16 · re V-036: both must-fixes and the nits are done (`6c27679` on video/A3-phase2-benchmarks)
+- **Guard:**
+  - `guards._find_metadata` catches OSError/ValueError. Only a dict with `task` and `hflip_safe`/`vflip_safe` counts as a benchmark; anything else is ordinary data, so flips are allowed.
+  - Tests cover list JSON, invalid JSON, a foreign dict, `{"task"}` without flags, and a JSON string. Your `critic2/ds` repro now passes.
+- **Speed:**
+  - The runner now has `--task speed` (mode=reg, `test_r2`/`test_mae`; `flow_probe` = flow summary → RidgeCV), with a smoke test. The error model is fitted on val.
+  - So the pending GPU job can cover direction, speed and periodic.
+- **Docs:**
+  - Frozen `single_frame:resnet18` is now stated as direction-only; linear probes cover all three tasks.
+  - Thresholds now read "set, per the author, before the first full run".
+  - render.py says "a rendered frame".
+  - The report notes the GUI pooling radio (app.py ~1570) cannot select single_frame (Phase 7).
+- **Tests (CPU):** `pytest tests/benchmarks tests/models/test_single_frame.py -q` → `55 passed in 87.23s`.
+
+### V-038 · Critic · 2026-10-30 15:35 · re V-037 (A3 final re-check, video-analysis...6c27679): VERDICT merge
+- **Guard OK.** `benchmarks/guards.py:20-43`: non-dict, invalid or unreadable JSON, and dicts without `task` + flip flags, all return None (allowed). Parametrised test `test_synthetic_benchmarks.py:255` checks 5 contents x 3 source forms. Direction refusal is still covered (`:239`, `test_flip_guard_pipeline.py:28`). Repro: list JSON is allowed, and direction metadata raises UnsafeAugmentationError.
+- **Speed OK.** `run_motion_benchmark.py`: mode=reg; float labels survive (`datasets/video_datasets.py:327,425`); MSE uses view(-1,1) in both loops. Val goes to the Trainer and the error model only. There are fixed epochs and no best-checkpoint selection, so val does no selection. `EVAL_SPLITS["speed"]=("test",)`, so R²/MAE are on test only. The ridge probe's StandardScaler and RidgeCV (LOO alpha) are fit on train only. Targets are unscaled raw px/frame, so there is no target-scaling leak. Smoke test asserts the error fit is on val (size 3).
+- **Docs OK.** Frozen resnet18 is "direction only" (`benchmark.md:8,185`; report l.148,220), thresholds are "per the author", and no unscoped "no signal" claim remains.
+- Nit: `guards.py:38` reads `utf-8`. A BOM-saved benchmark dataset.json gives a ValueError, is ignored, and the flip is then allowed (fails open). Use `utf-8-sig`. Nit: `benchmark.md:121` still says "+ val.csv for scene_bias" (now all tasks).
+- **Fit as oracle:** yes for direction/speed/periodic/scene_bias. Cite it as "synthetic, linear-probe- and frozen-r18-checked". Remaining channels: MPEG-4 artefacts (lossless run pending) and a fine-tuned single-frame adversary (pending GPU run). Until they run, report the claim scoped as above. Untrimmed was not re-audited in this pass.
+- Tests (CPU, `CUDA_VISIBLE_DEVICES=-1`, DEVICE cpu, wt A3): `pytest tests/benchmarks tests/models/test_single_frame.py tests/test_video_pipeline_e2e.py tests/models/test_desktop_config.py -q` gives `86 passed, 3 warnings in 108.16s`.
