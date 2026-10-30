@@ -247,6 +247,29 @@ SAM 3 backend, the DeepTune-feature THUMOS run.
 4. GUI (Wave 4) covers everything that landed. Course report in December;
    the paper follows if the measured results support one.
 
+### Professional-quality rules (agreed 2026-10-30)
+1. **Real-data gate.** A feature is not "done" until the coordinator has run it
+   once on a real dataset on the GPU, with the number recorded in PROGRESS.md
+   next to a published baseline where one exists. Agent unit tests on dummy
+   models are necessary, not sufficient.
+2. **Training basics move to Wave 2 (new task T1):** mixed precision (bf16/fp16
+   autocast), resume from checkpoint, early stopping + best-checkpoint reload
+   (the error model must then be fitted on the best weights), LR schedulers,
+   gradient accumulation, YAML/JSON config files, optional experiment
+   logging (CSV always, MLflow/W&B when installed), full seeding. Plus the
+   **LoRA coverage fix**: `adjustedPeftVideo3D` picks targets with
+   `type(m) in [...]`, which misses torchvision's 3D conv subclasses, so on
+   r3d_18 LoRA reaches only the stem and downsample convs.
+3. **Depth before breadth.** The core path (data → strong models → evaluation
+   and reliability → localisation → GUI) is finished and validated before the
+   spatial extras grow. Detection, segmentation and pose stay thin,
+   well-tested wrappers around foundation models. If time is short, cut
+   S6 fusion and R3 auto-select first, then S2 fine-tuning and S5's
+   graph-conv head.
+4. **Review per merge.** Every agent branch gets a code review (correctness
+   pass) before merging, in addition to the coordinator's diff, test-diff and
+   targeted-test checks. The full suite runs after each wave.
+
 ---
 
 ## 5. How we run this with AI (from the *Best Practices* slide)
