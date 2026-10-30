@@ -112,6 +112,9 @@ class TestTrainer:
         if estimate is not None:
             metrics['error_estimate'] = estimate
         per_sample.to_csv(self.output_dir / PREDICTIONS_FILENAME, index=False)
+        if self.mode == 'cls':  # every class, also above MAX_PROB_COLUMNS: the report and calibration read it
+            import numpy as np
+            np.save(self.output_dir / 'probabilities.npy', probabilities)
         # --- end (A4) ---
         with open(self.output_dir / 'full_metrics.json', 'w', encoding='utf-8') as stream:
             json.dump(metrics, stream, indent=2)
