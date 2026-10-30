@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Video only.
     p.add_argument('--num_frames', type=int, default=8)
-    p.add_argument('--pooling', choices=['mean', 'attention'], default='mean')
+    p.add_argument('--pooling', choices=['mean', 'attention', 'single_frame'], default='mean')
     # Video data layer: the run's recorded sampling/decoding settings (cli_arguments.json).
     from handlers.video_args import add_video_data_arguments
     add_video_data_arguments(p, training=False)

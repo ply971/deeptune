@@ -47,6 +47,14 @@ def main(argv=None):
     issues = validate_config(cfg)
     if args.trainable_params is not None and args.modality not in ('images', 'video'):
         issues.append('--trainable_params is only supported for the images and video modalities.')
+    if args.modality == 'video' and getattr(args, 'video_flip', False):
+        # A mirror swaps "moves left"/"moves right": refuse it on datasets that
+        # declare direction-dependent labels (Phase 2 benchmarks' dataset.json).
+        from benchmarks.guards import UnsafeAugmentationError, check_flip_augmentation
+        try:
+            check_flip_augmentation(args.df, hflip=True)
+        except UnsafeAugmentationError as exc:
+            issues.append(str(exc))
     if issues:
         args.parser.error("\n".join(issues))
     args.mode = effective_mode(cfg)

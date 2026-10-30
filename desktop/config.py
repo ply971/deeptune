@@ -96,7 +96,7 @@ class RunConfig:
 
     # video only
     num_frames: int = 8
-    pooling: str = "mean"  # "mean" | "attention"
+    pooling: str = "mean"  # "mean" | "attention" | "single_frame"
 
     # tabular / gandalf only
     gandalf_type: str = "classification"  # "classification" | "regression"
@@ -223,8 +223,8 @@ def validate_config(cfg: RunConfig) -> list[str]:
         issues.extend(video_file_split_issues(cfg))
         if cfg.num_frames < 1:
             issues.append('Frames per clip must be at least 1.')
-        if cfg.pooling not in ('mean', 'attention'):
-            issues.append('Choose mean or attention pooling.')
+        if cfg.pooling not in ('mean', 'attention', 'single_frame'):
+            issues.append('Choose mean, attention or single_frame pooling.')
         if cfg.model_version == 'mvit_v2_s' and cfg.num_frames != 16:
             issues.append('mvit_v2_s requires exactly 16 frames per clip.')
     if cfg.modality == 'timeseries' and (not cfg.time_idx_column.strip() or cfg.time_idx_column == cfg.target):
