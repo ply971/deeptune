@@ -65,9 +65,6 @@ CURVE_METHODS = ('auto', 'codec', 'framediff')
 # Reads whose highest index is below this are decoded sequentially from the
 # start (always exact, and cheaper than a seek for short clips).
 SEQUENTIAL_READ_LIMIT = 300
-# While decoding forward, a target at most this many frames ahead is reached
-# by decoding on instead of seeking again.
-SEEK_GAP = 96
 _ANCHORS = ('I', 'P', 'SI', 'SP')
 
 Source = Union[str, os.PathLike, bytes, bytearray, memoryview]
@@ -493,6 +490,7 @@ class _PyAVBackend:
     def __init__(self, source):
         self.source = source
         self._pts: Optional[np.ndarray] = None  # sorted presentation timestamps, one per frame
+        self._keys: np.ndarray = np.zeros(0, dtype=np.int64)  # frame indices of keyframes
         self._time_base = None
         self._meta: Optional[VideoMetadata] = None
 
@@ -508,17 +506,21 @@ class _PyAVBackend:
             self._time_base = stream.time_base
             rate = stream.average_rate or stream.guessed_rate or stream.base_rate
             fps = float(rate) if rate else 0.0
-            pts, packets = [], 0
+            pts, key_pts, packets = [], [], 0
             for packet in container.demux(stream):
                 if packet.size:
                     packets += 1
                     if packet.pts is not None:
                         pts.append(packet.pts)
+                        if packet.is_keyframe:
+                            key_pts.append(packet.pts)
             if packets == 0:
                 raise VideoDecodeError(f'{describe_source(self.source)} contains no video frames (zero length).')
             unique = np.unique(np.asarray(pts, dtype=np.int64))
             # Timestamps index frames exactly only if every packet has its own one.
             self._pts = unique if len(unique) == packets else None
+            if self._pts is not None:
+                self._keys = np.unique(np.searchsorted(self._pts, np.asarray(key_pts, dtype=np.int64)))
             variable, duration = False, (packets / fps if fps else 0.0)
             if self._pts is not None and stream.time_base is not None:
                 times = (self._pts - self._pts[0]) * float(stream.time_base)
@@ -629,12 +631,20 @@ def _av_iterate(backend: _PyAVBackend, targets, want_frames: bool, want_mvs: boo
         return frames, mvs, kinds
 
     pts_to_index = {int(p): i for i, p in enumerate(pts_index)}
+    keys = backend._keys
+
+    def key_before(index):
+        # Last keyframe at or before `index` (0 when unknown): where a seek would land.
+        at = int(np.searchsorted(keys, index, side='right')) - 1
+        return int(keys[at]) if at >= 0 else 0
+
     container, stream = open_stream()
     try:
-        cursor, position, decoder = 0, None, None
+        cursor, position, decoder = 0, -1, None
         while cursor < len(targets) and targets[cursor] < len(pts_index):
             target = targets[cursor]
-            if decoder is None or position is None or target - position > SEEK_GAP:
+            if decoder is None or key_before(target) > position:
+                # Seek only when a later keyframe lets us skip frames; otherwise decode on.
                 container.seek(int(pts_index[target]), stream=stream, backward=True, any_frame=False)
                 decoder = container.decode(stream)
             reseek = False
@@ -644,12 +654,18 @@ def _av_iterate(backend: _PyAVBackend, targets, want_frames: bool, want_mvs: boo
                     continue
                 position = index
                 keep(index, frame)
+                advanced = False
                 while cursor < len(targets) and targets[cursor] <= index:
                     cursor += 1
-                if cursor < len(targets) and targets[cursor] - index > SEEK_GAP:
+                    advanced = True
+                if cursor >= len(targets):
+                    if index >= stop_at:
+                        break
+                    continue
+                # Re-seek only after reaching a target (guarantees progress) and only
+                # when the next target sits behind a keyframe we have not reached.
+                if advanced and key_before(targets[cursor]) > index:
                     reseek = True
-                    break
-                if cursor >= len(targets) and index >= stop_at:
                     break
             if not reseek:
                 break  # every target handled, or the stream ended

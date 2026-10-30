@@ -49,6 +49,20 @@ def test_sparse_reads_in_a_long_video_are_exact(clips, backend):
     assert [decode_frame_index(f) for f in reader.get_frames(wanted)] == wanted
 
 
+def test_sparse_reads_with_a_gop_longer_than_the_gap_between_targets(tmp_path):
+    # Regression: keyframes every 250 frames, targets ~60 apart. A gap-based
+    # re-seek rule looped forever here (each seek landed on the same keyframe).
+    import time
+    path = index_coded_clip(tmp_path / 'longgop.mp4', 390, width=16, height=16, options={'g': '250', 'keyint_min': '250'})
+    reader = VideoReader(path, backend='pyav')
+    wanted = [389, 320, 260, 200, 140, 80, 20]
+    start = time.perf_counter()
+    assert [decode_frame_index(f) for f in reader.get_frames(wanted)] == wanted
+    assert time.perf_counter() - start < 20
+    keys = reader._impl._keys.tolist()
+    assert keys[0] == 0 and len(keys) >= 2 and 389 - keys[-1] > 96  # a target far past the last keyframe
+
+
 def test_metadata_reports_fps_count_duration_size_codec(clips):
     meta = VideoReader(clips['h264'], backend='pyav').metadata()
     assert (meta.fps, meta.frame_count, meta.width, meta.height, meta.codec) == (25.0, 40, 32, 32, 'h264')
