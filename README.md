@@ -309,9 +309,16 @@ Useful options:
 - `--batch_size`, `--device auto|cpu|cuda`.
 - `--track_high_thresh` / `--track_low_thresh` / `--new_track_thresh`, `--track_buffer`.
 - `--class_agnostic`: let one track switch between prompts and take the majority label.
+- `--cross_label_nms 0.7`: when boxes of *different* prompts overlap (Grounding DINO
+  often finds one object for both "lobster" and "crab"), keep only the best-scoring
+  one, so the object is counted once. This is off by default, so such an object is
+  counted under each prompt.
 
-Run `python track.py --help` for the full list. `scripts/smoke_track.py` runs
-both detectors with real weights on a generated clip.
+Run `python track.py --help` for the full list. Bad arguments stop the run before
+any video is read or weights load (exit code 2). The exit code is 1 when any video
+fails; failed videos are listed in `<out>/errors.json`. Prompts may contain dots
+("St. Bernard"). `scripts/smoke_track.py` runs both detectors with real weights on
+a generated clip.
 
 **Accuracy depends on the prompt and the footage.** Short, concrete nouns work
 best ("lobster", not "the animal on the left"). Small, blurred or unusual

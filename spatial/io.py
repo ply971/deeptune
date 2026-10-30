@@ -15,7 +15,10 @@ Output formats (one folder per video)
     MOTChallenge text, no header, one row per (frame, track):
     ``frame,id,x,y,w,h,score,class,-1,-1`` with 1-based ``frame`` (= video frame
     index + 1), pixel ``x, y`` = top-left corner, and 1-based ``class`` = position
-    of the label in the prompt list.
+    of the label in the prompt list. Caveat for S4: TrackEval's MOTChallenge loader
+    is believed to keep only class 1 (pedestrian) rows, so rows of prompts 2..n may
+    be dropped silently there (unverified); evaluate per prompt or remap the class
+    column to 1.
 ``track_labels.csv``
     ``track_id,class_id,label`` (header), one row per track: the label column that
     MOT files lack.
