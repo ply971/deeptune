@@ -74,6 +74,17 @@ class Trainer:
         logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s | %(message)s")
         self.logger = logging.getLogger()
 
+        # --- trainable / total parameter report (A1 param budget) ---
+        import json
+        from trainers.param_budget import summarize_parameters, format_summary
+        self.parameter_summary = summarize_parameters(self.model)
+        self.logger.info(format_summary(self.parameter_summary))
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            with open(Path(output_dir) / 'parameter_summary.json', 'w', encoding='utf-8') as stream:
+                json.dump(self.parameter_summary, stream, indent=2)
+        # --- end parameter report ---
+
     def train(self):
                     
         total_time = 0
