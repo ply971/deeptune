@@ -5,7 +5,7 @@ from datasets.video_datasets import ParquetVideoDataset, native_video_transform,
 from evaluators.vision.evaluator import TestTrainer
 from helpers import transformations
 from options import UNIQUE_ID, DEVICE
-from src.video.multi_clip import wrap_for_test_clips
+from src.video.multi_clip import error_model_clips_mismatch, wrap_for_test_clips
 
 from cli import DeepTuneVisionOptions
 from utils import RunType, build_video_model
@@ -81,6 +81,7 @@ def evaluate(eval_df, out, model_weights, num_classes, model_version, mode, adde
     # --test_clips N: N clips per video, softmax probabilities averaged (src/video/multi_clip.py).
     video_options = video_options_from_args(args)
     MODEL = wrap_for_test_clips(MODEL, video_options.test_clips, mode)
+    error_model_clips_mismatch(ckpt_path, video_options.test_clips)
     test_dataset = ParquetVideoDataset.from_parquet(eval_df, transform=transformations, num_frames=num_frames,
                                                    clip_transform=native_video_transform(model_version),
                                                    options=video_options, num_clips=video_options.test_clips)

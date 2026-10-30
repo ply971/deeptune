@@ -72,3 +72,23 @@ class MultiClipModel(nn.Module):
 
 def wrap_for_test_clips(model: nn.Module, test_clips: int, mode: str) -> nn.Module:
     return MultiClipModel(model, mode) if int(test_clips) > 1 else model
+
+
+def error_model_clips_mismatch(checkpoint_path, test_clips: int, warn=print) -> bool:
+    """Warn (and return True) when the run's error_model.json was fitted on a
+    different number of clips per video than `test_clips`. Runs from before
+    this check recorded nothing and were fitted on one clip."""
+    import json
+    from evaluators.error_model import find_error_model
+    found = find_error_model(checkpoint_path)
+    if found is None:
+        return False
+    try:
+        fitted = int((json.loads(found.read_text(encoding='utf-8')).get('fit_info') or {}).get('test_clips') or 1)
+    except (OSError, ValueError, TypeError):
+        return False
+    if fitted == int(test_clips):
+        return False
+    warn(f'Warning: the error model ({found}) was fitted on {fitted} clip(s) per video, but this run averages '
+         f'{test_clips}; expected_error may be miscalibrated. Use --test_clips {fitted} to match it.')
+    return True

@@ -231,7 +231,13 @@ class Trainer:
     def _fit_error_model(self):
         """Fit the per-prediction error model on the validation split and
         save ``error_model.json`` + ``error_model_fit.json`` in output_dir.
-        Returns the fitted ``evaluators.error_model.ErrorModel``."""
+        Returns the fitted ``evaluators.error_model.ErrorModel``.
+
+        Optional hooks (set by the caller, like ``fit_error_model``):
+        ``error_fit_loader`` / ``error_fit_model`` replace the validation loader /
+        model for this fit (video ``--test_clips``: N clips per video through
+        ``src.video.multi_clip.MultiClipModel``, so the fit sees the same averaged
+        probabilities as evaluation), and ``error_fit_info`` is added to fit_info."""
         import json
         import random
         import numpy as np
@@ -243,11 +249,15 @@ class Trainer:
                      torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None)
         was_training = self.model.training
         outputs, labels, n_batches = [], [], 0
+        fit_loader = getattr(self, 'error_fit_loader', None)
+        fit_loader = self.val_loader if fit_loader is None else fit_loader
+        fit_model = getattr(self, 'error_fit_model', None)
+        fit_model = self.model if fit_model is None else fit_model
         try:
             self.model.eval()
             with torch.no_grad():
-                for inputs, batch_labels, *_ in self.val_loader:
-                    outputs.append(self.model(inputs.to(DEVICE, non_blocking=PIN_MEM)).detach().float().cpu())
+                for inputs, batch_labels, *_ in fit_loader:
+                    outputs.append(fit_model(inputs.to(DEVICE, non_blocking=PIN_MEM)).detach().float().cpu())
                     labels.append(batch_labels.detach().cpu())
                     n_batches += 1
         finally:
@@ -269,8 +279,9 @@ class Trainer:
                                                 num_outputs=scores.reshape(len(scores), -1).shape[1])
         error_model.fit_info.update({
             'split': 'validation', 'n_batches': n_batches,
-            'val_dataset_size': len(self.val_loader.dataset) if hasattr(self.val_loader, 'dataset') else None,
+            'val_dataset_size': len(fit_loader.dataset) if hasattr(fit_loader, 'dataset') else None,
         })
+        error_model.fit_info.update(getattr(self, 'error_fit_info', None) or {})
         out_dir = Path(self.output_dir)
         error_model.save(out_dir / ERROR_MODEL_FILENAME)
         (out_dir / ERROR_MODEL_FIT_FILENAME).write_text(json.dumps(error_model.to_dict()['fit_info'], indent=2), encoding='utf-8')

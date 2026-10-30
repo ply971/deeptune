@@ -18,7 +18,7 @@ from datasets.video_datasets import (VideoDataOptions, native_video_transform, o
 from helpers import transformations
 from inference.common import attach_expected_error
 from options import DEVICE, PIN_MEM
-from src.video.multi_clip import clip_disagreement, multi_clip_scores
+from src.video.multi_clip import clip_disagreement, error_model_clips_mismatch, multi_clip_scores
 from utils import build_video_model
 
 
@@ -48,6 +48,7 @@ def predict_video(
     clip softmax probabilities are averaged *before* the error model sees
     them, and a ``clip_disagreement`` column is added (0 = all clips agree)."""
     video_options = video_options or VideoDataOptions()
+    error_model_clips_mismatch(checkpoint_path, video_options.test_clips)
     model = build_video_model(
         model_version=model_version, num_classes=num_classes, added_layers=added_layers,
         embed_size=embed_size, freeze_backbone=freeze_backbone, mode=mode,
