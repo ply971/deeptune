@@ -9,9 +9,12 @@ splits show *what information the clips carry*:
   distribution and at chance on the unbiased test split, while motion stays
   reliable on both.
 
-Thresholds were fixed before looking at results and carry margin: chance-level
-checks use <= 0.60 accuracy for two balanced classes on >= 200 held-out clips
-(chance = 0.50, binomial s.d. ~ 0.035). Seeds are fixed, sizes tiny (32x32;
+Thresholds were set before the first full run and carry margin; they were not
+fixed in advance of every result (probe/generator fixes after failures are listed in
+docs/video-plan/reports/A3-phase2-benchmarks.md). Chance-level checks use
+<= 0.60 accuracy for two balanced classes on >= 200 held-out clips (chance =
+0.50, binomial s.d. ~ 0.035). "Single frame at chance" here means linear pixel
+probes only; fine-tuned single-frame models are checked separately (GPU). Seeds are fixed, sizes tiny (32x32;
 48x48 for the codec motion-vector probe).
 """
 import pytest

@@ -114,3 +114,11 @@ def test_single_frame_trains_on_tensor_batches(tmp_path):
     model = _model(adjustedPeftResNet, num_classes=2).train()
     Trainer(model, DataLoader(data, batch_size=2), DataLoader(data, batch_size=2), learning_rate=1e-3,
             mode="cls", num_epochs=1, output_dir=tmp_path).train()
+
+
+def test_desktop_run_config_accepts_single_frame_pooling():
+    from desktop.config import RunConfig, validate_config
+    pooling_issues = lambda pooling: [i for i in validate_config(RunConfig(modality="video", pooling=pooling))
+                                      if "pooling" in i]
+    assert pooling_issues("single_frame") == [] and pooling_issues("mean") == []
+    assert pooling_issues("max") != []

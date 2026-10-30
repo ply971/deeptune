@@ -122,6 +122,16 @@ python -m pytest tests/benchmarks tests/models/test_single_frame.py tests/models
 60 passed in 145.86s
 ```
 
+After the follow-up round, which merged `video-analysis` and fixed V-021 to V-023 plus the flip
+wiring (CPU, `options.DEVICE == cpu`, `NUM_WORKERS == 0`):
+
+```
+python -m pytest tests/benchmarks tests/models/test_single_frame.py -q
+49 passed in 95.53s
+python -m pytest tests/test_video_pipeline_e2e.py tests/models/test_video.py tests/models/test_desktop_config.py tests/test_video_manifest.py tests/training/test_video_trainer.py -q
+47 passed, 3 warnings in 28.05s
+```
+
 Of the 60, 44 are new. The other 16 are existing video model, manifest and trainer tests,
 re-run because `utils.py` changed. The honesty file takes about 55 s. The codec-MV test ran
 because PyAV 19.0.2 is now in the shared `.venv`; without PyAV it skips with a reason. The full
@@ -130,7 +140,14 @@ suite was not run, per the coordinator's rule.
 ## Honesty-check numbers
 
 Seed 0, `mp4v`, 12 frames (periodic 16). Held-out accuracy unless R² is stated. The thresholds
-were fixed before the results were seen.
+were set before the first full run of the probes. They were **not fixed in advance of every result** (the honesty
+test file has a single commit, made after the generator), and the post-failure adjustments to the
+probes and the generator are listed under Decisions. The thresholds themselves were not changed.
+
+**Scope:** "a single frame carries no signal" is shown only for linear probes on pixels (and FFT
+texture features) and for a frozen resnet18. A fine-tuned `single_frame:resnet18` at 700/400 and
+a lossless-codec variant (to exclude direction-asymmetric MPEG-4 artefacts) are **pending a GPU
+run by the coordinator** (Critic V-022). No slide should make the claim before that.
 
 | Probe | CI size (32×32; 300/200, speed and periodic 200/200, scene_bias 300/200/200) | Slide size (64×64; 700/400, scene_bias val 200) | Test requires |
 |---|---|---|---|
@@ -178,11 +195,15 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
 | single_frame:resnet18 | single_frame | cpu | 86.1 | 0.935 | 0.9401 | 0.505 | 0.4953 |
 
 **Reading the tables:**
-- Single frame and frame pooling (mean and attention) are at chance on direction, as expected.
+- Single frame and frame pooling (mean and attention), all frozen, are at chance on direction,
+  as expected. Fine-tuned single-frame and pooling runs are pending (GPU).
 - The frozen r3d_18 is **also at chance**. Kinetics features plus a linear head do not separate a
   1–2 px/frame drift direction at 112 px with 300 clips. Fine-tuning the whole r3d_18 instead
-  gives **1.000** on held-out test after 3 epochs, with validation at 96 / 99.5 / 100 % per
-  epoch. That meets the PLAN's expectation that a 3D model is well above chance while
+  gives **1.000** on held-out test after 3 epochs. *Correction (V-021):* the per-epoch
+  "validation" of 96 / 99.5 / 100 % in that run was **test** accuracy. Direction had no val
+  split then, so the runner logged on test. There was no model selection, so the final number
+  is unaffected, but it was watched during training. The runner now always validates on a
+  seeded val split. That meets the PLAN's expectation that a 3D model is well above chance while
   single-frame and frame pooling are not, but only once its spatio-temporal filters are trained.
 - On scene_bias, the single-frame model shows the textbook failure. It scores 0.935 on the biased
   val split by reading the background, and collapses to 0.505 on the unbiased test split. Flow
@@ -193,9 +214,10 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
 
 ## Decisions
 
-- **Torus world, with trajectories centred on the middle frame.** This makes every single frame
-  and the frame average class-independent *exactly*, not only approximately (verified by the
-  probes). Clips are grouped by scene: two clips per shared background, one per class, so the
+- **Torus world, with trajectories centred on the middle frame.** This makes every *rendered*
+  single frame and the frame average class-independent exactly. On the encoded clips this is
+  checked only with linear probes and a frozen resnet18; codec artefacts remain a possible
+  channel until the lossless and fine-tuned checks run. Clips are grouped by scene: two clips per shared background, one per class, so the
   background can never carry the label.
 - **The blob is red-dominant and the background is muted.** The untrimmed "blob present ⇔ in
   segment" test therefore runs on *decoded pixels*, independently of the generator.
@@ -204,8 +226,8 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
   model_version, so it combines with every 2D backbone and PEFT without new registry entries.
   Native 3D models raise a `ValueError` if asked for it.
 - **The runner uses the existing `ParquetVideoDataset` (bytes) path and the shared `Trainer`.**
-  The Phase 1 path dataset (A2's `open_video_dataset`) can replace it later. There is no model
-  selection, so using test as the logged validation set for direction does not leak.
+  The Phase 1 path dataset (A2's `open_video_dataset`) can replace it later. Since the V-021 fix
+  it validates on a seeded val split, never on test.
 - **Fixes I made to probes and generator after investigating failures** (thresholds unchanged):
   1. *Codec MV area overflow.* PyAV's `w`/`h` are uint8, and 16·16 overflowed to 0, which gave
      NaN. I fixed it by widening, and also switched to `motion_x / motion_scale` for sub-pixel
@@ -233,12 +255,13 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
 - **The 2D models were only run frozen.** The fine-tuned single-frame and frame-pooling rows,
   and the 700/400 sizes, still need the GPU run (command above). On frozen features every model
   except flow is at chance.
-- **`desktop/config.py` still validates pooling as mean/attention only** (line ~211), so the GUI
-  cannot launch `single_frame` runs. Its Test page passes the saved pooling to `infer.py`, which
-  now accepts it. Desktop is owned by another agent; this is a note for Phase 7.
-- **A2's flip augmentation does not call `check_flip_augmentation` yet.** A2 adds `--video_flip`
-  (I-001). It should call the guard with the dataset folder or manifest path. On data that is not
-  a benchmark the guard is a no-op.
+- **The desktop GUI has no widget for `single_frame` yet.** That is Phase 7 work. Its config
+  validation already accepts it (fixed in the follow-up below).
+- **The flip guard is wired only in `deeptune.py`**, where the raw dataset path is known (see the
+  follow-up below). A direct `trainers/video/train.py` call on parquet splits has no
+  `dataset.json` to check, so the guard cannot run there.
+- **The single-frame "no signal" claim is only partly checked.** Fine-tuned single-frame models
+  and a lossless-codec variant are pending (V-022, GPU).
 - **CI does not install PyAV**, so there the codec-MV honesty test skips with a reason.
 
 ## Notes for later phases
@@ -256,3 +279,32 @@ trained, on ImageNet (2D) or Kinetics-400 (r3d_18) features, with `--epochs 5 --
   to unbiased test as the background-reliance gap. See P-001 (SCUFO static probe) on the board.
 - **Board:** I posted I-002 (interfaces), F-001 (honesty numbers) and P-001 (re F-007, the SCUFO
   probe). Nothing in REVIEWS.md or PROPOSALS.md was addressed to A3.
+
+## A3 follow-ups (after the Critic's review, V-020..V-024)
+
+- **Merge:** I merged `video-analysis` at d517c15 (A1, A2, A4, S1a, desktop) into this branch,
+  in commit `b558baf`.
+  - The `--pooling` one-liners in `cli.py` and `infer.py` keep `single_frame` next to A2's
+    video-data arguments and A4's `--no_error_model`.
+  - `--pooling` still lives in `cli.py` / `infer.py`, not in `handlers/video_args.py`.
+  - `desktop/config.py` RunConfig validation now accepts `single_frame` (V-023). The GUI widgets
+    are Phase 7. `InferenceConfig` does not validate pooling.
+- **V-021:**
+  - `make_direction_dataset`, `make_speed_dataset` and `make_periodic_dataset` take `n_val`
+    (CLI `--n_val`, default 200). The val split is seeded per `(seed, task, 'val', index)` with
+    disjoint scenes.
+  - `scripts/run_motion_benchmark.py` always generates a val split and refuses `--data` without
+    one, or `--n_val 0`. It gives the Trainer `loaders["val"]`, so `error_model.json` is fitted
+    on val. A test checks `error_model_fit.json` reports `val_dataset_size` = n_val, which
+    differs from n_test.
+  - The r3d_18 "validation" sentence above is corrected.
+- **V-022:** the claim is scoped and the thresholds are described as set before the first full run, with the later adjustments listed (above
+  and in `benchmark.md`). Fine-tuned single-frame (direction, speed, periodic at 700/400) and a
+  lossless-codec variant are pending the coordinator's GPU run.
+- **Flip guard wired:** `deeptune.py` calls `benchmarks.guards.check_flip_augmentation(args.df,
+  hflip=True)` when `--video_flip` is set, and turns a refusal into a normal argparse error
+  (exit 2).
+  - Tests (`tests/benchmarks/test_flip_guard_pipeline.py`): a direction benchmark manifest is
+    refused. A flip-safe benchmark (periodic) and ordinary data without `dataset.json` pass the
+    guard.
+  - The trainers only see parquet splits, so the check happens where the raw path is known.

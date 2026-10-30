@@ -3,8 +3,10 @@
 The Phase 2 benchmarks are synthetic video datasets with exactly known ground truth. Each one
 checks one claim:
 
-- **direction, speed, periodic** check that a model *learns motion*. On these tasks a single
-  frame tells you nothing about the label.
+- **direction, speed, periodic** check that a model *learns motion*. On these tasks the
+  rendered single frame is class-independent by construction (torus world, centred
+  trajectories). Linear pixel probes and a frozen resnet18 confirm it on the encoded clips; a
+  fine-tuned single-frame check is pending (see "Is the data honest?").
 - **untrimmed** checks that a model can *find where an action is* when it is trained only on
   video-level labels. Phase 4 (timeline, CtxPL localisation) uses it.
 - **scene_bias** checks that a model *ignores the background*. Phases 4 and 6 use it to measure
@@ -31,7 +33,8 @@ single frame is uniform, whatever its velocity.
 | `--size` | 64 (untrimmed 48) | Frame side in pixels. Must be even. Speeds are given for 32 px and scale with the size. |
 | `--num_frames` | 12 (periodic 16) | Length of a trimmed clip. |
 | `--n_train` / `--n_test` | 700 / 400 | Same as the course slide's experiment. |
-| `--n_val`, `--bias` | 200, 0.9 | scene_bias only. |
+| `--n_val` | 200 | Validation split (disjoint scenes) for direction, speed, periodic and scene_bias. For scene_bias it is the biased held-out split. Model runs validate on it, never on test. |
+| `--bias` | 0.9 | scene_bias only. |
 | `--n_videos`, `--min_length`, `--max_length`, `--max_instances`, `--n_classes`, `--background_motion` | 40, 150, 300, 3, 3, mixed | untrimmed only. |
 | `--fps` | 10 | Stored in the metadata. Segment times are `frame / fps`. |
 | `--codec` | auto | `auto` uses H.264 (`avc1`) if the OpenCV build can encode it, otherwise MPEG-4 Part 2 (`mp4v`). Both carry motion vectors. The pip OpenCV wheel on Windows has no OpenH264 DLL, so you get `mp4v` there. The codec used is recorded in `dataset.json`. |
@@ -169,9 +172,21 @@ segments.
 ## Is the data honest? (the test oracle)
 
 `tests/benchmarks/test_benchmark_honesty.py` fits simple scikit-learn probes from
-`benchmarks/probes.py` on the train split and scores them on held-out clips. The thresholds were
-fixed before any results were seen. Chance-level checks use an accuracy of 0.60 or less, on at
+`benchmarks/probes.py` on the train split and scores them on held-out clips. The thresholds were set before the
+first full run of the probes. They were not fixed in advance of every result, and the probes and generator were
+adjusted after failures: the speed statistic was gated on changing pixels (R² 0.33 → 0.80), the
+blob got a high-contrast texture, a uint8 overflow in the codec motion-vector feature was fixed,
+and the motion-vector probe moved from 32×32 to 48×48 (0.81 → 0.985). The thresholds themselves
+were not changed. Chance-level checks use an accuracy of 0.60 or less, on at
 least 200 balanced held-out clips (s.d. ≈ 0.035).
+
+**Scope of the "no single-frame signal" result.** It is shown for *linear probes on raw pixels*
+(and FFT texture features) and for a *frozen* resnet18 single-frame model. A fine-tuned
+`single_frame:resnet18` is the strongest single-frame adversary, and it has not been run yet. Nor
+has a lossless-codec variant, which would rule out direction-asymmetric MPEG-4 artefacts as a
+leak channel. Both are pending a GPU run by the coordinator (700/400). Until then, do not state
+"a single frame carries no signal" without this qualifier. One codec channel has been checked:
+middle-frame sharpness versus speed gives Spearman |r| ≤ 0.01 (Critic, V-022).
 
 `scripts/check_benchmark_honesty.py` prints the same numbers at any size. The table below shows
 them at CI size (32×32, 12 frames, seed 0, `mp4v`; train 300 / test 200, speed and periodic

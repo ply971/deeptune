@@ -5,10 +5,12 @@ class VideoSingleFrameClassifier(nn.Module):
     """
     The "single frame" baseline of Karpathy et al. (CVPR 2014, "Large-scale
     Video Classification with Convolutional Neural Networks"): a 2D image
-    backbone sees only the *middle* frame of the clip. Whatever it learns is
-    appearance, never motion, so on a task where motion is the whole signal
-    (the Phase 2 direction benchmark) it must stay at chance - that is the
-    point of the baseline.
+    backbone sees only the *middle* frame of the clip. It can learn appearance,
+    never motion. On the Phase 2 direction benchmark the rendered middle frame is
+    class-independent by construction, so this baseline is *expected* near
+    chance there. So far that is checked with linear pixel probes and a frozen
+    backbone only; a fine-tuned run (and a lossless-codec variant, to rule out
+    codec artefacts) is pending. Above-chance results would point to a leak.
 
     Wraps any of DeepTune's adjusted*Net 2D backbones (PEFT or not) exactly
     like VideoFramePoolClassifier does, and keeps the video model contract:
