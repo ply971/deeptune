@@ -196,6 +196,55 @@ table/figure in the report.
 
 ---
 
+## 4b. Scope extension (agreed 2026-10-30)
+
+The user asked for (1) a trainable-parameter budget, (2) df-analyze export of
+augmented embeddings, (3) a per-prediction error estimate ("adaptive error"),
+(4) the strongest and most reliable models, a publishable paper, and (5) all
+the main computer-vision tasks on video, not only clip labels: detection,
+segmentation, tracking. Work runs as parallel agents (max 3 at once). The
+coordinator plan is in the session's plan file. Agent reports go in
+`docs/video-plan/reports/`.
+
+**Honesty rule.** No feature or paper promises a fixed accuracy such as 99%.
+"No false predictions" is delivered as **abstention with a stated error
+guarantee** (conformal / selective prediction). Every number is measured on
+public benchmarks or on the user's data, with confidence intervals.
+
+**Licences.** Prefer Apache/MIT/BSD weights (torchvision, RT-DETR v2,
+D-FINE, Grounding DINO, OWLv2, SAM 2, SegFormer, Mask2Former, VideoMAE).
+**SAM 3** and **V-JEPA 2** use Meta licences, and SAM 3 has gated checkpoints:
+make them optional backends, never defaults, and record the licence in the docs.
+
+### New tasks (all via `transformers` 5.16.1 or torchvision, already installed)
+| Task | What | Builds on |
+|---|---|---|
+| A1 | Trainable-parameter budget + "trainable / total" report | — |
+| A4 | Per-prediction `expected_error` fitted on validation, calibration table | — |
+| R1 | Modern video backbones as frozen features or PEFT: VideoMAE (V2), V-JEPA 2, SigLIP 2 / DINOv3 frame features; ensembles; multi-clip TTA | Phase 1, 3 |
+| R2 | Conformal prediction + abstention ("not sure") with a target error rate; selective-risk curves | A4, Phase 5 |
+| R3 | Auto model selection: try backbones and settings with grouped CV, keep the best, report CIs | Phase 5, R1 |
+| S0 | Spatial data layer: box/mask/track labels (COCO JSON, YOLO txt, MOT txt, CVAT export import); **auto-labelling** = Grounding DINO boxes → SAM 2 masks → user corrects | Phase 1 |
+| S1 | Detection on video frames: fine-tune RT-DETR v2 / D-FINE (+ torchvision Faster R-CNN baseline); zero-shot open-vocabulary detection (Grounding DINO, OWLv2: "lobster" with no training) | S0 |
+| S2 | Segmentation: promptable video object segmentation (SAM 2 click/box → masks through the video; SAM 3 text prompts optional); semantic/instance fine-tune (SegFormer, Mask2Former) | S0 |
+| S3 | Tracking: tracking-by-detection (ByteTrack / BoT-SORT re-implemented, Kalman + Hungarian via scipy) on S1 detections; SAM 2 mask tracking; object counting and per-track timelines | S1, S2 |
+| S4 | Spatial metrics: COCO box/mask mAP (torchmetrics; checked against pycocotools), HOTA / MOTA / IDF1 (checked against TrackEval on fixtures) | S1–S3 |
+| P  | Phase 8 → paper: UCF101 / HMDB51, a Something-Something v2 subset (motion), THUMOS'14 (CtxPL), a small detection/tracking benchmark; ablations, seeds, CIs, related work | everything |
+
+Stretch (cut first if time is short): pose (ViTPose), token merging, RAFT,
+SAM 3 backend, the DeepTune-feature THUMOS run.
+
+### Priority for the end-of-term deadline (Dec 2026)
+1. Waves 1–2 as planned (A1, A2, A3, A4; B1, B2, B3).
+2. Spatial core: S0 → S1 → S3, with zero-shot detection + tracking first,
+   so a user can say "track the lobsters" with no labels.
+3. R1 + R2 (the best models, plus abstention), then Wave 3 (timeline, CtxPL,
+   unsupervised, explainability), then S2 and S4, then R3.
+4. GUI (Wave 4) covers everything that landed. Course report in December;
+   the paper follows if the measured results support one.
+
+---
+
 ## 5. How we run this with AI (from the *Best Practices* slide)
 
 1. **Two-AI workflow.** Claude (chat) = planner/reviewer; Claude Code (VS Code)
