@@ -55,7 +55,8 @@ app with every dependency bundled in.
 - Fine-tuning state-of-the-art Computer Vision algorithms (ResNet, DenseNet, etc.) for image classification.
 - Fine-tuning state-of-the-art NLP (BERT, GPT-2) algorithms for text classification.
 - End-to-end training for tabular and time-series algorithms.
-- Fine-tuning video classifiers on raw video clips, either by sampling frames through the existing 2D vision backbones (with pooling over time), or through native spatio-temporal architectures (3D-CNNs and video transformers) that learn motion directly.
+- Fine-tuning video classifiers on raw video clips, either by sampling frames through the existing 2D vision backbones (with pooling over time, or `--pooling single_frame` for the middle-frame baseline), or through native spatio-temporal architectures (3D-CNNs and video transformers) that learn motion directly.
+- Seeded synthetic video benchmarks with exact ground truth (motion direction, speed, periodic motion, untrimmed videos with action segments, scene-biased backgrounds): `python -m benchmarks.synthetic_motion --task direction --out DIR`, then `scripts/run_motion_benchmark.py` to compare models. See [docs/video-plan/benchmark.md](docs/video-plan/benchmark.md).
 - Providing PEFT with LoRA support for Computer Vision and Video algorithms implemented, enabling state-of-the-art models that typically require substantial computational resources to perform efficiently on lower-powered devices. This approach not only reduces computational overhead but also enhances performance.
 - Leveraging fine-tuned and pretrained state-of-the-art vision, video, and language models to generate robust knowledge representations for downstream visual, temporal, and textual tasks.
   
