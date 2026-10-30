@@ -8,7 +8,8 @@ av = pytest.importorskip('av')
 from datasets import video_io
 from datasets.video_io import (MotionVectorsUnavailable, VideoDecodeError, VideoReader, available_backends,
                                flip_motion_field, reencode_for_motion_vectors)
-from datasets.video_synth import decode_frame_index, index_coded_clip, translating_clip, write_clip
+from datasets.video_synth import (decode_frame_index, index_coded_clip, translating_clip, trim_with_edit_list,
+                                  write_clip)
 
 BACKENDS = [name for name in ('torchcodec', 'pyav', 'opencv')]
 
@@ -61,6 +62,23 @@ def test_sparse_reads_with_a_gop_longer_than_the_gap_between_targets(tmp_path):
     assert time.perf_counter() - start < 20
     keys = reader._impl._keys.tolist()
     assert keys[0] == 0 and len(keys) >= 2 and 389 - keys[-1] > 96  # a target far past the last keyframe
+
+
+@pytest.mark.parametrize('frames,wanted', [(40, [0, 10, 36, 5]), (390, [0, 386, 200, 301, 50])])
+def test_edit_list_trimmed_mp4_indexes_only_the_shown_frames(tmp_path, frames, wanted):
+    # V-018: packets before the edit list are demuxed (is_discard) but never shown.
+    # Both the sequential path (40 frames) and the seek path (390) must index shown frames.
+    source = index_coded_clip(tmp_path / 'full.mp4', frames, width=16, height=16, options={'g': '48'})
+    trimmed = trim_with_edit_list(source, tmp_path / 'trimmed.mp4', hidden_frames=3)
+    import av
+    with av.open(str(trimmed)) as container:
+        assert sum(p.is_discard for p in container.demux(video=0) if p.size) == 3  # the fixture is what we claim
+    reader = VideoReader(trimmed, backend='pyav')
+    assert reader.metadata().frame_count == frames - 3
+    assert [decode_frame_index(f) for f in reader.get_frames(wanted)] == [w + 3 for w in wanted]
+    opencv = VideoReader(trimmed, backend='opencv')
+    assert not opencv.metadata().frame_count_exact
+    assert [decode_frame_index(f) for f in opencv.get_frames(wanted)] == [w + 3 for w in wanted]
 
 
 def test_metadata_reports_fps_count_duration_size_codec(clips):

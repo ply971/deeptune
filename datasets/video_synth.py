@@ -57,6 +57,33 @@ def write_clip(path, frames, fps: int = 25, codec: str = 'libx264', options: Opt
     return path
 
 
+def trim_with_edit_list(source, destination, hidden_frames: int = 3) -> Path:
+    """Remux `source` (no re-encode) so its first `hidden_frames` frames sit before
+    the MP4 edit list's start, like an ``ffmpeg -ss ... -c copy`` trim: the demuxer
+    flags those packets ``is_discard`` and the decoder never shows them."""
+    import av
+    destination = Path(destination)
+    source_container = av.open(str(source))
+    try:
+        stream = source_container.streams.video[0]
+        packets = [packet for packet in source_container.demux(stream) if packet.size]
+        times = sorted(packet.pts for packet in packets)
+        shift = hidden_frames * (times[1] - times[0])
+        output = av.open(str(destination), 'w')
+        try:
+            target = output.add_stream_from_template(stream)
+            for packet in packets:
+                packet.pts -= shift
+                packet.dts -= shift
+                packet.stream = target
+                output.mux(packet)
+        finally:
+            output.close()
+    finally:
+        source_container.close()
+    return destination
+
+
 def index_coded_clip(path, num_frames: int, width: int = 32, height: int = 32, **kwargs) -> Path:
     return write_clip(path, (index_coded_frame(i, width, height) for i in range(num_frames)), **kwargs)
 

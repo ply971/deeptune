@@ -508,17 +508,32 @@ class _PyAVBackend:
             fps = float(rate) if rate else 0.0
             pts, key_pts, packets = [], [], 0
             for packet in container.demux(stream):
-                if packet.size:
-                    packets += 1
-                    if packet.pts is not None:
-                        pts.append(packet.pts)
-                        if packet.is_keyframe:
-                            key_pts.append(packet.pts)
+                if not packet.size:
+                    continue
+                if packet.pts is not None and packet.is_keyframe:
+                    key_pts.append(packet.pts)  # discarded keyframes are still where a seek lands
+                if getattr(packet, 'is_discard', False):
+                    # Samples before an MP4 edit list's start (e.g. `ffmpeg -c copy` trims):
+                    # demuxed, decoded as references, but never shown -- not frames of the video.
+                    continue
+                packets += 1
+                if packet.pts is not None:
+                    pts.append(packet.pts)
             if packets == 0:
                 raise VideoDecodeError(f'{describe_source(self.source)} contains no video frames (zero length).')
             unique = np.unique(np.asarray(pts, dtype=np.int64))
             # Timestamps index frames exactly only if every packet has its own one.
             self._pts = unique if len(unique) == packets else None
+            # The first decoded frame gives the true size and display rotation, and
+            # must be the first indexed timestamp; otherwise index by counting decoded frames.
+            container.seek(0)
+            first = next(iter(container.decode(stream)), None)
+            if first is None:
+                raise VideoDecodeError(f'{describe_source(self.source)} contains no decodable frames.')
+            if self._pts is not None and (first.pts is None or int(first.pts) != int(self._pts[0])):
+                LOGGER.warning('%s: first shown frame does not match the packet index; reading sequentially.',
+                               describe_source(self.source))
+                self._pts = None
             if self._pts is not None:
                 self._keys = np.unique(np.searchsorted(self._pts, np.asarray(key_pts, dtype=np.int64)))
             variable, duration = False, (packets / fps if fps else 0.0)
@@ -529,11 +544,6 @@ class _PyAVBackend:
                     variable = bool(steps.std() > 0.05 * steps.mean())
                 step = float(np.median(steps)) if len(steps) else (1.0 / fps if fps else 0.0)
                 duration = float(times[-1] + step)
-            # The first decoded frame gives the true size and display rotation.
-            container.seek(0)
-            first = next(iter(container.decode(stream)), None)
-            if first is None:
-                raise VideoDecodeError(f'{describe_source(self.source)} contains no decodable frames.')
             rotation = int(round(getattr(first, 'rotation', 0) or 0)) % 360
             width, height = int(first.width), int(first.height)
             if rotation in (90, 270):
@@ -901,7 +911,9 @@ class _OpenCVBackend:
             fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
             fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
             codec = ''.join(chr((fourcc >> 8 * i) & 0xFF) for i in range(4)).strip('\x00 ') or 'unknown'
-            exact = count > 0
+            # CAP_PROP_FRAME_COUNT is the container's sample count: it includes samples an
+            # MP4 edit list hides, so it is only an estimate (reads clamp to what decodes).
+            exact = False
             ok, first = cap.read()
             if not ok:
                 raise VideoDecodeError(f'{describe_source(self.source)} contains no decodable frames (zero length).')
