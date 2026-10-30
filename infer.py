@@ -31,7 +31,7 @@ from inference.data import (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description='Run a trained DeepTune model on new data.')
+    p = argparse.ArgumentParser(description='Run a trained DeepTune model on new data.', allow_abbrev=False)
     p.add_argument('--modality', required=True, choices=['images', 'text', 'tabular', 'timeseries', 'video'])
     p.add_argument('--checkpoint', required=True, type=Path, help="The run's checkpoint (file or directory, per modality).")
     p.add_argument('--data', required=True, type=Path, help='New data: a folder (images/video) or a CSV/XLSX/parquet file.')
@@ -46,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--mode', choices=['cls', 'reg'], default='cls')
     p.add_argument('--added_layers', type=int, default=2)
     p.add_argument('--embed_size', type=int, default=1000)
+    p.add_argument('--lora_rank', type=int, default=None,
+                   help="LoRA rank of a native video PEFT model. Default: the run's cli_arguments.json; "
+                        'a run recorded without it used --embed_size as the rank.')
     p.add_argument('--freeze-backbone', action='store_true')
     p.add_argument('--use-peft', action='store_true')
 
@@ -99,9 +102,12 @@ def _load_new_data(args: argparse.Namespace):
 # Video settings that define how test clips are built. When a flag is not given
 # on the command line, the checkpoint run's cli_arguments.json supplies it (the
 # desktop Test page passes them explicitly). --num_workers is deliberately not
-# inherited: it describes the training machine, not the pipeline.
+# inherited: it describes the training machine, not the pipeline. Nor is
+# --frame_cache: the folder is machine-specific, and only the resize it implied
+# belongs to the pipeline. The parser refuses abbreviations, because an abbreviated
+# flag would not count as given and the recorded value would silently replace it.
 RECORDED_VIDEO_SETTINGS = ('num_frames', 'pooling', 'video_backend', 'temporal_sampling', 'clip_stride',
-                           'clip_duration_sec', 'motion_source', 'test_clips')
+                           'clip_duration_sec', 'motion_source', 'test_clips', 'test_crops', 'lora_rank', 'frame_cache_size', 'frame_resize')
 
 
 def _recorded_run_arguments(checkpoint: Path) -> dict:
@@ -130,6 +136,23 @@ def apply_recorded_video_settings(args: argparse.Namespace, argv: list[str]) -> 
             except SystemExit:
                 print(f'Ignoring the recorded {name}={value!r}: not a valid value for this version.')
         used[name] = getattr(args, name)
+    if recorded:
+        trained_resize = recorded.get('frame_resize')
+        if trained_resize is None:
+            trained_resize = recorded.get('frame_cache_size', 256) if recorded.get('frame_cache') else 0
+        try:
+            trained_resize = parser.parse_args(_required_stub() + ['--frame_resize', str(trained_resize)]).frame_resize
+        except SystemExit:
+            raise ValueError('The recorded frame resize is invalid; cannot reconstruct the trained pixel pipeline.')
+        if 'frame_resize' not in given:
+            args.frame_resize = args.frame_cache_size if 'frame_cache_size' in given else trained_resize
+        if args.frame_resize != trained_resize:
+            print(f'WARNING: frame resize mismatch: trained={trained_resize}, inference={args.frame_resize}. '
+                  'This changes the pixel pipeline.')
+        used['frame_resize'] = args.frame_resize
+    elif args.frame_cache and args.frame_resize is None:
+        print(f'WARNING: no cli_arguments.json next to the checkpoint, so the trained frame resize is unknown; '
+              f'--frame_cache shrinks frames to {args.frame_cache_size}. Pass --frame_resize to set it.')
     return used if recorded else {}
 
 
@@ -173,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             df, args.checkpoint, args.model_version, args.num_classes, args.added_layers,
             args.embed_size, args.freeze_backbone, args.mode, args.use_peft, args.batch_size,
             args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
+            **({} if args.lora_rank is None else {'lora_rank': args.lora_rank}),
         )
     elif args.modality == 'text':
         from inference.text import predict_text

@@ -9,6 +9,8 @@ from trainers.vision.custom_siglip_train import train_siglip
 from cli import DeepTuneVisionOptions
 from utils import get_model_cls, RunType,set_seed
 from trainers.param_budget import build_with_budget
+from handlers.training_args import TrainingOptions
+from trainers.training_basics import data_fingerprint, is_pretrained_version, seed_everything
 
 def main():
     args = DeepTuneVisionOptions(RunType.TRAIN)
@@ -80,6 +82,11 @@ def train(
     MODEL_ARCHITECTURE = args.model_architecture
     if fixed_seed:
         set_seed(fixed_seed)
+    # --- training basics (T1) ---
+    training_options = TrainingOptions.from_args(args).validate(mode)
+    if training_options.seed is not None:
+        seed_everything(training_options.seed)
+    # --- end training basics ---
 
     if added_layers == 0:
         raise ValueError('As you apply one of transfer learning or PEFT, please choose 1 or 2 as your preferred number of added_layers.')
@@ -89,6 +96,9 @@ def train(
     if MODEL_ARCHITECTURE.lower() == "siglip" and model_version == "siglip":
         if trainable_params is not None:
             raise ValueError('--trainable_params is not supported for SigLIP; remove the budget or choose another model.')
+        if training_options.non_default():
+            raise ValueError(f"These flags are not supported for SigLIP, which has its own training loop: "
+                             f"{', '.join('--' + name for name in training_options.non_default())}.")
         _ = train_siglip(
             num_classes=num_classes,
             added_layers=added_layers,
@@ -109,13 +119,16 @@ def train(
     train_dataset = ParquetImageDataset.from_parquet(parquet_file=train_df, transform=transformations)
     val_dataset = ParquetImageDataset.from_parquet(parquet_file=val_df, transform=transformations)
 
+    # An exact resume needs fresh workers each epoch: a persistent worker's random
+    # state cannot be saved, and it draws no new base seed from the main generator.
+    persistent_workers = PERSIST_WORK and not training_options.checkpoints_or_resumes
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
+        persistent_workers=persistent_workers
     )
     val_loader = DataLoader(
         val_dataset,
@@ -123,7 +136,7 @@ def train(
         shuffle=False,
         num_workers=NUM_WORKERS,
         pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
+        persistent_workers=persistent_workers
     )
 
     chosen_model = get_model_cls(model_architecture=MODEL_ARCHITECTURE, use_peft=use_peft)
@@ -137,8 +150,10 @@ def train(
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
-    trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR)
+    trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR, training_options=training_options,
+                      backbone_pretrained=is_pretrained_version(model_version))
     trainer.fit_error_model = not getattr(args, 'no_error_model', False)
+    trainer.data_identity.update(train_file=data_fingerprint(train_df), val_file=data_fingerprint(val_df))
     
     print('The Trainer class is loaded successfully.')
     

@@ -60,8 +60,10 @@ class TestTrainer:
         get an ``expected_error`` column and ``error_calibration.json/.csv``
         report stated vs observed error per decile on this held-out set."""
         start_time = time.time()
+        loaded_state = None
         if best_model_weights_path is not None:
-            self.model.load_state_dict(torch.load(best_model_weights_path, map_location=self.device, weights_only=True))
+            loaded_state = torch.load(best_model_weights_path, map_location=self.device, weights_only=True)
+            self.model.load_state_dict(loaded_state)
         self.model.to(self.device)
         self.model.eval()
         total_loss, total = 0.0, 0
@@ -103,9 +105,10 @@ class TestTrainer:
         # --- per-sample predictions + per-prediction error estimate (A4) ---
         scores = probabilities if self.mode == 'cls' else predictions
         per_sample = _per_sample_predictions(labels, predictions, scores, self.mode)
+        # The file's weights when there is a file: loading may have upgraded old LoRA layouts.
         estimate = _attach_error_estimate(per_sample, scores, self.mode, self.output_dir,
                                           best_model_weights_path, error_model_path, self.logger,
-                                          self.model.state_dict())
+                                          self.model.state_dict() if loaded_state is None else loaded_state)
         if estimate is not None:
             metrics['error_estimate'] = estimate
         per_sample.to_csv(self.output_dir / PREDICTIONS_FILENAME, index=False)
@@ -170,5 +173,7 @@ def _attach_error_estimate(per_sample, scores, mode, output_dir, checkpoint_path
     report = calibration_table(per_sample['expected_error'].to_numpy(), observed_errors(per_sample, mode), mode=mode)
     save_report(report, output_dir, CALIBRATION_STEM,
                 extra={'split': 'test', 'error_model': {k: model.fit_info.get(k) for k in
-                                                        ('method', 'n_samples', 'base_error', 'split', 'score_feature')}})
+                                                        ('method', 'n_samples', 'base_error', 'split', 'score_feature',
+                                                         'validation_used_for_model_selection', 'selection_metric',
+                                                         'best_epoch')}})
     return metrics_summary(report, model)

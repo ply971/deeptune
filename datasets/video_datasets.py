@@ -21,9 +21,9 @@ Each sample is ``(clip, label[, extras])`` with ``clip`` shaped
 ``[T, C, H, W]`` -- or ``[N, T, C, H, W]`` when ``num_clips = N > 1``
 (``--test_clips``; see ``src/video/multi_clip.py`` for the averaging).
 
-Hooks for the frame cache (Phase 1 task 7, a later agent): every decode goes
-through ``_decode_frames(i, indices)``; ``clip_key(i)`` gives a stable key
-(file fingerprint). A cache subclasses / wraps ``_decode_frames``.
+Frame cache (``--frame_cache DIR``, ``datasets/frame_cache.py``): every decode
+goes through ``_decode_frames(i, reader, indices)``; ``clip_key(i)`` gives a
+stable key (file fingerprint). Only deterministic clip sampling is cached.
 """
 from __future__ import annotations
 
@@ -43,6 +43,8 @@ from pandas import DataFrame
 from PIL import Image
 from torch.utils.data import Dataset
 
+from datasets.frame_cache import (DEFAULT_FRAME_CACHE_SIZE, FrameCache, clip_sampling_is_cacheable, frame_cache_key, retry_while_locked,
+                                  motion_curve_key, resize_short_side)
 from datasets.video_augment import ClipAugment, ClipAugmentConfig
 from datasets.motion_stack import clip_motion_field, load_motion_field, normalise_motion_field
 from datasets.video_io import (BACKEND_CHOICES, CURVE_METHODS, VideoDecodeError, VideoReader, describe_source,
@@ -111,7 +113,11 @@ class VideoDataOptions:
     clip_motion: Optional[str] = None
     motion_cache: Optional[str] = None
     test_clips: int = 1
+    test_crops: int = 1
     num_workers: object = 'auto'
+    frame_cache: Optional[str] = None
+    frame_cache_size: int = DEFAULT_FRAME_CACHE_SIZE
+    frame_resize: Optional[int] = None
 
     def __post_init__(self):
         if self.video_backend not in BACKEND_CHOICES:
@@ -126,6 +132,15 @@ class VideoDataOptions:
             raise ValueError('test_clips must be at least 1.')
         if self.video_flip and not self.video_augment:
             raise ValueError('--video_flip only applies together with --video_augment.')
+        if int(self.frame_cache_size) < 0:
+            raise ValueError('frame_cache_size must be 0 (keep the decoded size) or positive.')
+        if self.frame_resize is not None and int(self.frame_resize) < 0:
+            raise ValueError('frame_resize must be 0 (keep the decoded size) or positive.')
+
+    @property
+    def effective_frame_resize(self):
+        return int(self.frame_resize if self.frame_resize is not None else
+                   self.frame_cache_size if self.frame_cache else 0)
 
     def sampling_spec(self, num_frames: int, train: bool) -> SamplingSpec:
         return SamplingSpec(strategy=self.temporal_sampling, num_frames=num_frames, clip_stride=self.clip_stride,
@@ -142,7 +157,7 @@ _OPTION_TYPES = {
     'motion_cache': str,
     'video_backend': str, 'temporal_sampling': str, 'clip_stride': int, 'clip_duration_sec': float,
     'motion_source': str, 'video_augment': bool, 'video_flip': bool, 'video_speed_perturb': float,
-    'test_clips': int, 'num_workers': (int, str),
+    'test_clips': int, 'test_crops': int, 'num_workers': (int, str), 'frame_cache': str, 'frame_cache_size': int, 'frame_resize': int,
 }
 
 
@@ -267,12 +282,15 @@ class ArrowBytesStore:
         schema = pa.schema([('videos', pa.large_binary())])
         tmp = path.with_suffix(path.suffix + f'.{os.getpid()}.part')
         rows = 0
-        with pa.OSFile(str(tmp), 'wb') as sink, pa.ipc.new_file(sink, schema) as writer:
-            for values in batches:
-                array = pa.array(values, type=pa.large_binary())
-                writer.write_batch(pa.record_batch([array], schema=schema))
-                rows += len(array)
-        os.replace(tmp, path)
+        try:
+            with pa.OSFile(str(tmp), 'wb') as sink, pa.ipc.new_file(sink, schema) as writer:
+                for values in batches:
+                    array = pa.array(values, type=pa.large_binary())
+                    writer.write_batch(pa.record_batch([array], schema=schema))
+                    rows += len(array)
+            retry_while_locked(lambda: os.replace(tmp, path))
+        finally:
+            _try_unlink(tmp)
         return cls(path, rows)
 
 
@@ -353,6 +371,13 @@ class _VideoClipDataset(Dataset):
         self._motion_cache: dict = {}
         self._warned: set = set()
         self._augment_params = None
+        self.frame_cache = (FrameCache(self.options.frame_cache, self.options.effective_frame_resize)
+                            if self.options.frame_cache else None)
+        self._frames_cacheable = clip_sampling_is_cacheable(self.spec, self.train)
+        if self.frame_cache is not None and not self._frames_cacheable:
+            LOGGER.warning('--frame_cache: training clips are sampled randomly here (%s), so they are decoded every '
+                           'epoch and not cached; only deterministic clips (validation, test) use the cache.',
+                           self.options.temporal_sampling + (' + --video_augment' if self.options.video_augment else ''))
 
     @staticmethod
     def _time_column(df, name):
@@ -378,7 +403,17 @@ class _VideoClipDataset(Dataset):
         return source_fingerprint(self._source(i))
 
     def _decode_frames(self, i: int, reader: VideoReader, indices: np.ndarray) -> np.ndarray:
-        return reader.get_frames(indices, clamp_to_end=True)
+        cache = self.frame_cache
+        if cache is None:
+            return resize_short_side(reader.get_frames(indices, clamp_to_end=True), self.options.effective_frame_resize)
+        if not self._frames_cacheable:  # same resize as cached clips, so train and val see the same pipeline
+            return cache.resize(reader.get_frames(indices, clamp_to_end=True))
+        key = frame_cache_key(self.clip_key(i), self.spec, indices, cache.size, reader.backend)
+        frames = cache.get_frames(key, len(indices))
+        if frames is None:
+            frames = cache.resize(reader.get_frames(indices, clamp_to_end=True))
+            cache.put_frames(key, frames)
+        return frames
 
     # -- sampling ----------------------------------------------------------
     def _rng(self):
@@ -389,7 +424,15 @@ class _VideoClipDataset(Dataset):
 
     def _motion(self, i: int, reader: VideoReader):
         if i not in self._motion_cache:
-            self._motion_cache[i] = reader.motion_curve(self.options.motion_source)
+            cache, curve, key = self.frame_cache, None, None
+            if cache is not None:  # a curve decodes the whole clip, so it is worth keeping on disk too
+                key = motion_curve_key(self.clip_key(i), self.options.motion_source, reader.backend)
+                curve = cache.get_curve(key)
+            if curve is None:
+                curve = reader.motion_curve(self.options.motion_source)
+                if cache is not None:
+                    cache.put_curve(key, curve)
+            self._motion_cache[i] = curve
         return self._motion_cache[i]
 
     def sample_indices(self, i: int, reader: VideoReader) -> np.ndarray:

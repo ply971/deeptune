@@ -488,6 +488,7 @@ class InferenceConfig:
     mode: str = "cls"
     added_layers: int = 2
     embed_size: int = 1000
+    lora_rank: Optional[int] = None  # native video PEFT; None = the rank is embed_size (old runs)
     freeze_backbone: bool = False
     use_peft: bool = False
     num_frames: int = 8
@@ -507,7 +508,7 @@ class InferenceConfig:
 # passed on, so old runs (which lack them) keep the original argv.
 INFER_VIDEO_OPTION_DEFAULTS = {
     'video_backend': 'auto', 'temporal_sampling': 'uniform', 'clip_stride': None, 'clip_duration_sec': None,
-    'motion_source': 'auto', 'test_clips': 1, 'num_workers': 'auto',
+    'motion_source': 'auto', 'test_clips': 1, 'test_crops': 1, 'num_workers': 'auto', 'frame_cache': None, 'frame_cache_size': 256, 'frame_resize': None,
 }
 
 
@@ -524,6 +525,25 @@ def find_history_paths(run_dir: Path) -> list[Path]:
     return paths
 
 
+def checkpoint_arguments(results: RunResults) -> dict:
+    """A run's recorded settings. For a video run, the record next to the checkpoint
+    wins over `results.cli_arguments` (which prefers the eval record), since it is the
+    one that describes these weights. Other modalities and runs whose records agree
+    are unchanged."""
+    args = dict(results.cli_arguments or {})
+    if results.checkpoint_path is None:
+        return args
+    checkpoint = Path(results.checkpoint_path)
+    path = (checkpoint if checkpoint.is_dir() else checkpoint.parent) / 'cli_arguments.json'
+    try:
+        record = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return args
+    if not isinstance(record, dict) or (args.get('modality') or record.get('modality')) != 'video':
+        return args
+    return {**args, **{key: value for key, value in record.items() if value is not None}}
+
+
 def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size: int = 16) -> InferenceConfig:
     """Builds an InferenceConfig for testing `results`'s trained model
     against `data`, pulling every model-build setting from the run's own
@@ -532,7 +552,7 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
     itself sets args.mode to the already-resolved effective mode (e.g.
     GANDALF regression vs. classification, timeseries always 'reg') before
     that file is saved, so `mode` below needs no further resolution here."""
-    cli_args = results.cli_arguments or {}
+    cli_args = checkpoint_arguments(results)
     modality = cli_args.get('modality', 'images')
     model_version = cli_args.get('model_version') or 'resnet18'
     cfg = InferenceConfig(
@@ -548,6 +568,7 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
         mode=cli_args.get('mode') or 'cls',
         added_layers=int(cli_args.get('added_layers') or 2),
         embed_size=int(cli_args.get('embed_size') or 1000),
+        lora_rank=int(cli_args['lora_rank']) if cli_args.get('lora_rank') else None,
         freeze_backbone=bool(cli_args.get('freeze_backbone', False)),
         use_peft=bool(cli_args.get('use_peft', False)),
         num_frames=int(cli_args.get('num_frames') or 8),
@@ -558,10 +579,16 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
         max_encoder_length=int(cli_args.get('max_encoder_length') or 30),
         group_ids=list(cli_args.get('group_ids') or []) if isinstance(cli_args.get('group_ids'), list) else [],
         video_options={key: cli_args[key] for key, default in INFER_VIDEO_OPTION_DEFAULTS.items()
-                       if cli_args.get(key) not in (None, default)} if modality == 'video' else {},
+                       if key not in ('frame_cache', 'frame_cache_size', 'frame_resize')
+                       and cli_args.get(key) not in (None, default)} if modality == 'video' else {},
     )
     label_mapping_path = _first_glob(results.run_dir, 'data_splits_*/label_mapping.json') if results.run_dir else None
     cfg.label_mapping_path = label_mapping_path
+    if modality == 'video':  # the cache folder is machine-specific and stays out; the resize it implied is pipeline
+        resize = (cli_args.get('frame_resize') if cli_args.get('frame_resize') is not None
+                  else cli_args.get('frame_cache_size', 256) if cli_args.get('frame_cache') else 0)
+        if resize:  # 0 is what infer.py assumes without the flag, so old runs keep the original argv
+            cfg.video_options['frame_resize'] = resize
     if modality == 'timeseries':
         cfg.history_df_paths = find_history_paths(results.run_dir)
     return cfg
@@ -594,6 +621,8 @@ def build_infer_argv(cfg: InferenceConfig) -> list[str]:
             argv.append('--use-peft')
         if cfg.modality == 'video':
             argv += ['--num_frames', str(cfg.num_frames), '--pooling', cfg.pooling]
+            if cfg.lora_rank is not None:
+                argv += ['--lora_rank', str(cfg.lora_rank)]
             for key, value in (cfg.video_options or {}).items():
                 if key in INFER_VIDEO_OPTION_DEFAULTS and value not in (None, INFER_VIDEO_OPTION_DEFAULTS[key]):
                     argv += [f'--{key}', str(value)]
@@ -646,7 +675,9 @@ def read_inference_results(out_dir: Path) -> InferenceResults:
     predictions_path = out_dir / 'predictions.csv'
     if predictions_path.exists():
         try:
-            results.predictions = pd.read_csv(predictions_path)
+            # As text: a class called 007, 1 or NA is a name, not a number or a missing value.
+            # Per column, because keep_default_na=False would turn empty numeric cells into text.
+            results.predictions = pd.read_csv(predictions_path, converters={'predicted_label': str, 'true_label': str})
         except (OSError, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
             results.warnings.append(f'predictions.csv: {exc}')
     metrics_path = out_dir / 'inference_metrics.json'

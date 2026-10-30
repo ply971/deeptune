@@ -5,6 +5,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
 
+from src.video.video3d_peft import directly_read_swin_layers, lora_target_modules, upgrade_legacy_lora_state
+
+
+def _upgrade_old_weights_on_load(module, state_dict, prefix, *_):
+    """Load-time hook, so that it also runs when this model is nested in a video
+    frame-pooling classifier, whose load_state_dict never calls this module's."""
+    local = {key[len(prefix):]: value for key, value in state_dict.items() if key.startswith(prefix)}
+    upgraded, count = upgrade_legacy_lora_state(module, local)
+    if not count:
+        return
+    for key in local:
+        del state_dict[prefix + key]
+    state_dict.update({prefix + key: value for key, value in upgraded.items()})
+    print(f'Checkpoint from before the Swin LoRA fix: {count} layers changed. The old attention adapters never ran and '
+          'are dropped, and the new adapters are initialised to no effect, so predictions match the old model.')
+
 
 class adjustedPeftSwin(nn.Module):
 
@@ -96,6 +112,7 @@ class adjustedPeftSwin(nn.Module):
         # Apply PEFT
             
         self.peftmodel = self.applyPEFT(self.model)
+        self._register_load_state_dict_pre_hook(_upgrade_old_weights_on_load, with_module=True)
 
     def applyPEFT(self,model):
         
@@ -103,12 +120,11 @@ class adjustedPeftSwin(nn.Module):
         
         Apply PEFT with LoRA on the customised model.
         
-        In this implementation, the developer chose mainly to apply LoRA matricies to only three types of linear layers: proj, qkj, and head.
-        
-        We could have chosen applying it for all linear layers. For example, those present in the MLP in Swin's architecture.
-        
-        We may change according to the observations to determine which is better.
-        
+        LoRA goes on the layers that run: the patch embedding, the MLPs and the patch merging.
+        Swin's attention qkv and proj are left out, because torchvision passes their weights to
+        F.linear without calling them, so an adapter there gets no gradient and does nothing.
+        Runs saved when those two were the only targets therefore trained the head alone.
+
         Arguments:
             model (torchvision.models): The adjusted Swin model before applying PEFT On
             
@@ -118,14 +134,11 @@ class adjustedPeftSwin(nn.Module):
         
         """
         # target_modules is actually the parts of the network we have applied PEFT on
-        target_modules = []
-        
-        for name, module in model.named_modules():
-            # Filter only the 'qkv', 'proj', and 'head' Linear layers
-            if any(layer in name for layer in ["qkv", "proj", "head"]) and isinstance(module, nn.Linear):
-                target_modules.append(name)
+        target_modules = lora_target_modules(model)
 
         print("Applying LoRA to layers:", target_modules)
+        print(f"LoRA does not adapt Swin's attention: torchvision reads the weights of its "
+              f"{len(directly_read_swin_layers(model))} qkv and proj layers directly.")
 
         """
         To get more insights on how the LoRA weights could affect the performance, please refer to the following documentation:

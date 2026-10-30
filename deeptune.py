@@ -55,11 +55,23 @@ def main(argv=None):
             check_flip_augmentation(args.df, hflip=True)
         except UnsafeAugmentationError as exc:
             issues.append(str(exc))
+    # --- training basics (T1) ---
+    from handlers.training_args import TrainingOptions
+    training_options = TrainingOptions.from_args(args)
+    issues.extend(training_options.issues(effective_mode(cfg)))
+    if training_options.non_default() and args.modality not in ('images', 'video'):
+        issues.append('These flags are only supported for the images and video modalities: '
+                      + ', '.join('--' + name for name in training_options.non_default()))
+    # --- end training basics ---
     if issues:
         args.parser.error("\n".join(issues))
     args.mode = effective_mode(cfg)
     args.type = cfg.gandalf_type
     defaults = dict(globals()["defaults"], mode=args.mode, fixed_seed=args.fixed_seed, disable_numerical_encoding=args.mode == "reg")
+    # --- training basics (T1): --seed varies training, not the test set; the split stays the fixed one ---
+    if training_options.seed is not None:
+        defaults['fixed_seed'] = True
+    # --- end training basics ---
 
     parent_dir = date_id(root_dir=args.out)
 
@@ -313,7 +325,8 @@ def main(argv=None):
             trainable_params=args.trainable_params,
         )
         if args.trainable_params is not None and args.embed_size is not None:
-            # A PEFT budget picks the LoRA rank (= embed_size); eval/embed must rebuild that shape.
+            # A PEFT budget on a 2D backbone picks the LoRA rank (= embed_size); eval/embed must rebuild
+            # that shape. Native models keep embed_size, and eval/embed read args.lora_rank.
             defaults['embed_size'] = args.embed_size
 
         metrics_dict = evaluate_video(

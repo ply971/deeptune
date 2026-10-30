@@ -19,6 +19,7 @@ from helpers import transformations
 from inference.common import attach_expected_error
 from options import DEVICE, PIN_MEM
 from src.video.multi_clip import clip_disagreement, error_model_clips_mismatch, multi_clip_scores
+from src.video.multi_crop import wrap_for_test_crops
 from utils import build_video_model
 
 
@@ -37,6 +38,7 @@ def predict_video(
     pooling: str = 'mean',
     label_mapping: Optional[dict] = None,
     video_options: Optional[VideoDataOptions] = None,
+    lora_rank: Optional[int] = None,
 ) -> pd.DataFrame:
     """Runs `checkpoint_path`'s model over every row of `df` (a 'videos'
     column of file paths or clip bytes, detected automatically, + optional
@@ -46,18 +48,22 @@ def predict_video(
     `video_options` carries the run's recorded data-layer settings
     (sampling, backend, --test_clips, workers). With test_clips > 1 the
     clip softmax probabilities are averaged *before* the error model sees
-    them, and a ``clip_disagreement`` column is added (0 = all clips agree)."""
+    them, and a ``clip_disagreement`` column is added (0 = all clips agree).
+
+    `lora_rank` is the run's recorded rank for a native PEFT model; None means
+    it equals `embed_size`, as in runs recorded before --lora_rank existed."""
     video_options = video_options or VideoDataOptions()
-    error_model_clips_mismatch(checkpoint_path, video_options.test_clips)
+    error_model_clips_mismatch(checkpoint_path, video_options.test_clips, test_crops=video_options.test_crops)
     model = build_video_model(
         model_version=model_version, num_classes=num_classes, added_layers=added_layers,
         embed_size=embed_size, freeze_backbone=freeze_backbone, mode=mode,
-        use_peft=use_peft, pooling=pooling,
+        use_peft=use_peft, pooling=pooling, lora_rank=lora_rank,
     )
     state_dict = torch.load(checkpoint_path, map_location=DEVICE, weights_only=True)
     model.load_state_dict(state_dict)
     model.to(DEVICE)
     model.eval()
+    model = wrap_for_test_crops(model, video_options.test_crops, mode)  # --test_crops K: averaged inside each clip
 
     # See inference.vision.predict_images's matching comment: ParquetVideoDataset
     # needs 'labels' to already be numeric (or absent) to convert it to a
@@ -111,6 +117,7 @@ def predict_video(
             result['true_value'] = raw_labels
             result['abs_error'] = [abs(float(t) - float(p)) for t, p in zip(raw_labels, predicted)]
     # Per-prediction error estimate (A4): only when the run saved error_model.json.
+    # Hash the file's weights, not the model's: loading may have upgraded old LoRA layouts.
     if scores:
-        attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), model.state_dict())
+        attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), state_dict)
     return result
