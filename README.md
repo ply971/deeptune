@@ -332,17 +332,18 @@ Finished videos are skipped, so an interrupted run continues where it stopped.
 
 | flag | default | meaning |
 |---|---|---|
-| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files. One id cannot stand for two videos or trims |
+| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files. One id cannot stand for two videos or trims, and ids may not differ only by case |
 | `--out` | required | feature folder; a folder holds one configuration per stream |
 | `--streams` | `rgb` | `rgb` and/or `motion` |
 | `--model_version` | `r3d_18` | `rgb` backbone: any DeepTune video or frame backbone |
 | `--motion_backbone` | `r3d_18` | `motion` backbone; dx, dy and their magnitude go through its RGB filters, which were not trained on motion |
 | `--motion_method` | `auto` | `codec` motion vectors, `farneback` flow, or `auto` (codec, else Farneback; recorded per video) |
+| `--motion_gain` | 0.05 | multiplies motion after clipping to +-20 input pixels per frame; recorded in the config and sidecar. The default has not been chosen on real clips |
 | `--feature_weights` | `pretrained` | `none` = fixed random weights, for tests and timing only |
 | `--snippet_frames` / `--snippet_stride` | 16 / same | frames per snippet / between snippet starts |
 | `--cache_tokens` | `none` | `none` = one vector `[N, D]`; `8x4x4` = pooled token grid `[N, 8, 4, 4, D]` |
 | `--batch_size` | 8 | snippets per forward pass |
-| `--feature_input_size` | backbone's own | square input size; keeps that backbone's normalisation |
+| `--feature_input_size` | backbone's own | square input size; keeps that backbone's normalisation and squashes the whole frame. ViT and `mvit_v2_s` accept only their own size (`mvit_v2_s` also only 16-frame snippets), and other values are refused up front |
 | `--video_backend` | `auto` | decoder |
 
 **Snippets.** `N = ceil((frames - snippet_frames) / stride) + 1` (1 for a short video), with the
@@ -351,8 +352,11 @@ snippet starts after the last frame.
 
 **Layout.** `<out>/rgb/<video_id>.npy` and `<out>/motion/<video_id>.npy` are float16 arrays, each
 with a `.json` sidecar (fps, snippet_frames, stride, backbone, weights, the licence of exactly those
-weights where torchvision states one, the input size really fed, stream, frame range and trim, and
-float16 rounding stats; motion also records `motion_weights_trained_on_motion: false`). `datasets.snippet_features.load_snippet_features(out,
+weights where torchvision states one, the input size really fed, the part of the frame kept
+(`field_of_view`), stream, frame range and trim, and float16 rounding stats; motion also records
+`motion_gain` and `motion_weights_trained_on_motion: false`). Motion is cut to the same part of the frame
+as `rgb` (native presets centre-crop), so a cell of a token grid covers the same place in both streams;
+streams that see different parts refuse to concatenate. `datasets.snippet_features.load_snippet_features(out,
 video_id)` returns `[N, D_rgb + D_motion]` plus the split. A value that float16 cannot hold (NaN,
 inf, above 65504) fails that video instead of being stored; failures go to `<out>/failed.json`, and
 the command exits with status 1. Run it again to retry them.
@@ -360,8 +364,11 @@ the command exits with status 1. Run it again to retry them.
 **Training a head.** `train_feature_head.py` needs only the feature folder and manifests with `videos`
 or `video_id` plus labels; the video files may be gone. It refuses splits that share an id, a source
 video (two trims of one video count) or a value of the `group` column, and warns if a split has no
-`group` column. `--test_df` writes `metrics.json` (accuracy, balanced accuracy, macro-F1, confusion
-matrix; MSE, RMSE, MAE, R2 for regression) and per-video `predictions.csv`, the input to a paired test.
+`group` column. It also refuses motion features from an older preprocessing version. `--test_df` writes
+`metrics.json` (accuracy, balanced accuracy, macro-F1, confusion matrix; MSE, RMSE, MAE, R2 for regression;
+a `chance` row for a model that only learned the training majority or mean) and per-video `predictions.csv`,
+the input to a paired test. `cli_arguments.json` records the seed, the feature config hash and whether the
+motion weights were trained on motion.
 
 **Token grids and the attentive probe.** A mean-pooled vector throws away where and when something
 happened. `--cache_tokens 8x4x4` keeps a coarse grid, and `train_feature_head.py --head
