@@ -178,4 +178,64 @@ Fixed with keyframe-aware seeking (commit f7d9d11) and a regression test with GO
   lists them and is torch-free.
 
 ## Commits
-dfa70c9, 39208f5, 10ab77c, 06ba79c, f7d9d11, a1fe13c, and this report.
+dfa70c9, 39208f5, 10ab77c, 06ba79c, f7d9d11, a1fe13c, c80e500 (report).
+
+## A2 follow-ups (Critic wave-1b, V-016..V-020: "merge after fixes")
+Step 0: merged `video-analysis` (308945e, plan docs only; no conflicts) → f944c7e.
+
+- **V-016 (must-fix) — error model vs `--test_clips`: fixed** (ed29f10). The video trainer now fits the A4 error
+  model on validation with `num_clips=test_clips`, through `MultiClipModel`, so the fit sees the same averaged
+  probabilities as evaluation. The Trainer change is three optional hooks inside A4's marked block, following
+  A4's own `getattr` pattern: `error_fit_loader`, `error_fit_model` and `error_fit_info`. They default to the old
+  behaviour (a test checks this). `error_model_fit.json` / `fit_info` now record `test_clips`.
+  `src.video.multi_clip.error_model_clips_mismatch()` warns at eval and inference when the run's error model was
+  fitted on a different clip count; old runs without the key count as 1.
+  Tests:
+  - the Trainer's saved model equals a hand fit on the 3-clip averaged probabilities, and those differ from the
+    1-clip ones;
+  - a real `trainers.video.train` run with `test_clips=2` records it;
+  - the mismatch warning fires both ways;
+  - the e2e run asserts `fit['test_clips'] == 2`.
+- **V-017 (must-fix) — infer.py ignores recorded sampling: fixed** (1bbd943). When a flag is not on the command
+  line, `infer.py` takes it from the checkpoint run's `cli_arguments.json`. This covers `num_frames`, `pooling`,
+  `video_backend`, `temporal_sampling`, `clip_stride`, `clip_duration_sec`, `motion_source` and `test_clips`.
+  `num_workers` is not inherited, because it describes the training machine. Recorded values are re-validated
+  by the flag's own parser, and infer.py prints the settings it used.
+  Tests:
+  - a dense / stride-2 / 3-clip / 4-frame / attention run inferred with no flags uses exactly those settings;
+  - explicit flags win;
+  - with no recording, the defaults are used;
+  - e2e: plain `infer.py` on a `--test_clips 2` run writes `clip_disagreement`.
+- **V-018 (suspected → reproduced and fixed)** (71f6bc4). The bug was reproduced with PyAV alone.
+  `datasets.video_synth.trim_with_edit_list` remuxes a clip with its first 3 packets before the MP4 edit list,
+  as a `-c copy` trim does. On the H.264 copy, 3 packets are `is_discard` and the decoder shows 37 of 40 frames.
+  - Before the fix: `frame_count` was 40, and both the 40-frame (sequential) and 390-frame (seek path) tests fail
+    (checked by swapping in the old file).
+  - Now: discarded packets are left out of the index, but their keyframes are kept as seek landing points. If the
+    first decoded frame's pts differs from the index start, the reader falls back to exact sequential reads.
+  - OpenCV shows the same frames, but `CAP_PROP_FRAME_COUNT` still counts hidden samples. OpenCV counts are now
+    marked `frame_count_exact=False`; reads clamp.
+- **V-019 nice-to-haves (done except e)** (1bbd943):
+  - (a) Test: `--video_augment --video_flip --video_speed_perturb` never changes validation/test clips; they stay
+    deterministic under any RNG state.
+  - (b) `video_loader_kwargs(role=...)`:
+    - train: persistent;
+    - val: persistent, but on Windows with `--num_workers auto` capped at 2 workers (train + val ≤ 4 + 2 alive
+      instead of 8; an explicit count wins);
+    - one-shot loaders (eval, embed, inference, error-model fit): not persistent.
+
+    Making val non-persistent instead would re-spawn its pool every epoch (≈15 s per worker) without lowering
+    the peak. My own earlier test (`test_loader_kwargs_pin_memory_only_on_cuda_and_prepare_workers`, added by A2)
+    now expects `persistent_workers=False` for a one-shot loader.
+  - (c) When Windows refuses to delete a still-mapped spill file, the delete is retried at exit. Each new spill
+    sweeps `deeptune-clips-*.arrow` files older than 24 h from %TEMP%. Test included.
+  - (d) Unchanged: the split summary already prints the auto-used `group` column.
+  - (e) Not done, as instructed: wiring `--video_flip` to A3's flip guard waits for the A3 merge.
+- Tests after the follow-ups (CPU, `cpu 0`):
+  - A2 test files: `109 passed, 3 skipped, 3 warnings in 24.67s`.
+  - `-k "video or split or manifest or dataset or desktop_config or inference_data or evaluation or workflow"`:
+    `245 passed, 3 skipped, 120 deselected, 12 warnings in 41.62s`.
+  - param_budget + error_model_pipeline + error_model + vision/video trainer:
+    `86 passed, 10 warnings in 26.81s`.
+  - `pip check` clean.
+  - `git diff --stat 05cf682 -- tests/` still shows only A2's own new test files (now 5).
