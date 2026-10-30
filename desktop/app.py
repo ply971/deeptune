@@ -155,6 +155,7 @@ CONFIG_TAGS = {
     'freeze_backbone': 'freeze_backbone_checkbox', 'use_peft': 'use_peft_checkbox',
     'fixed_seed': 'fixed_seed_checkbox', 'batch_size': 'batch_size_input', 'num_epochs': 'num_epochs_input',
     'learning_rate': 'learning_rate_input', 'num_frames': 'num_frames_input', 'pooling': 'pooling_radio',
+    'trainable_params': 'trainable_params_input',
     'gandalf_type': 'gandalf_type_radio', 'continuous_cols': 'continuous_cols_input',
     'categorical_cols': 'categorical_cols_input', 'finetuning_mode': 'finetuning_mode_checkbox',
     'time_idx_column': 'time_idx_column_input',
@@ -680,6 +681,7 @@ def on_modality_changed(sender: ItemId = 0, app_data: Any = None) -> None:
     dpg.configure_item("num_classes_group", show=modality in gc.NEEDS_NUM_CLASSES or modality == "tabular")
     dpg.configure_item("num_classes_input", show=modality in gc.NEEDS_NUM_CLASSES)
     dpg.configure_item("video_options_group", show=modality == "video")
+    dpg.configure_item("trainable_params_group", show=modality in gc.BUDGET_MODALITIES)
     dpg.configure_item("timeseries_options_group", show=modality == "timeseries")
 
     on_model_version_changed()
@@ -750,6 +752,7 @@ def _build_run_config() -> gc.RunConfig:
         batch_size=_integer("batch_size_input", 16),
         num_epochs=_integer("num_epochs_input", 10),
         learning_rate=_number("learning_rate_input", 1e-4),
+        trainable_params=_text("trainable_params_input"),
         num_frames=_integer("num_frames_input", 8),
         pooling=_text("pooling_radio") or "mean",
         gandalf_type=_text("gandalf_type_radio") or "classification",
@@ -1496,6 +1499,14 @@ def _build_model_page() -> None:
                                   callback=on_config_changed)
                 dpg.add_input_double(tag="learning_rate_input", label="Learning rate", default_value=1e-4,
                                      format="%.6f", width=160, callback=on_config_changed)
+            with ui.group(tag="trainable_params_group"):
+                dpg.add_input_text(tag="trainable_params_input",
+                                   label="Trainable parameter budget (e.g. 100k, blank = no limit)",
+                                   width=160, callback=on_config_changed)
+                _tip("Caps how many parameters are learned. Without PEFT the new head is trained plus "
+                     "the top backbone layers that fit; with PEFT / LoRA the largest LoRA rank that fits "
+                     "is chosen (and used as the embedding size). Overrides Freeze backbone. Each run "
+                     "writes trainable / total counts to parameter_summary.json.")
         dpg.add_spacer(height=10)
         with ui.group(tag="video_options_group", show=False):
             with _card("VIDEO"):

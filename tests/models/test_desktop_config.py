@@ -292,3 +292,47 @@ def test_read_inference_results_missing_files_are_none(tmp_path):
     results = read_inference_results(tmp_path)
     assert results.predictions is None
     assert results.metrics is None
+
+
+# --- trainable-parameter budget (--trainable_params) ---
+
+def test_build_argv_adds_trainable_params_for_images_and_video_only():
+    base = dict(df=Path("data/raw"), out=Path("out"))
+    images = build_argv(RunConfig(modality="images", trainable_params=" 100k ", **base))
+    assert images[images.index("--trainable_params") + 1] == "100k"
+    video = build_argv(RunConfig(modality="video", model_version="r3d_18", trainable_params="1.5M", **base))
+    assert video[video.index("--trainable_params") + 1] == "1.5M"
+    assert "--trainable_params" not in build_argv(RunConfig(modality="images", trainable_params="", **base))
+    assert "--trainable_params" not in build_argv(RunConfig(modality="text", model_version="BERT", trainable_params="100k", **base))
+
+
+def test_validate_config_checks_trainable_params(tmp_path):
+    data = tmp_path / "data.parquet"
+    data.write_bytes(b"")
+    base = dict(modality="images", df=data, raw_data=False, out=tmp_path / "out", model_version="resnet18")
+    for good in ("", "100k", "250000", "1.5M", "1,000,000"):
+        assert validate_config(RunConfig(trainable_params=good, **base)) == [], good
+    for bad in ("lots", "0", "-5", "1.2345k"):
+        issues = validate_config(RunConfig(trainable_params=bad, **base))
+        assert any("Trainable parameter budget" in issue for issue in issues), bad
+    siglip = validate_config(RunConfig(**{**base, "model_version": "siglip"}, trainable_params="100k"))
+    assert any("SigLIP" in issue for issue in siglip)
+    # Hidden for other modalities: a leftover value is ignored rather than blocking the run.
+    text = RunConfig(modality="text", df=data, raw_data=False, out=tmp_path / "out", model_version="BERT", trainable_params="lots")
+    assert not any("Trainable parameter budget" in issue for issue in validate_config(text))
+
+
+def test_trainable_params_survives_save_and_load(tmp_path):
+    from desktop.config import load_config, save_config
+    cfg = RunConfig(modality="video", model_version="r3d_18", trainable_params="100k")
+    save_config(cfg, tmp_path / "settings.json")
+    assert load_config(tmp_path / "settings.json").trainable_params == "100k"
+
+
+def test_desktop_config_import_does_not_import_torch():
+    import subprocess
+    import sys
+    code = "import sys, desktop.config, trainers.param_count; assert 'torch' not in sys.modules, 'torch imported'"
+    result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[2],
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr

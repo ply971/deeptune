@@ -19,6 +19,9 @@ from typing import Optional
 
 import pandas as pd
 
+# Torch-free (the GUI process must never import torch); see trainers/param_count.py.
+from trainers.param_count import param_count_issue
+
 # ---------------------------------------------------------------------------
 # What each modality actually accepts as --model_version, and what each
 # needs beyond the common fields. Keep in sync with utils.MODEL_CLS_MAP,
@@ -62,6 +65,8 @@ NEEDS_NUM_CLASSES = {"images", "text", "video"}
 # Modalities/models where --added_layers/--embed_size/--freeze-backbone/
 # --use-peft/--mode (transfer-learning knobs) actually apply.
 NEEDS_TRANSFER_LEARNING_OPTIONS = {"images", "text", "video"}
+# Modalities where --trainable_params (a trainable-parameter budget) applies.
+BUDGET_MODALITIES = {"images", "video"}
 
 
 @dataclass
@@ -86,6 +91,8 @@ class RunConfig:
     batch_size: int = 16
     num_epochs: int = 10
     learning_rate: float = 1e-4
+    # images/video only: e.g. "100k" or "1.5M"; blank = no limit (--trainable_params)
+    trainable_params: str = ""
 
     # video only
     num_frames: int = 8
@@ -133,6 +140,8 @@ def build_argv(cfg: RunConfig) -> list[str]:
         argv.append("--use-peft")
     if cfg.fixed_seed:
         argv.append("--fixed-seed")
+    if cfg.modality in BUDGET_MODALITIES and cfg.trainable_params.strip():
+        argv += ["--trainable_params", cfg.trainable_params.strip()]
 
     if cfg.modality == "video":
         argv += ["--num_frames", str(cfg.num_frames), "--pooling", cfg.pooling]
@@ -201,6 +210,12 @@ def validate_config(cfg: RunConfig) -> list[str]:
         issues.append('SigLIP currently supports classification only.')
     if cfg.use_peft and (cfg.modality not in NEEDS_TRANSFER_LEARNING_OPTIONS or cfg.model_version == 'gpt2'):
         issues.append('PEFT is not supported for this model.')
+    if cfg.modality in BUDGET_MODALITIES and cfg.trainable_params.strip():
+        budget_issue = param_count_issue(cfg.trainable_params)
+        if budget_issue:
+            issues.append(f'Trainable parameter budget: {budget_issue}.')
+        elif cfg.model_version == 'siglip':
+            issues.append('A trainable parameter budget is not supported for SigLIP.')
     if cfg.raw_data and cfg.modality in ('images', 'video') and cfg.mode == 'reg' and cfg.df is not None and Path(cfg.df).is_dir():
         issues.append('Regression requires a parquet file with numeric targets; class folders are for classification.')
     if cfg.modality == 'video':
