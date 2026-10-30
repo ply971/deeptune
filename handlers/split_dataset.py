@@ -53,6 +53,47 @@ def main():
 
     print(f"Dataset splits saved to:\n Train:{train_path}\n Validation: {val_path}\n Test: {test_path}")
 
+VIDEO_GROUP_COLUMN = 'group'
+
+
+def resolve_grouper(columns, grouper, modality: str):
+    """Video datasets with a 'group' column are split by group unless a grouper was given."""
+    if grouper:
+        return grouper
+    if modality == 'video' and VIDEO_GROUP_COLUMN in list(columns):
+        print(f"Found a '{VIDEO_GROUP_COLUMN}' column: clips of one group stay in the same split.")
+        return VIDEO_GROUP_COLUMN
+    return grouper
+
+
+def check_group_split(parts: dict, grouper: str, label_column: str = None, classification: bool = False) -> dict:
+    """Raise if a split is empty or a group appears in two splits; warn about
+    classes a split lacks. Returns a summary for split_summary.json."""
+    empty = [name for name, part in parts.items() if len(part) == 0]
+    if empty:
+        counts = ', '.join(f'{name}={len(part)}' for name, part in parts.items())
+        raise ValueError(f'The group split left the {" and ".join(empty)} split empty ({counts} clips). '
+                         f'Add more distinct {grouper!r} groups or change the split proportions.')
+    seen = {}
+    for name, part in parts.items():
+        for group in pd.unique(part[grouper]):
+            if group in seen and seen[group] != name:
+                raise AssertionError(f'Group {group!r} appears in both {seen[group]} and {name}.')
+            seen[group] = name
+    summary = {'strategy': 'group', 'grouper': grouper,
+               'sample_counts': {name: int(len(part)) for name, part in parts.items()},
+               'group_counts': {name: int(part[grouper].nunique()) for name, part in parts.items()}}
+    if classification and label_column:
+        every = set().union(*(set(part[label_column]) for part in parts.values()))
+        missing = {name: sorted(map(str, every - set(part[label_column]))) for name, part in parts.items()}
+        missing = {name: classes for name, classes in missing.items() if classes}
+        if missing:
+            warnings.warn(f'Group split could not place every class in every split: {missing}. '
+                          'Add more groups per class for a fully stratified split.', UserWarning)
+        summary['classes_missing'] = missing
+    return summary
+
+
 def split_dataset(train_size: float, val_size: float, test_size:float, df_path: Path, out_dir: Path, fixed_seed: bool, disable_numerical_encoding: bool, target_column:str,modality:str, disable_target_column_renaming: bool=False, grouper: str=None, mode: str='cls', time_idx_column: str=None):
     proportions = np.asarray([train_size, val_size, test_size], dtype=float)
     if not np.isfinite(proportions).all() or (proportions <= 0).any() or not np.isclose(proportions.sum(), 1):
@@ -66,6 +107,7 @@ def split_dataset(train_size: float, val_size: float, test_size:float, df_path: 
     test_dataset_path = split_dir / f"test_split.parquet"
     
     df = pd.read_parquet(df_path)
+    grouper = resolve_grouper(df.columns, grouper, modality)
     target_column = target_column or 'labels'
     if target_column not in df.columns:
         raise ValueError(f'Target column {target_column!r} was not found in the dataset.')
@@ -163,6 +205,11 @@ def split_dataset(train_size: float, val_size: float, test_size:float, df_path: 
         train_data = X_train.reset_index(drop=True)
         val_data = X_val.reset_index(drop=True)
         test_data = X_test.reset_index(drop=True)
+        summary = check_group_split({'train': train_data, 'validation': val_data, 'test': test_data}, grouper,
+                                    label_column, classification)
+        (split_dir / 'split_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+        print('Group split: ' + ', '.join(f'{name}={count} clips/{summary["group_counts"][name]} groups'
+                                          for name, count in summary['sample_counts'].items()) + '.')
 
         df_test_indices = pd.DataFrame({'Test Set Indices in the Original Dataframe': X_test.index})
     

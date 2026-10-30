@@ -24,6 +24,13 @@ defaults={
     'group_ids': None
 }
 
+def training_log_dir(ckpt_directory) -> Path:
+    """Folder holding training_log.csv: the trainers write it next to the
+    checkpoint (trainval_output_*/), so for a weights file that is its parent."""
+    path = Path(ckpt_directory)
+    return path.parent if path.is_file() else path
+
+
 def main(argv=None):
     args = DeepTuneVisionOptions(RunType.ONECALL, args=argv)
     from desktop.config import RunConfig, validate_config, effective_mode
@@ -35,8 +42,11 @@ def main(argv=None):
     values["added_layers"] = args.added_layers or 2
     values["embed_size"] = args.embed_size if args.embed_size is not None else 1000
     values["num_classes"] = args.num_classes if args.num_classes is not None else 2
+    values["trainable_params"] = "" if args.trainable_params is None else str(args.trainable_params)
     cfg = RunConfig(**values)
     issues = validate_config(cfg)
+    if args.trainable_params is not None and args.modality not in ('images', 'video'):
+        issues.append('--trainable_params is only supported for the images and video modalities.')
     if issues:
         args.parser.error("\n".join(issues))
     args.mode = effective_mode(cfg)
@@ -68,7 +78,14 @@ def main(argv=None):
         dataset_dir=args.df,
         out=Path(args.out)/parent_dir,
         modality=args.modality,
+        video_storage=args.video_storage,
     )
+    if args.modality == 'video':
+        # A 'group' column (e.g. one source video per group) keeps related clips
+        # in one split; recorded in args so embeddings carry the column too.
+        from handlers.split_dataset import resolve_grouper
+        import pyarrow.parquet as pq
+        GROUPER = args.grouper = resolve_grouper(pq.read_schema(df_path).names, GROUPER, args.modality)
 
     train_data_path, val_data_path, test_data_path = split_dataset(
         train_size=defaults['train_size'],
@@ -192,9 +209,7 @@ def main(argv=None):
                 batch_size = args.batch_size,
                 use_case="finetuned")
             
-        csv_dir = Path(ckpt_directory)
-        if csv_dir.is_file():
-            csv_dir = csv_dir.parent
+        csv_dir = training_log_dir(ckpt_directory)
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='text', mapping_path=MAPPING_PATH)
@@ -220,8 +235,12 @@ def main(argv=None):
             args=args,
             mode=defaults['mode'],
             model_str=args.model_version,
-            model_version=args.model_version
+            model_version=args.model_version,
+            trainable_params=args.trainable_params,
         )
+        if args.trainable_params is not None and args.embed_size is not None:
+            # A PEFT budget picks the LoRA rank (= embed_size); eval/embed must rebuild that shape.
+            defaults['embed_size'] = args.embed_size
 
         metrics_dict = evaluate_images(
             eval_df=test_data_path,
@@ -254,9 +273,7 @@ def main(argv=None):
             mode=defaults['mode'],
             grouper=GROUPER,
         )
-        csv_dir = Path(ckpt_directory)
-        if csv_dir.is_file():
-            csv_dir = csv_dir.parent.parent
+        csv_dir = training_log_dir(ckpt_directory)
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='images',mapping_path=MAPPING_PATH)
@@ -285,7 +302,11 @@ def main(argv=None):
             model_version=args.model_version,
             num_frames=args.num_frames,
             pooling=args.pooling,
+            trainable_params=args.trainable_params,
         )
+        if args.trainable_params is not None and args.embed_size is not None:
+            # A PEFT budget picks the LoRA rank (= embed_size); eval/embed must rebuild that shape.
+            defaults['embed_size'] = args.embed_size
 
         metrics_dict = evaluate_video(
             eval_df=test_data_path,
@@ -322,9 +343,7 @@ def main(argv=None):
             num_frames=args.num_frames,
             pooling=args.pooling,
         )
-        csv_dir = Path(ckpt_directory)
-        if csv_dir.is_file():
-            csv_dir = csv_dir.parent.parent
+        csv_dir = training_log_dir(ckpt_directory)
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='video',mapping_path=MAPPING_PATH)

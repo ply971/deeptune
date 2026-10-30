@@ -3,10 +3,12 @@ from torch.utils.data import DataLoader
 
 from helpers import transformations
 from trainers.vision.trainer import Trainer
-from options import UNIQUE_ID, DEVICE, NUM_WORKERS, PERSIST_WORK, PIN_MEM
-from datasets.video_datasets import ParquetVideoDataset, native_video_transform
+from options import UNIQUE_ID, DEVICE
+from datasets.video_datasets import ParquetVideoDataset, native_video_transform, video_loader_kwargs, video_options_from_args
 from cli import DeepTuneVisionOptions
 from utils import RunType, set_seed, build_video_model
+from trainers.param_budget import build_with_budget
+from src.video.multi_clip import wrap_for_test_clips
 
 
 def main():
@@ -50,7 +52,8 @@ def main():
         fixed_seed=FIXED_SEED,
         num_frames=NUM_FRAMES,
         pooling=POOLING,
-        args=args
+        args=args,
+        trainable_params=args.trainable_params,
     )
 
 
@@ -73,6 +76,7 @@ def train(
         args: DeepTuneVisionOptions,
         num_frames: int = 8,
         pooling: str = "mean",
+        trainable_params: int | None = None,
 ):
     """
     Trains a DeepTune video classifier - either one of DeepTune's native
@@ -84,6 +88,10 @@ def train(
     This mirrors trainers/vision/train.py's `train`, reusing the exact same
     Trainer class - both model families expose forward(x) -> [B, num_classes],
     so no video-specific training loop is needed.
+
+    `trainable_params` (optional) caps how many parameters are trained - see
+    trainers/param_budget.py. With PEFT it picks the LoRA rank, which is then
+    written back to `args.embed_size` before the arguments are saved.
     """
 
     if fixed_seed:
@@ -94,41 +102,54 @@ def train(
 
     TRAINVAL_OUTPUT_DIR = (out / f"trainval_output_{model_str}_{UNIQUE_ID}")
 
+    # Either storage format (file paths or clip bytes) is detected by from_parquet.
+    # Training samples randomly (--temporal_sampling, --video_augment); validation
+    # uses the deterministic evaluation sampling with one clip per video.
+    video_options = video_options_from_args(args)
     clip_transform = native_video_transform(model_version)
-    train_dataset = ParquetVideoDataset.from_parquet(parquet_file=train_df, transform=transformations, num_frames=num_frames, clip_transform=clip_transform)
-    val_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames, clip_transform=clip_transform)
+    train_dataset = ParquetVideoDataset.from_parquet(parquet_file=train_df, transform=transformations, num_frames=num_frames,
+                                                     clip_transform=clip_transform, train=True, options=video_options)
+    val_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames,
+                                                   clip_transform=clip_transform, train=False, options=video_options)
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=NUM_WORKERS,
-        pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=PIN_MEM,
-        persistent_workers=PERSIST_WORK
-    )
+    train_loader = DataLoader(train_dataset, **video_loader_kwargs(train_dataset, batch_size, True, video_options.num_workers))
+    val_loader = DataLoader(val_dataset, **video_loader_kwargs(val_dataset, batch_size, False, video_options.num_workers,
+                                                               role='val'))
 
-    model = build_video_model(
-        model_version=model_version,
-        num_classes=num_classes,
-        added_layers=added_layers,
-        embed_size=embed_size,
-        freeze_backbone=freeze_backbone,
-        mode=mode,
-        use_peft=use_peft,
-        pooling=pooling,
-    )
+    if trainable_params is None:
+        model = build_video_model(
+            model_version=model_version,
+            num_classes=num_classes,
+            added_layers=added_layers,
+            embed_size=embed_size,
+            freeze_backbone=freeze_backbone,
+            mode=mode,
+            use_peft=use_peft,
+            pooling=pooling,
+        )
+    else:
+        def build(rank):
+            return build_video_model(
+                model_version=model_version, num_classes=num_classes, added_layers=added_layers,
+                embed_size=rank, freeze_backbone=freeze_backbone, mode=mode, use_peft=use_peft, pooling=pooling,
+            )
+        model, embed_size = build_with_budget(build, trainable_params, use_peft, embed_size, freeze_backbone)
+        args.embed_size = embed_size
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR)
+    trainer.fit_error_model = not getattr(args, 'no_error_model', False)
+    # The error model must see what evaluation sees: with --test_clips N it is
+    # fitted on N-clip averaged validation probabilities (A2 V-016).
+    trainer.error_fit_info = {'test_clips': video_options.test_clips}
+    if video_options.test_clips > 1 and trainer.fit_error_model:
+        fit_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames,
+                                                       clip_transform=clip_transform, train=False, options=video_options,
+                                                       num_clips=video_options.test_clips)
+        trainer.error_fit_loader = DataLoader(fit_dataset, **video_loader_kwargs(fit_dataset, batch_size, False,
+                                                                                 video_options.num_workers))
+        trainer.error_fit_model = wrap_for_test_clips(model, video_options.test_clips, mode)
 
     print('The Trainer class is loaded successfully.')
 

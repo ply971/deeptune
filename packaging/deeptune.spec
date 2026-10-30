@@ -78,7 +78,7 @@ METADATA_PACKAGES = [
     "regex", "requests", "packaging", "filelock", "numpy", "PyYAML",
     "tensorboard", "tensorboard-data-server", "scikit-learn", "scipy",
     "pandas", "pyarrow", "joblib", "omegaconf", "hyperopt", "einops",
-    "opencv-python", "pillow", "dearpygui", "Markdown", "protobuf", "grpcio",
+    "opencv-python", "av", "pillow", "dearpygui", "Markdown", "protobuf", "grpcio",
     "Werkzeug",
 ]
 

@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import sys
 import logging
 from helpers import PerformanceLogger
-from options import DEVICE, TRAINVAL_OUTPUT_DIR
+from options import DEVICE, PIN_MEM, TRAINVAL_OUTPUT_DIR
 import time
 from utils import save_process_times
 import functools
@@ -74,6 +74,20 @@ class Trainer:
         logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s | %(message)s")
         self.logger = logging.getLogger()
 
+        # --- trainable / total parameter report (A1 param budget) ---
+        import json
+        from trainers.param_budget import summarize_parameters, format_summary, format_lora_coverage
+        self.parameter_summary = summarize_parameters(self.model)
+        self.logger.info(format_summary(self.parameter_summary))
+        lora_line = format_lora_coverage(self.parameter_summary)
+        if lora_line:
+            self.logger.info(lora_line)
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            with open(Path(output_dir) / 'parameter_summary.json', 'w', encoding='utf-8') as stream:
+                json.dump(self.parameter_summary, stream, indent=2)
+        # --- end parameter report ---
+
     def train(self):
                     
         total_time = 0
@@ -103,10 +117,10 @@ class Trainer:
                 # make sure the inputs and labels on GPU
                 
                 if isinstance(self.criterion, nn.MSELoss): # if regression then we must rehape the target tensor    
-                    inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+                    inputs, labels = inputs.to(DEVICE, non_blocking=PIN_MEM), labels.to(DEVICE, non_blocking=PIN_MEM)
                     labels = labels.view(-1,1).float() # [batch_size,1]
                 else:
-                    inputs,labels = inputs.to(DEVICE),labels.to(DEVICE)
+                    inputs,labels = inputs.to(DEVICE, non_blocking=PIN_MEM),labels.to(DEVICE, non_blocking=PIN_MEM)
                     
 
                 # null the gradient
@@ -198,7 +212,98 @@ class Trainer:
                 self.performance_logger.save_to_csv(f"{self.output_dir}/training_log.csv")
         # record the total training time at the end
         save_process_times(epoch_times, total_time, self.output_dir,"training")
-        
+
+        # --- per-prediction error model (A4) ---
+        # One extra pass over the VALIDATION loader (never test data) with the
+        # final weights -- the ones train.py saves as model_weights.pth -- fits
+        # error_model.json next to them. On by default; trainers/*/train.py
+        # set trainer.fit_error_model = not args.no_error_model. RNG state and
+        # train/eval mode are restored, so training results are unchanged.
+        # TODO(T1, V-011): once early stopping / best-checkpoint selection
+        # lands, validation becomes a selection set: reload the BEST weights
+        # here before fitting, and fit on a separate calibration split or on
+        # out-of-fold predictions instead of val_loader. The weights
+        # fingerprint recorded in error_model_fit.json already makes eval /
+        # inference refuse an error model fitted on other weights.
+        if getattr(self, 'fit_error_model', True) and self.output_dir:
+            try:
+                self._fit_error_model()
+            except Exception as exc:  # never let the auxiliary estimate break a finished training run
+                self.logger.warning(f'Per-prediction error model was not fitted: {exc}')
+        # --- end per-prediction error model (A4) ---
+
+    # --- per-prediction error model (A4) ---
+    def _fit_error_model(self):
+        """Fit the per-prediction error model on the validation split and
+        save ``error_model.json`` + ``error_model_fit.json`` in output_dir.
+        Returns the fitted ``evaluators.error_model.ErrorModel``.
+
+        Optional hooks (set by the caller, like ``fit_error_model``):
+        ``error_fit_loader`` / ``error_fit_model`` replace the validation loader /
+        model for this fit (video ``--test_clips``: N clips per video through
+        ``src.video.multi_clip.MultiClipModel``, so the fit sees the same averaged
+        probabilities as evaluation), and ``error_fit_info`` is added to fit_info."""
+        import json
+        import random
+        import numpy as np
+        from evaluators.error_model import (
+            ERROR_MODEL_FILENAME, ERROR_MODEL_FIT_FILENAME, FINGERPRINT_METHOD, ErrorModel, error_targets,
+            prediction_features, weights_fingerprint,
+        )
+
+        rng_state = (random.getstate(), np.random.get_state(), torch.get_rng_state(),
+                     torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None)
+        was_training = self.model.training
+        outputs, labels, n_batches = [], [], 0
+        fit_loader = getattr(self, 'error_fit_loader', None)
+        fit_loader = self.val_loader if fit_loader is None else fit_loader
+        fit_model = getattr(self, 'error_fit_model', None)
+        fit_model = self.model if fit_model is None else fit_model
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                for inputs, batch_labels, *_ in fit_loader:
+                    outputs.append(fit_model(inputs.to(DEVICE, non_blocking=PIN_MEM)).detach().float().cpu())
+                    labels.append(batch_labels.detach().cpu())
+                    n_batches += 1
+        finally:
+            random.setstate(rng_state[0])
+            np.random.set_state(rng_state[1])
+            torch.set_rng_state(rng_state[2])
+            if rng_state[3] is not None:
+                torch.cuda.set_rng_state_all(rng_state[3])
+            self.model.train(was_training)
+
+        out = torch.cat(outputs)
+        if self.mode == 'cls':
+            scores = torch.softmax(out, dim=1).numpy()
+        else:
+            scores = out.numpy()
+        truth = torch.cat(labels).numpy()
+        error_model = ErrorModel(self.mode).fit(prediction_features(scores, self.mode),
+                                                error_targets(scores, truth, self.mode),
+                                                num_outputs=scores.reshape(len(scores), -1).shape[1])
+        error_model.fit_info.update({
+            'split': 'validation', 'n_batches': n_batches,
+            'val_dataset_size': len(fit_loader.dataset) if hasattr(fit_loader, 'dataset') else None,
+            # The weights this model was fitted on (== what train.py saves as
+            # model_weights.pth right after train()). Hash the inner model, not
+            # a multi-clip wrapper, so it never depends on state_dict pass-through.
+            'weights_sha256': weights_fingerprint(self.model.state_dict()),
+            'weights_fingerprint_method': FINGERPRINT_METHOD,
+        })
+        error_model.fit_info.update(getattr(self, 'error_fit_info', None) or {})
+        out_dir = Path(self.output_dir)
+        error_model.save(out_dir / ERROR_MODEL_FILENAME)
+        (out_dir / ERROR_MODEL_FIT_FILENAME).write_text(json.dumps(error_model.to_dict()['fit_info'], indent=2), encoding='utf-8')
+        self.error_model = error_model
+        self.logger.info(
+            f"Per-prediction error model ({error_model.method_used}) fitted on {error_model.fit_info['n_samples']} "
+            f"validation samples; saved to {out_dir / ERROR_MODEL_FILENAME}"
+        )
+        return error_model
+    # --- end per-prediction error model (A4) ---
+
     def validate(self):
         
         """
@@ -222,7 +327,7 @@ class Trainer:
                 # set the model to evaluation mode
                 self.model.eval()
                 
-                input, labels = input.to(DEVICE), labels.to(DEVICE)
+                input, labels = input.to(DEVICE, non_blocking=PIN_MEM), labels.to(DEVICE, non_blocking=PIN_MEM)
                 if self.mode == 'reg':
                     labels = labels.view(-1, 1).float()
                                 

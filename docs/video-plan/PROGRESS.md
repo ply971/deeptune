@@ -17,6 +17,30 @@ Keep entries short and factual. This is the handoff between sessions.
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
 
 ## Session log
+
+### 2026-10-30 ? Desktop visual upgrade (UI only)
+- Verified checkout: `video-analysis`, one commit ahead of origin; tracked tree was clean.
+  Left Claude's untracked board and worktrees untouched; no branch switch.
+- Added an ink/mint/violet studio visual system, overview artwork and workflow links,
+  larger typography, refined cards/controls, breadcrumb navigation, striped metric
+  tables, and distinct training/validation curves. Backend/analysis code unchanged.
+- Added compact form layouts, enabled native keyboard navigation/focus, fit video
+  display to its panel without stretching, and replaced activity spinners with static
+  text. No decorative motion; existing playback controls remain available.
+- Verification: full CPU suite `258 passed, 13 warnings in 168.36s`; final desktop
+  UI rerun after visual refinements `14 passed in 1.64s`; pip check clean.
+  Two new regression tests cover responsive navigation/config preservation and
+  portrait/landscape preview fitting without changing texture pixels.
+- Visually inspected native framebuffer captures at 1320x920 and 900x720, all six
+  pages, a repository MP4 preview, and fixture-populated metrics/curves. Review
+  captures and harness are local ignored artifacts in `.artifacts/`.
+- Limitations: computer-use helper failed (`CreateProcessWithLogonW failed: 2`),
+  so inspection used native framebuffer export rather than automated mouse/keyboard
+  interaction. Screen-reader support remains limited by Dear PyGui. No new GPU
+  training experiment was needed for this visual-only change. This does not mark
+  the planned Phase 7 analysis features as implemented.
+- Next: review the uncommitted UI diff alongside the existing agent work.
+
 <!-- Template:
 ### YYYY-MM-DD — Phase N, step X
 - Done:

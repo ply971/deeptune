@@ -11,6 +11,22 @@ own one-call CLI, launched as a subprocess (see `desktop/runner.py`) - the GUI
 process only imports pandas and dearpygui, never torch/transformers, so it
 opens quickly and never blocks on the ML stack just to show you a form.
 
+## Studio interface
+
+The desktop uses an ink, mint, and violet palette with a persistent workflow
+sidebar, larger headings, high-contrast actions, striped metrics tables, and
+separate training/validation curve colors. The overview links directly to the
+existing dataset, model, run, and results workflows.
+
+Resize the window down to 900 x 640: long form and action rows stack below
+1200 pixels, while the workspace and sidebar scroll independently. Video
+previews fit their panel without stretching or changing decoded input pixels.
+Dear PyGui keyboard navigation is enabled (Tab / Shift+Tab and arrow keys,
+with a mint focus outline). Decorative artwork and activity status are static,
+so reduced-motion users get no animated UI decoration; video playback still
+uses the existing Play / Pause and Loop controls. Native toolkit accessibility
+and screen-reader support remain limited by Dear PyGui.
+
 ## Pages
 
 - **Overview** - what the app does and where to start.
@@ -25,7 +41,8 @@ opens quickly and never blocks on the ML stack just to show you a form.
 - **Model & Training** - model version (the list updates for the chosen
   modality), transfer-learning options (added layers, embedding size, freeze
   backbone, PEFT/LoRA), training hyperparameters (batch size, epochs,
-  learning rate), and whatever else that modality/model needs: frame count
+  learning rate, and for images/video an optional **Trainable parameter
+  budget** such as `100k` or `1.5M`; blank means no limit), and whatever else that modality/model needs: frame count
   and pooling for video, continuous/categorical columns for GANDALF,
   fine-tuning mode for TabPFN, the time index column for DeepAR.
 - **Run** - choose an output directory, review the equivalent CLI command,
@@ -58,6 +75,13 @@ Previews load on a worker thread and read at most 50 table rows. Binary media
 payloads are shown as byte counts. Model controls reflect supported combinations;
 for example, TabPFN exposes regression, GPT-2 disables PEFT, and MViT uses 16 frames.
 Quick-check and standard-training presets set epochs, batch size, and backbone freezing.
+
+The trainable parameter budget is passed as `--trainable_params` (see the main
+README). Without PEFT it trains the new head plus the top backbone layers that
+fit; with PEFT / LoRA it picks the largest LoRA rank that fits and records it as
+the embedding size, so the Test page rebuilds the same model. It overrides
+Freeze backbone. Every image/video run writes the trainable and total counts to
+`parameter_summary.json` in its `trainval_output_*` folder.
 
 The default split is 70% training, 10% validation, and 20% holdout. Classification
 splits are stratified; grouped splits keep each group together, with approximate
@@ -103,6 +127,16 @@ You can also supply a CSV/XLSX file containing `videos` (local file paths) and
 Duplicate files and missing clips are rejected. MP4, AVI, MOV, MKV, WebM, M4V,
 WMV, MPEG, and MPG containers are accepted; decoding depends on the codec
 inside the file. Corrupt or unsupported clips produce a readable error.
+Optional `group` (clips of one group stay in one split), `start_sec` and
+`end_sec` (sample only that part of the clip) columns are honoured.
+
+Training from a clip list stores the file paths, not copies of the videos, so
+keep the originals in place while the run trains and evaluates. The video
+sampling, test-time-clip and worker settings a run used (see the main README,
+"Video data") are saved with the run, and the **Test** page passes them back to
+`infer.py` automatically. On Windows with a GPU, small video datasets now run
+without DataLoader worker processes, which removes the long worker start-up
+pauses seen before.
 
 ## Development checks
 
@@ -125,6 +159,7 @@ For a repeatable video plumbing check using generated moving-shape clips:
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --manifest
 .venv\Scripts\python.exe scripts\smoke_video.py --model r3d_18
+.venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --parquet_bytes
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --peft --pooling attention
 ```
 

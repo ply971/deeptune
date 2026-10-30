@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 
 from datasets.image_datasets import ParquetImageDataset
 from helpers import transformations
+from inference.common import attach_expected_error
 from options import DEVICE, NUM_WORKERS, PERSIST_WORK, PIN_MEM
 from utils import get_model_cls
 
@@ -84,7 +85,7 @@ def predict_images(
     sample_ids = df['__sample_id'].tolist() if '__sample_id' in df.columns else list(range(len(df)))
     index_to_name = {v: k for k, v in (label_mapping or {}).items()}
 
-    predicted, confidences = [], []
+    predicted, confidences, scores = [], [], []
     with torch.no_grad():
         for inputs, _labels, *_ in loader:
             inputs = inputs.to(DEVICE)
@@ -94,9 +95,11 @@ def predict_images(
                 conf, pred = probs.max(dim=1)
                 predicted.extend(pred.cpu().tolist())
                 confidences.extend(conf.cpu().tolist())
+                scores.append(probs.detach().float().cpu())
             else:
                 predicted.extend(outputs.detach().cpu().view(-1).tolist())
                 confidences.extend([None] * outputs.size(0))
+                scores.append(outputs.detach().float().cpu())
 
     result = pd.DataFrame({'sample_id': sample_ids[:len(predicted)]})
     if mode == 'cls':
@@ -114,4 +117,7 @@ def predict_images(
         else:
             result['true_value'] = raw_labels
             result['abs_error'] = [abs(float(t) - float(p)) for t, p in zip(raw_labels, predicted)]
+    # Per-prediction error estimate (A4): only when the run saved error_model.json.
+    if scores:
+        attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), model.state_dict())
     return result

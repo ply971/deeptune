@@ -8,7 +8,7 @@ from sklearn.metrics import classification_report, roc_auc_score
 from tqdm.auto import tqdm
 import time
 
-from options import DEVICE
+from options import DEVICE, PIN_MEM
 
 
 class TestTrainer:
@@ -53,7 +53,12 @@ class TestTrainer:
             self.criterion = nn.MSELoss()
         
         
-    def test(self, best_model_weights_path=None):
+    def test(self, best_model_weights_path=None, error_model_path=None):
+        """Score the test loader, write ``full_metrics.json`` and a per-sample
+        ``predictions.csv``. When the run has an ``error_model.json`` (next to
+        ``best_model_weights_path``, or ``error_model_path``), predictions
+        get an ``expected_error`` column and ``error_calibration.json/.csv``
+        report stated vs observed error per decile on this held-out set."""
         start_time = time.time()
         if best_model_weights_path is not None:
             self.model.load_state_dict(torch.load(best_model_weights_path, map_location=self.device, weights_only=True))
@@ -63,7 +68,7 @@ class TestTrainer:
         all_labels, all_predictions, all_probs = [], [], []
         with torch.no_grad():
             for inputs, labels, *_ in tqdm(self.test_loader):
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                inputs, labels = inputs.to(self.device, non_blocking=PIN_MEM), labels.to(self.device, non_blocking=PIN_MEM)
                 if self.mode == 'reg':
                     labels = labels.view(-1, 1).float()
                 outputs = self.model(inputs)
@@ -95,8 +100,75 @@ class TestTrainer:
             metrics['rmse'] = float(metrics['loss'] ** 0.5)
             metrics['r2'] = float(r2_score(labels, predictions)) if total >= 2 else None
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # --- per-sample predictions + per-prediction error estimate (A4) ---
+        scores = probabilities if self.mode == 'cls' else predictions
+        per_sample = _per_sample_predictions(labels, predictions, scores, self.mode)
+        estimate = _attach_error_estimate(per_sample, scores, self.mode, self.output_dir,
+                                          best_model_weights_path, error_model_path, self.logger,
+                                          self.model.state_dict())
+        if estimate is not None:
+            metrics['error_estimate'] = estimate
+        per_sample.to_csv(self.output_dir / PREDICTIONS_FILENAME, index=False)
+        # --- end (A4) ---
         with open(self.output_dir / 'full_metrics.json', 'w', encoding='utf-8') as stream:
             json.dump(metrics, stream, indent=2)
         save_process_times(epoch_times=1, total_duration=time.time() - start_time,
                            outdir=self.output_dir, process='evaluation')
         return metrics
+
+
+# --- per-sample predictions + per-prediction error estimate (A4) ---
+PREDICTIONS_FILENAME = 'predictions.csv'
+MAX_PROB_COLUMNS = 50  # wider class sets skip the per-class prob_<k> columns
+
+
+def _per_sample_predictions(labels, predictions, scores, mode):
+    """One row per test sample, in loader order."""
+    import numpy as np
+    import pandas as pd
+    n = len(labels)
+    frame = pd.DataFrame({'sample_index': np.arange(n)})
+    if mode == 'cls':
+        truth = labels.reshape(-1).astype(np.int64)
+        pred = predictions.reshape(-1).astype(np.int64)
+        frame['true_label'] = truth
+        frame['predicted_class'] = pred
+        frame['confidence'] = scores.max(axis=1)
+        frame['correct'] = truth == pred
+        if scores.shape[1] <= MAX_PROB_COLUMNS:
+            for k in range(scores.shape[1]):
+                frame[f'prob_{k}'] = scores[:, k]
+    else:
+        values = predictions.reshape(n, -1)
+        truth = labels.reshape(n, -1).astype(np.float64)
+        if values.shape[1] == 1:
+            frame['true_value'] = truth[:, 0]
+            frame['predicted_value'] = values[:, 0]
+        frame['abs_error'] = np.abs(values - truth).mean(axis=1)
+    return frame
+
+
+def _attach_error_estimate(per_sample, scores, mode, output_dir, checkpoint_path, error_model_path, logger,
+                           state_dict=None):
+    """Adds ``expected_error`` and writes error_calibration.json/.csv when the
+    run has an error model; returns the summary for full_metrics.json (or
+    None for old runs without one)."""
+    from evaluators.error_model import (
+        CALIBRATION_STEM, calibration_table, load_error_model_near, metrics_summary,
+        observed_errors, prediction_features, save_report, weights_fingerprint,
+    )
+    num_outputs = scores.reshape(len(scores), -1).shape[1]
+    model = load_error_model_near(checkpoint_path, mode, num_outputs=num_outputs,
+                                  path=error_model_path, warn=logger.warning,
+                                  weights_sha256=None if state_dict is None else weights_fingerprint(state_dict))
+    if model is None:
+        return None
+    if model.method_used == 'constant':
+        logger.info('expected_error is the same for every sample (base rate): '
+                    f"{model.fit_info.get('fallback_reason')}")
+    per_sample['expected_error'] = model.predict(prediction_features(scores, mode))
+    report = calibration_table(per_sample['expected_error'].to_numpy(), observed_errors(per_sample, mode), mode=mode)
+    save_report(report, output_dir, CALIBRATION_STEM,
+                extra={'split': 'test', 'error_model': {k: model.fit_info.get(k) for k in
+                                                        ('method', 'n_samples', 'base_error', 'split', 'score_feature')}})
+    return metrics_summary(report, model)

@@ -85,21 +85,20 @@ from handlers.split_planning import classification_split_issues
 from inference.data import IMAGE_EXTENSIONS
 
 # ---------------------------------------------------------------------------
-# Theme (same palette as df-analyze's desktop app, for a consistent look
-# across both of this project's sibling tools)
+# Studio palette: mint actions, violet analysis, neutral media surfaces
 # ---------------------------------------------------------------------------
-BG_MAIN = (11, 17, 30)
-BG_SIDEBAR = (8, 13, 24)
-BG_CARD = (20, 28, 46)
-BG_CARD_ALT = (28, 39, 63)
-ACCENT = (61, 145, 235)
-ACCENT_HOVER = (95, 173, 246)
-ACCENT_ACTIVE = (43, 112, 191)
-ACCENT_LIGHT = (150, 200, 250)
-TEXT_PRIMARY = (226, 232, 240)
-TEXT_MUTED = (138, 150, 172)
-BORDER = (42, 54, 78)
-SUCCESS = (58, 199, 130)
+BG_MAIN = (13, 17, 24)
+BG_SIDEBAR = (17, 23, 32)
+BG_CARD = (24, 31, 42)
+BG_CARD_ALT = (35, 45, 59)
+ACCENT = (119, 231, 196)
+ACCENT_HOVER = (160, 245, 218)
+ACCENT_ACTIVE = (85, 191, 163)
+ACCENT_LIGHT = (173, 163, 245)
+TEXT_PRIMARY = (239, 243, 249)
+TEXT_MUTED = (170, 183, 201)
+BORDER = (57, 71, 88)
+SUCCESS = (119, 231, 196)
 ERROR = (235, 105, 105)
 WARNING = (232, 178, 78)
 
@@ -114,6 +113,9 @@ NAV_ITEMS = [
 
 _FONTS: dict[str, ItemId] = {}
 _THEMES: dict[str, ItemId] = {}
+_REFLOW_GROUPS: list[ItemId] = []
+_WRAPPED_TEXT: list[tuple[ItemId, int]] = []
+_layout_key: tuple[int, int, str, bool] | None = None
 
 _current_run: RunHandle | None = None
 _line_buffer = LineBuffer()
@@ -155,6 +157,7 @@ CONFIG_TAGS = {
     'freeze_backbone': 'freeze_backbone_checkbox', 'use_peft': 'use_peft_checkbox',
     'fixed_seed': 'fixed_seed_checkbox', 'batch_size': 'batch_size_input', 'num_epochs': 'num_epochs_input',
     'learning_rate': 'learning_rate_input', 'num_frames': 'num_frames_input', 'pooling': 'pooling_radio',
+    'trainable_params': 'trainable_params_input',
     'gandalf_type': 'gandalf_type_radio', 'continuous_cols': 'continuous_cols_input',
     'categorical_cols': 'categorical_cols_input', 'finetuning_mode': 'finetuning_mode_checkbox',
     'time_idx_column': 'time_idx_column_input',
@@ -263,6 +266,8 @@ def on_nav_selected(sender: ItemId = 0, app_data: Any = None, user_data: str = "
     for key, _ in NAV_ITEMS:
         dpg.set_value(f"nav_{key}", key == user_data)
         dpg.configure_item(f"page_{key}", show=key == user_data)
+    dpg.set_value('workspace_location', f"WORKSPACE  /  {dict(NAV_ITEMS)[user_data][5:].strip().upper()}")
+    dpg.set_y_scroll('workspace_content', 0)
     if user_data == 'results':
         on_refresh_results()
     elif user_data == 'test':
@@ -536,6 +541,7 @@ def _show_video_frame(width: int, height: int, pixels: Any) -> None:
         dpg.set_value('video_preview_texture', pixels)
     if not dpg.does_item_exist('video_preview_image'):
         dpg.add_image('video_preview_texture', tag='video_preview_image', parent='preview_container')
+    _fit_video_preview()
 
 
 def stop_video_playback(timeout: float = 0.0) -> None:
@@ -680,6 +686,7 @@ def on_modality_changed(sender: ItemId = 0, app_data: Any = None) -> None:
     dpg.configure_item("num_classes_group", show=modality in gc.NEEDS_NUM_CLASSES or modality == "tabular")
     dpg.configure_item("num_classes_input", show=modality in gc.NEEDS_NUM_CLASSES)
     dpg.configure_item("video_options_group", show=modality == "video")
+    dpg.configure_item("trainable_params_group", show=modality in gc.BUDGET_MODALITIES)
     dpg.configure_item("timeseries_options_group", show=modality == "timeseries")
 
     on_model_version_changed()
@@ -750,6 +757,7 @@ def _build_run_config() -> gc.RunConfig:
         batch_size=_integer("batch_size_input", 16),
         num_epochs=_integer("num_epochs_input", 10),
         learning_rate=_number("learning_rate_input", 1e-4),
+        trainable_params=_text("trainable_params_input"),
         num_frames=_integer("num_frames_input", 8),
         pooling=_text("pooling_radio") or "mean",
         gandalf_type=_text("gandalf_type_radio") or "classification",
@@ -947,7 +955,7 @@ def render_results(results: gc.RunResults) -> None:
     if results.run_status:
         dpg.add_text(f"Status: {results.run_status.get('status', 'unknown')}", parent='results_metrics_container', color=ACCENT_LIGHT)
     if results.metrics:
-        with dpg.table(parent='results_metrics_container', header_row=True, borders_innerV=True, resizable=True):
+        with dpg.table(parent='results_metrics_container', header_row=True, row_background=True, borders_innerH=True, resizable=True):
             dpg.add_table_column(label='Metric / Class')
             dpg.add_table_column(label='Value (as reported by the model)')
             for name, value in gc.metric_rows(results.metrics):
@@ -1179,7 +1187,7 @@ def render_test_results(results: gc.InferenceResults) -> None:
     _selected_test_results = results
     dpg.delete_item('test_metrics_container', children_only=True)
     if results.metrics:
-        with dpg.table(parent='test_metrics_container', header_row=True, borders_innerV=True, resizable=True):
+        with dpg.table(parent='test_metrics_container', header_row=True, row_background=True, borders_innerH=True, resizable=True):
             dpg.add_table_column(label='Metric')
             dpg.add_table_column(label='Value')
             for key, value in results.metrics.items():
@@ -1235,20 +1243,20 @@ import contextlib
 @contextlib.contextmanager
 def _card(title: str, **kwargs: Any) -> Iterator[ItemId]:
     with ui.child_window(auto_resize_y=True, **kwargs) as card_id:
+        dpg.bind_item_theme(card_id, _THEMES["card"])
         with ui.group(horizontal=True):
             with ui.drawlist(width=5, height=20):
                 dpg.draw_rectangle((0, 1), (5, 19), color=ACCENT, fill=ACCENT, rounding=2)
             dpg.add_spacer(width=4)
-            title_id = dpg.add_text(title, color=ACCENT)
+            title_id = dpg.add_text(title.title(), color=TEXT_PRIMARY)
             if _FONTS.get("subheader"):
                 dpg.bind_item_font(title_id, _FONTS["subheader"])
-        dpg.add_separator()
-        dpg.add_spacer(height=4)
+        dpg.add_spacer(height=3)
         yield card_id
 
 
 def _heading(title: str, subtitle: str) -> None:
-    title_id = dpg.add_text(title)
+    title_id = dpg.add_text(title, wrap=900)
     if "title" in _FONTS:
         dpg.bind_item_font(title_id, _FONTS["title"])
     dpg.add_text(subtitle, color=TEXT_MUTED, wrap=900)
@@ -1273,8 +1281,8 @@ def _build_theme() -> None:
             dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, TEXT_MUTED)
             dpg.add_theme_color(dpg.mvThemeCol_Border, BORDER)
             dpg.add_theme_color(dpg.mvThemeCol_Button, BG_CARD_ALT)
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, ACCENT)
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, ACCENT_ACTIVE)
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (54, 75, 83))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (65, 90, 96))
             dpg.add_theme_color(dpg.mvThemeCol_CheckMark, ACCENT)
             dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, ACCENT)
             dpg.add_theme_color(dpg.mvThemeCol_Header, (*ACCENT, 80))
@@ -1287,21 +1295,54 @@ def _build_theme() -> None:
             dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, BG_MAIN)
             dpg.add_theme_color(dpg.mvThemeCol_TableHeaderBg, BG_CARD_ALT)
             dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 0)
-            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 10)
-            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 5)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 14)
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 7)
             dpg.add_theme_style(dpg.mvStyleVar_GrabRounding, 5)
             dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, 1)
-            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 16, 16)
-            dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 8, 6)
-            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 10)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 20, 18)
+            dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 12, 8)
+            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 10, 10)
+            dpg.add_theme_color(dpg.mvThemeCol_NavCursor, ACCENT)
+            dpg.add_theme_color(dpg.mvThemeCol_TextSelectedBg, (78, 89, 133))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, BG_MAIN)
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, BORDER)
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, TEXT_MUTED)
+            dpg.add_theme_color(dpg.mvThemeCol_TableRowBgAlt, (31, 40, 53))
+            dpg.add_theme_style(dpg.mvStyleVar_ScrollbarSize, 12)
+            dpg.add_theme_style(dpg.mvStyleVar_CellPadding, 12, 8)
+            for slot, color in ((dpg.mvPlotCol_FrameBg, BG_CARD),
+                                (dpg.mvPlotCol_PlotBg, BG_MAIN),
+                                (dpg.mvPlotCol_LegendBg, BG_CARD_ALT),
+                                (dpg.mvPlotCol_AxisGrid, (47, 58, 74)),
+                                (dpg.mvPlotCol_AxisText, TEXT_MUTED)):
+                dpg.add_theme_color(slot, color, category=dpg.mvThemeCat_Plots)
+            dpg.add_theme_style(dpg.mvPlotStyleVar_PlotPadding, 16, 16, category=dpg.mvThemeCat_Plots)
     dpg.bind_theme(global_theme)
+    for name, color in (('train_curve', ACCENT), ('validation_curve', ACCENT_LIGHT)):
+        with ui.theme() as curve_theme:
+            with ui.theme_component(dpg.mvLineSeries):
+                dpg.add_theme_color(dpg.mvPlotCol_Line, color, category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight, 2.5, category=dpg.mvThemeCat_Plots)
+        _THEMES[name] = curve_theme
+    with ui.theme() as media_theme:
+        with ui.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (7, 10, 15))
+    _THEMES['media'] = media_theme
+    with ui.theme() as workspace_theme:
+        with ui.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, BG_MAIN)
+    _THEMES['workspace'] = workspace_theme
+    with ui.theme() as card_theme:
+        with ui.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, BG_CARD)
+    _THEMES['card'] = card_theme
 
     with ui.theme() as run_button_theme:
         with ui.theme_component(dpg.mvButton):
             dpg.add_theme_color(dpg.mvThemeCol_Button, ACCENT)
             dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, ACCENT_HOVER)
             dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, ACCENT_ACTIVE)
-            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 255, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Text, BG_MAIN)
             dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
             dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 26, 12)
     _THEMES["run_button"] = run_button_theme
@@ -1309,7 +1350,7 @@ def _build_theme() -> None:
     with ui.theme() as sidebar_theme:
         with ui.theme_component(dpg.mvChildWindow):
             dpg.add_theme_color(dpg.mvThemeCol_ChildBg, BG_SIDEBAR)
-            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 0)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 12)
     _THEMES["sidebar"] = sidebar_theme
 
 
@@ -1322,10 +1363,10 @@ def _build_fonts() -> dict[str, ItemId]:
     try:
         with ui.font_registry():
             if regular.exists():
-                fonts["body"] = dpg.add_font(str(regular), 17)
+                fonts["body"] = dpg.add_font(str(regular), 18)
             if bold.exists():
-                fonts["title"] = dpg.add_font(str(bold), 28)
-                fonts["subheader"] = dpg.add_font(str(bold), 18)
+                fonts["title"] = dpg.add_font(str(bold), 36)
+                fonts["subheader"] = dpg.add_font(str(bold), 20)
         if "body" in fonts:
             dpg.bind_font(fonts["body"])
     except Exception:
@@ -1370,28 +1411,42 @@ def _build_dialogs() -> None:
 
 def _build_overview() -> None:
     with ui.group(tag="page_overview"):
-        _heading("Fine-tune a model without touching the command line.",
-                  "DeepTune's one-call pipeline - modality, model, and hyperparameters in, "
-                  "a trained checkpoint, evaluation report, and embeddings out.")
-        with _card("MAKE A RUN"):
-            dpg.add_text("01   Choose your data", color=ACCENT_LIGHT)
-            dpg.add_text("Pick a modality, point at a raw folder or an existing parquet file, and preview it.", wrap=850)
-            dpg.add_text("02   Choose your model", color=ACCENT_LIGHT)
-            dpg.add_text("Pick a model version and hyperparameters - transfer learning, PEFT/LoRA, epochs, batch size.", wrap=850)
-            dpg.add_text("03   Run and review", color=ACCENT_LIGHT)
-            dpg.add_text("Follow the live log, then inspect the holdout metrics, training curve, and embeddings.", wrap=850)
+        dpg.add_text("THE DEEPTUNE STUDIO", color=ACCENT)
+        _heading("Small experiments. Big discoveries.",
+                 "Turn your clips and datasets into trained models, measurable results, and new predictions.")
+        with _card("Your next experiment starts here"):
+            with ui.drawlist(width=780, height=94, tag='studio_art'):
+                # A static filmstrip: no animation, shader, download, or per-frame cost.
+                for i, color in enumerate((ACCENT, ACCENT_LIGHT, (245, 192, 130), ACCENT)):
+                    x = i * 142
+                    dpg.draw_rectangle((x, 4), (x + 128, 82), fill=BG_MAIN, color=BORDER, rounding=10)
+                    for j in range(7):
+                        h = (12, 27, 43, 54, 36, 22, 12)[(j + i) % 7]
+                        dpg.draw_rectangle((x + 16 + j * 14, 68 - h), (x + 22 + j * 14, 68),
+                                           fill=color, color=color, rounding=3)
+                    if i < 3:
+                        dpg.draw_line((x + 131, 43), (x + 139, 43), color=TEXT_MUTED, thickness=2)
+            dpg.add_text("Bring the footage. Find the signal.", color=TEXT_PRIMARY)
+            dpg.add_text("Preview and label videos, fine-tune a backbone, then explore what your model learned.",
+                         color=TEXT_MUTED, wrap=850)
             with ui.group(horizontal=True):
-                button = dpg.add_button(label="Choose a dataset", callback=on_nav_selected, user_data="dataset", height=42)
+                button = dpg.add_button(label="Choose a dataset", callback=on_nav_selected, user_data="dataset", height=44)
                 dpg.bind_item_theme(button, _THEMES["run_button"])
-                dpg.add_button(label="Browse results", callback=on_nav_selected, user_data="results", height=42)
-        dpg.add_spacer(height=10)
-        with _card("SUPPORTED MODALITIES"):
-            dpg.add_text("Images  -  ResNet, DenseNet, Swin, EfficientNet, VGG, ViT, ConvNeXt, SigLIP", wrap=850)
-            dpg.add_text("Text  -  Multilingual BERT, GPT-2", wrap=850)
-            dpg.add_text("Tabular  -  GANDALF, TabPFN", wrap=850)
-            dpg.add_text("Time series  -  DeepAR", wrap=850)
-            dpg.add_text("Video  -  frame-sampling on any image backbone, or native r3d_18 / mc3_18 / "
-                          "r2plus1d_18 / mvit_v2_s / swin3d", wrap=850)
+                dpg.add_button(label="Explore results", callback=on_nav_selected, user_data="results", height=44)
+        dpg.add_spacer(height=4)
+        with _card("Three steps from data to discovery"):
+            for number, title, detail, target in (
+                ('01', 'Curate your data', 'Import files, preview clips, and organise labels.', 'dataset'),
+                ('02', 'Shape your model', 'Choose a backbone and tune your training budget.', 'model'),
+                ('03', 'Make it measurable', 'Launch training, compare losses, and inspect predictions.', 'run'),
+            ):
+                with ui.group(horizontal=True):
+                    dpg.add_button(label=number + '  ' + title, width=220, height=38,
+                                   callback=on_nav_selected, user_data=target)
+                    dpg.add_text(detail, color=TEXT_MUTED, wrap=500)
+        dpg.add_spacer(height=4)
+        dpg.add_text("ONE WORKSPACE. FIVE WAYS TO LEARN.", color=ACCENT_LIGHT)
+        dpg.add_text("Video  /  Images  /  Text  /  Tabular  /  Time series", color=TEXT_MUTED, wrap=850)
 
 
 def _build_dataset_page() -> None:
@@ -1445,7 +1500,8 @@ def _build_dataset_page() -> None:
                     dpg.add_button(label='Restart', tag='video_restart_button', callback=on_video_restart)
                     dpg.add_checkbox(label='Loop', tag='video_loop_checkbox', default_value=True, callback=on_video_loop_changed)
                     dpg.add_button(label='Open in video player', callback=on_open_video_player)
-                    dpg.add_text('Muted preview | Open player for audio', color=TEXT_MUTED)
+
+                dpg.add_text('MUTED PREVIEW  /  Open in video player for audio', color=TEXT_MUTED)
                 with ui.group(horizontal=True):
                     dpg.add_slider_float(tag='video_seek_slider', width=-150, min_value=0, max_value=1,
                                          format='%.1f s', callback=on_video_seek, clamped=True, no_input=True)
@@ -1457,7 +1513,7 @@ def _build_dataset_page() -> None:
 
 def _build_model_page() -> None:
     with ui.group(tag="page_model", show=False):
-        _heading("Model & training", "Everything deeptune.py's one-call CLI accepts, as fields instead of flags.")
+        _heading("Model & training", "Choose the backbone. Set the pace. Make the experiment yours.")
         with _card("MODEL"):
             dpg.add_combo(tag="model_version_combo", label="Model version",
                          items=gc.MODEL_VERSIONS_BY_MODALITY["images"], default_value="resnet18",
@@ -1496,6 +1552,15 @@ def _build_model_page() -> None:
                                   callback=on_config_changed)
                 dpg.add_input_double(tag="learning_rate_input", label="Learning rate", default_value=1e-4,
                                      format="%.6f", width=160, callback=on_config_changed)
+            with ui.group(tag="trainable_params_group"):
+                dpg.add_text("Trainable parameter budget (blank = no limit)", color=TEXT_MUTED, wrap=700)
+                dpg.add_input_text(tag="trainable_params_input",
+                                   hint="e.g. 100k or 1.5M",
+                                   width=160, callback=on_config_changed)
+                _tip("Caps how many parameters are learned. Without PEFT the new head is trained plus "
+                     "the top backbone layers that fit; with PEFT / LoRA the largest LoRA rank that fits "
+                     "is chosen (and used as the embedding size). Overrides Freeze backbone. Each run "
+                     "writes trainable / total counts to parameter_summary.json.")
         dpg.add_spacer(height=10)
         with ui.group(tag="video_options_group", show=False):
             with _card("VIDEO"):
@@ -1529,7 +1594,7 @@ def _build_model_page() -> None:
 
 def _build_run_page() -> None:
     with ui.group(tag="page_run", show=False):
-        _heading("Run", "Launch deeptune.py with the settings from the Dataset and Model pages.")
+        _heading("Run", "Review your settings, launch training, and follow every step.")
         with _card("OUTPUT & READINESS"):
             with ui.group(horizontal=True):
                 dpg.add_button(label='Save settings...', callback=on_show_dialog, user_data='file_dialog_save_settings')
@@ -1545,11 +1610,11 @@ def _build_run_page() -> None:
         dpg.add_spacer(height=10)
         with _card("LAUNCH"):
             with ui.group(horizontal=True):
-                button = dpg.add_button(tag="run_button", label="Run", callback=on_run_clicked, height=44)
+                button = dpg.add_button(tag="run_button", label="Start training", callback=on_run_clicked, height=44)
                 dpg.bind_item_theme(button, _THEMES["run_button"])
                 dpg.add_button(tag="cancel_button", label="Stop", callback=on_cancel_clicked, enabled=False, height=44)
                 dpg.add_text("Elapsed  00:00:00", tag="elapsed_text", color=TEXT_MUTED)
-                dpg.add_loading_indicator(tag="run_loading_indicator", show=False, radius=2.0)
+                dpg.add_text('TRAINING ACTIVE', tag="run_loading_indicator", show=False, color=ACCENT)
             dpg.add_text("Ready when you are.", tag="run_stage_text", color=ACCENT_LIGHT, wrap=850)
         dpg.add_spacer(height=10)
         with _card("LIVE OUTPUT"):
@@ -1573,10 +1638,10 @@ def _build_results_page() -> None:
         dpg.add_spacer(height=10)
         with _card("HOLDOUT METRICS"):
             with ui.child_window(tag="results_metrics_container", height=220, horizontal_scrollbar=True):
-                dpg.add_text("Run something first.", color=TEXT_MUTED)
+                dpg.add_text("Your evaluation report will appear here after a run. Select an experiment above to inspect it.", color=TEXT_MUTED)
         dpg.add_spacer(height=10)
         with _card("TRAINING CURVE"):
-            with ui.plot(label="Loss per epoch", height=260, width=-1):
+            with ui.plot(label="Loss per epoch", height=300, width=-1):
                 dpg.add_plot_legend()
                 dpg.add_plot_axis(dpg.mvXAxis, tag="results_x_axis", label="Epoch")
                 with dpg.plot_axis(dpg.mvYAxis, tag="results_y_axis", label="Loss"):
@@ -1585,9 +1650,11 @@ def _build_results_page() -> None:
                     dpg.add_line_series([], [], label="Validation loss", tag="results_series_valloss_plot",
                                        parent="results_y_axis")
         dpg.add_spacer(height=10)
-        with _card("PATHS"):
+        dpg.bind_item_theme('results_series_loss_plot', _THEMES['train_curve'])
+        dpg.bind_item_theme('results_series_valloss_plot', _THEMES['validation_curve'])
+        with _card("ARTIFACTS"):
             with ui.child_window(tag="results_paths_container", height=130, horizontal_scrollbar=True):
-                dpg.add_text("Run something first.", color=TEXT_MUTED)
+                dpg.add_text("Your evaluation report will appear here after a run. Select an experiment above to inspect it.", color=TEXT_MUTED)
 
 
 def _build_test_page() -> None:
@@ -1619,7 +1686,7 @@ def _build_test_page() -> None:
                 dpg.add_button(tag="test_cancel_button", label="Stop", callback=on_cancel_test_clicked,
                                enabled=False, height=44)
                 dpg.add_text("Elapsed  00:00:00", tag="test_elapsed_text", color=TEXT_MUTED)
-                dpg.add_loading_indicator(tag="test_loading_indicator", show=False, radius=2.0)
+                dpg.add_text('INFERENCE ACTIVE', tag="test_loading_indicator", show=False, color=ACCENT)
             dpg.add_text("Choose a trained run and new data to begin.", tag="test_stage_text",
                          color=ACCENT_LIGHT, wrap=850)
         dpg.add_spacer(height=10)
@@ -1639,13 +1706,54 @@ def _build_test_page() -> None:
                 dpg.add_text("Run a test first.", color=TEXT_MUTED)
 
 
+def _fit_video_preview() -> None:
+    """Fit the display only; decoded pixels and analysis inputs stay untouched."""
+    if not _video_texture_size or not dpg.does_item_exist('video_preview_image'):
+        return
+    width, height = _video_texture_size
+    available = max(100, dpg.get_item_rect_size('preview_container')[0] - 44)
+    scale = min(available / width, 360 / height, 1.0)
+    dpg.configure_item('video_preview_image', width=round(width * scale), height=round(height * scale))
+    dpg.configure_item('preview_container', height=max(160, round(height * scale) + 44))
+
+
+def update_layout(width: int | None = None, height: int | None = None) -> None:
+    """Reflow on viewport changes, with no animation or continuous rebuilds."""
+    global _layout_key
+    width = width if width is not None else dpg.get_viewport_client_width()
+    height = height if height is not None else dpg.get_viewport_client_height()
+    key = (width, height, _text('modality_radio'), _flag('raw_data_checkbox'))
+    if key == _layout_key or width <= 0:
+        return
+    _layout_key = key
+    compact = width < 1200
+    sidebar_width = 190 if compact else 220
+    content_width = max(300, width - sidebar_width - 120)
+    dpg.configure_item('studio_sidebar', width=sidebar_width)
+    for group in _REFLOW_GROUPS:
+        dpg.configure_item(group, horizontal=not compact)
+    for item, original_wrap in _WRAPPED_TEXT:
+        dpg.configure_item(item, wrap=min(original_wrap, content_width))
+    for tag, normal_width in (('data_path_input', -400 if key[2] == 'video' and _flag('raw_data_checkbox') else -280),
+                              ('test_data_path_input', -280), ('outdir_input', -190)):
+        dpg.configure_item(tag, width=-1 if compact else normal_width)
+    dpg.configure_item('status_text', wrap=sidebar_width - 40)
+    dpg.configure_item('sidebar_note', wrap=sidebar_width - 40)
+    dpg.configure_item('studio_art', width=min(780, content_width))
+    _fit_video_preview()
+
+
 def build_ui() -> None:
-    global _FONTS
+    global _FONTS, _layout_key
+    _REFLOW_GROUPS.clear()
+    _WRAPPED_TEXT.clear()
+    _layout_key = None
+    dpg.configure_app(keyboard_navigation=True)
     _build_theme()
     _FONTS = _build_fonts()
     _build_dialogs()
     with ui.window(tag="main_window", label="DeepTune"):
-        with ui.child_window(height=92, border=False, no_scrollbar=True):
+        with ui.child_window(height=100, border=False, no_scrollbar=True):
             with ui.group(horizontal=True):
                 with ui.drawlist(width=50, height=50):
                     dpg.draw_rectangle((3, 27), (14, 47), color=ACCENT, fill=ACCENT, rounding=3)
@@ -1656,22 +1764,22 @@ def build_ui() -> None:
                     brand = dpg.add_text("DeepTune", color=TEXT_PRIMARY)
                     if "title" in _FONTS:
                         dpg.bind_item_font(brand, _FONTS["title"])
-                    dpg.add_text("ONE COMMAND. FIVE MODALITIES.", color=ACCENT_LIGHT)
+                    dpg.add_text("WORKSPACE  /  OVERVIEW", tag="workspace_location", color=ACCENT_LIGHT)
         dpg.add_separator()
         with ui.group(horizontal=True):
-            with ui.child_window(width=225, height=-1) as sidebar:
+            with ui.child_window(tag="studio_sidebar", width=220, height=-1) as sidebar:
                 dpg.bind_item_theme(sidebar, _THEMES["sidebar"])
-                dpg.add_text("WORKSPACE", color=TEXT_MUTED)
+                dpg.add_text("EXPERIMENT FLOW", color=TEXT_MUTED)
                 dpg.add_spacer(height=12)
                 for key, label in NAV_ITEMS:
                     dpg.add_selectable(label=label, tag=f"nav_{key}", default_value=key == "overview",
-                                       callback=on_nav_selected, user_data=key, height=36)
+                                       callback=on_nav_selected, user_data=key, height=42)
                 dpg.add_spacer(height=25)
                 dpg.add_separator()
                 dpg.add_text("SESSION", color=TEXT_MUTED)
                 dpg.add_text("Ready", tag="status_text", color=SUCCESS, wrap=180)
                 dpg.add_spacer(height=20)
-                dpg.add_text("Runs happen in a subprocess.\nClosing this window stops any active run.",
+                dpg.add_text("Closing this window stops any active run.", tag="sidebar_note",
                              color=TEXT_MUTED, wrap=190)
             with ui.child_window(tag="workspace_content", width=-1, height=-1, border=False):
                 _build_overview()
@@ -1680,6 +1788,20 @@ def build_ui() -> None:
                 _build_run_page()
                 _build_results_page()
                 _build_test_page()
+    dpg.bind_item_theme('workspace_content', _THEMES['workspace'])
+    dpg.bind_item_theme('preview_container', _THEMES['media'])
+    dpg.bind_item_theme('video_play_button', _THEMES['run_button'])
+    # Register only content groups, never the shell or a card's title row.
+    for item in dpg.get_all_items():
+        config = dpg.get_item_configuration(item)
+        if dpg.get_item_type(item) == 'mvAppItemType::mvText' and config.get('wrap', 0) > 0:
+            _WRAPPED_TEXT.append((item, config['wrap']))
+        if dpg.get_item_type(item) == 'mvAppItemType::mvGroup' and config.get('horizontal'):
+            children = dpg.get_item_children(item, 1) or []
+            if any(dpg.get_item_type(child) in (
+                    'mvAppItemType::mvInputText', 'mvAppItemType::mvInputInt',
+                    'mvAppItemType::mvInputDouble', 'mvAppItemType::mvButton') for child in children):
+                _REFLOW_GROUPS.append(item)
     on_modality_changed()
     on_config_changed()
 
@@ -1694,12 +1816,13 @@ def run_gui() -> None:
                 apply_config(gc.load_config(SESSION_PATH))
             except (OSError, ValueError, TypeError) as exc:
                 _set_status(f'Previous settings could not be restored: {exc}', WARNING)
-        dpg.create_viewport(title="DeepTune", width=1320, height=920, min_width=1080, min_height=720)
+        dpg.create_viewport(title="DeepTune", width=1320, height=920, min_width=900, min_height=640)
         dpg.setup_dearpygui()
         dpg.set_primary_window("main_window", True)
         dpg.show_viewport()
         while dpg.is_dearpygui_running():
             dpg.run_callbacks(dpg.get_callback_queue())
+            update_layout()
             poll_run_state()
             poll_infer_run_state()
             poll_preview()

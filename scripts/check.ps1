@@ -53,7 +53,8 @@ if ($Quick) {
 } else {
     $smokes = @(
         @{ Name = 'smoke resnet18 --manifest'; Args = @('scripts\smoke_video.py', '--model', 'resnet18', '--manifest') },
-        @{ Name = 'smoke r3d_18'; Args = @('scripts\smoke_video.py', '--model', 'r3d_18') }
+        @{ Name = 'smoke r3d_18'; Args = @('scripts\smoke_video.py', '--model', 'r3d_18') },
+        @{ Name = 'smoke resnet18 --parquet_bytes'; Args = @('scripts\smoke_video.py', '--model', 'resnet18', '--parquet_bytes') }
     )
     foreach ($smoke in $smokes) {
         Write-Host "== $($smoke.Name)"

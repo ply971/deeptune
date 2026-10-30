@@ -3,6 +3,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 from utils import UseCase, RunType, get_model_architecture, set_seed
+from trainers.param_count import parse_param_count
+from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
 import json
 import os, shutil
 class DeepTuneVisionOptions:
@@ -40,9 +42,13 @@ class DeepTuneVisionOptions:
         self.batch_size: Optional[int] = parsed_args.batch_size
         self.num_frames: int = parsed_args.num_frames
         self.pooling: str = parsed_args.pooling
+        self._parse_video_data_args(parsed_args)
         self.mode : Optional[str] = parsed_args.mode
         self.grouper: Optional[str] = parsed_args.grouper
         self.fixed_seed: bool = parsed_args.fixed_seed
+        # Per-prediction error model (A4): recorded in cli_arguments.json;
+        # trainers/*/train.py pass it to the Trainer as fit_error_model.
+        self.no_error_model: bool = parsed_args.no_error_model
 
         if run_type == RunType.TabPFNTRAIN:
             self.target_column: Optional[str] = parsed_args.target_column
@@ -84,6 +90,7 @@ class DeepTuneVisionOptions:
             self.learning_rate: float = parsed_args.learning_rate
             self.added_layers: Optional[int] = parsed_args.added_layers
             self.embed_size: Optional[int] = parsed_args.embed_size
+            self.trainable_params: Optional[int] = parsed_args.trainable_params
 
 
             # ganadalf specific
@@ -115,6 +122,7 @@ class DeepTuneVisionOptions:
             self.learning_rate: Optional[float] = parsed_args.learning_rate
             self.train_df: Optional[Path] = parsed_args.train_df
             self.val_df:Optional[Path] = parsed_args.val_df
+            self.trainable_params: Optional[int] = parsed_args.trainable_params
             set_seed(self.fixed_seed)
         if run_type == RunType.GANDALF:
             self.learning_rate: Optional[float] = parsed_args.learning_rate
@@ -208,6 +216,20 @@ class DeepTuneVisionOptions:
         # Video-modality args (ignored for other modalities)
         p.add_argument('--num_frames', type=int, default=8, help='Number of frames to uniformly sample per video clip (video modality only).')
         p.add_argument('--pooling', type=str, choices=['mean', 'attention', 'single_frame'], default='mean', help="How per-frame outputs are pooled into a clip-level prediction for frame-sampling video models (video modality only). 'single_frame' is the Karpathy single-frame baseline: the 2D backbone sees only the middle frame. Ignored for DeepTune's native video architectures (which reject 'single_frame').")
+        self._add_video_data_args()
+
+        # Per-prediction error estimate (images/video). On by default.
+        p.add_argument('--no_error_model', action='store_true',
+                       help='Do not fit the per-prediction error model (error_model.json) on the validation split after '
+                            'training. Without it, eval/inference outputs have no expected_error column.')
+
+    # --- video data layer (Phase 1): decoding, sampling, augmentation, TTA, workers ---
+    def _add_video_data_args(self):
+        add_video_data_arguments(self.parser)
+
+    def _parse_video_data_args(self, parsed_args):
+        for name in VIDEO_DATA_ARG_NAMES:
+            setattr(self, name, getattr(parsed_args, name))
 
     def _add_tabpfn_train_args(self):
         p = self.parser
@@ -252,6 +274,19 @@ class DeepTuneVisionOptions:
         p.add_argument('--categorical_cols', nargs='+', help='List of categorical column names for GANDALF',required=False)
         # timeseries specific
         p.add_argument('--time_idx_column', type=str, default='labels', help='integer typed column denoting the time index within data.')
+        self._add_trainable_params_arg()
+
+    def _add_trainable_params_arg(self):
+        self.parser.add_argument(
+            '--trainable_params', type=parse_param_count, default=None, metavar='COUNT',
+            help="""Trainable-parameter budget for images/video, e.g. 250000, 100k or 1.5M (default: no limit).
+Without --use-peft: the new head is always trained, then the top (output-side)
+backbone layers are unfrozen while they fit in the budget; the rest stays frozen.
+With --use-peft: picks the largest LoRA rank (= --embed_size) whose trainable
+count fits, and records that rank as embed_size.
+Overrides --freeze-backbone. The trainable/total count of every run is written
+to parameter_summary.json next to the model weights.""")
+
     def _add_training_args(self):
         p = self.parser
         p.add_argument('--num_classes', type=int,required=False, help='Number of classes in your dataset.')
@@ -260,7 +295,8 @@ class DeepTuneVisionOptions:
         p.add_argument('--learning_rate', type=float, help='Learning rate.')
         p.add_argument('--train_df', type=Path, help='PARQUET file containing train data.')
         p.add_argument('--val_df', type=Path, help='PARQUET file containing validation data.')
-        
+        self._add_trainable_params_arg()
+
     def _add_timeseries_args(self):
         
         p = self.parser
