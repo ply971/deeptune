@@ -11,6 +11,22 @@ own one-call CLI, launched as a subprocess (see `desktop/runner.py`) - the GUI
 process only imports pandas and dearpygui, never torch/transformers, so it
 opens quickly and never blocks on the ML stack just to show you a form.
 
+## Studio interface
+
+The desktop uses an ink, mint, and violet palette with a persistent workflow
+sidebar, larger headings, high-contrast actions, striped metrics tables, and
+separate training/validation curve colors. The overview links directly to the
+existing dataset, model, run, and results workflows.
+
+Resize the window down to 900 x 640: long form and action rows stack below
+1200 pixels, while the workspace and sidebar scroll independently. Video
+previews fit their panel without stretching or changing decoded input pixels.
+Dear PyGui keyboard navigation is enabled (Tab / Shift+Tab and arrow keys,
+with a mint focus outline). Decorative artwork and activity status are static,
+so reduced-motion users get no animated UI decoration; video playback still
+uses the existing Play / Pause and Loop controls. Native toolkit accessibility
+and screen-reader support remain limited by Dear PyGui.
+
 ## Pages
 
 - **Overview** - what the app does and where to start.

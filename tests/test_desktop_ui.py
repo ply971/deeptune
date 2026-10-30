@@ -245,3 +245,32 @@ def test_video_preview_updates_texture_seeks_and_preserves_training_source(ui, t
     player.thread.join(timeout=2)
     assert not player.thread.is_alive()
     assert not ui.dpg.does_item_exist('video_preview_texture')
+
+
+def test_compact_layout_preserves_settings_and_navigation(ui, tmp_path):
+    ui.apply_config(RunConfig(modality='video', df=tmp_path, out=tmp_path / 'out', num_frames=5))
+    before = ui._build_run_config()
+    for width in (1320, 900, 1440):
+        ui.update_layout(width, 800)
+        assert ui._build_run_config() == before
+        assert ui.dpg.get_item_configuration('data_path_input')['width'] == (-1 if width < 1200 else -400)
+        for group in ui._REFLOW_GROUPS:
+            assert ui.dpg.get_item_configuration(group)['horizontal'] == (width >= 1200)
+        for page, _ in ui.NAV_ITEMS:
+            ui.on_nav_selected(user_data=page)
+            assert ui.dpg.get_value(f'nav_{page}')
+            assert sum(ui.dpg.get_item_configuration(f'page_{key}')['show'] for key, _ in ui.NAV_ITEMS) == 1
+    assert ui.dpg.get_app_configuration()['keyboard_navigation']
+
+
+def test_preview_fits_portrait_and_landscape_without_changing_pixels(ui, monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(ui.dpg, 'get_item_rect_size', lambda item: (560, 320))
+    for width, height in ((800, 400), (200, 800)):
+        pixels = np.zeros(width * height * 4, dtype=np.float32)
+        ui._show_video_frame(width, height, pixels)
+        config = ui.dpg.get_item_configuration('video_preview_image')
+        assert config['width'] <= 516 and config['height'] <= 360
+        assert config['width'] / config['height'] == pytest.approx(width / height, abs=.01)
+        assert ui._video_texture_size == (width, height)
+        assert len(ui.dpg.get_value('video_preview_texture')) == len(pixels)
