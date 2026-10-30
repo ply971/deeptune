@@ -78,18 +78,26 @@ breakdown) next to `model_weights.pth`.
   approximate) while they fit. The rest of the parameters stay frozen. BatchNorm
   running statistics are buffers, not parameters, so they still update in frozen
   layers during training.
-- **With `--use-peft`**: DeepTune picks the largest LoRA rank that fits. In DeepTune
-  the LoRA rank is also the head's hidden width (`--embed_size`), so the chosen rank
-  is saved as `embed_size` in `cli_arguments.json`, and evaluation, embedding and
-  the Test page rebuild the same model. The log and `parameter_summary.json`
-  (`lora_coverage`) also report how many backbone conv/linear modules received LoRA.
-  On r3d_18 that is all 20 Conv3d layers. Runs saved before this was fixed had LoRA on
-  4 of them; their weights still load, and the other adapters start with no effect, so
-  their predictions do not change. Each LoRA rank on r3d_18 costs about 98k trainable
-  parameters, because the adapter's first layer keeps the conv's 3x3x3 kernel. So a
-  100k budget means rank 1, which also leaves a head with a hidden layer one unit wide,
-  and the default `--embed_size 1000` means about 97M, three times the backbone (the run
-  logs a warning). For native 3D models, set `--embed_size` or `--trainable_params`.
+- **With `--use-peft`**: DeepTune picks the largest LoRA rank that fits.
+  - On native video models (`r3d_18`, `swin3d_t`, ...) the rank is `--lora_rank` (default
+    16) and only the rank is searched: `--embed_size` stays the head's hidden width. The
+    chosen rank is saved as `lora_rank` in `cli_arguments.json`. A budget too small for
+    rank 1 plus the head stops with an error instead of narrowing the head.
+  - Other PEFT models ignore `--lora_rank` and say so. Their rank is also the head's
+    hidden width, so the chosen rank is saved as `embed_size`.
+  - Evaluation, embedding and the Test page rebuild the same model from those records. A
+    run recorded without `lora_rank` used `--embed_size` as its rank, and still rebuilds.
+  - The log and `parameter_summary.json` (`lora_coverage`) report how many backbone
+    conv/linear modules received LoRA. On r3d_18 that is all 20 Conv3d layers. Runs saved
+    before this was fixed had LoRA on 4 of them; their weights still load, and the other
+    adapters start with no effect, so their predictions do not change.
+  - Swin's attention `qkv` and `proj` get no LoRA, because torchvision reads their weights
+    directly and an adapter there would do nothing. swin3d_t therefore reports 28 of 52.
+    Old Swin weights load with those adapters dropped and unchanged predictions. On 2D
+    Swin those two were the only targets, so old `--use-peft` Swin runs trained the head
+    alone; LoRA now goes on the patch embedding, MLPs and patch merging.
+  - Each LoRA rank on r3d_18 costs about 98k trainable parameters, because the adapter's
+    first layer keeps the conv's 3x3x3 kernel, so the default rank of 16 costs about 1.6M.
 
 The head alone has `fc1_in × embed_size + embed_size + embed_size × classes + classes`
 parameters with the default `--added_layers 2`. With the default `--embed_size 1000`
@@ -102,8 +110,8 @@ runs do not support it.
 ```powershell
 # images: a 256-wide head (~132k) plus as many top ResNet-18 layers as fit in 500k parameters
 .venv\Scripts\python.exe deeptune.py --modality images --df data\images --raw-data --out results --model_version resnet18 --embed_size 256 --trainable_params 500k
-# video: LoRA on r3d_18, rank chosen so that at most 1M parameters train (rank 10)
-.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --use-peft --trainable_params 1M
+# video: LoRA on r3d_18 with a 256-wide head, rank chosen so that at most 1M parameters train (rank 8)
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --use-peft --embed_size 256 --trainable_params 1M
 ```
 `tests/training/test_param_budget.py` checks the arithmetic of every example in this
 block, so keep it in sync when you change them.
@@ -149,13 +157,18 @@ on, workers restart every epoch, which costs time on Windows.
 
 **Selection.** With `--select_best` or early stopping the validation split selects the
 weights, so its scores are optimistic and it is no longer exchangeable with test data.
-`training_run.json` and `error_model_fit.json` record this. The per-prediction error model
-is fitted on the reloaded best weights, on that same split, so use a separate split for any
-calibration that needs a coverage guarantee.
+`training_run.json`, `error_model_fit.json` and the test `error_calibration.json` record
+this. The per-prediction error model is fitted on the reloaded best weights, on that same
+split, so use a separate split for any calibration that needs a coverage guarantee. A
+`--resume` of a run that selected must select too, otherwise it stops with an error.
 
 **Files next to the weights.** `training_metrics.csv` (per epoch: losses, accuracy, learning
-rate, updates, seconds, peak GPU and process memory) and `training_run.json` (the seed in
-effect, the options, what selected the weights, peak memory) are always written.
+rate, updates, seconds, GPU and process memory) and `training_run.json` (the seed in effect,
+the options, what selected the weights, the run's memory maximum, and `environment`: commit,
+torch version, cuDNN determinism flags) are always written. `peak_process_rss_mb` is sampled
+at the end of each epoch and is not a peak of that epoch: on Windows it is the process's
+lifetime high-water mark, elsewhere the current RSS. `peak_memory_meaning` in
+`training_run.json` says the same.
 
 ## Models *DeepTune* Supports (Up to Date)
 
