@@ -149,20 +149,32 @@ model produced it, and a trained clip classifier is never used for tracking.
 
 - the predicted class or value. A classifier answers only with its own classes;
 - its confidence, which is the model's own score and not a measured accuracy;
-- `expected_error`, only when the run has a usable `error_model.json`. Otherwise the
-  page says it is not available, and why. No number is shown in that case.
+- `expected_error`, only when the run has a usable `error_model.json`. It reports how
+  the run's validation clips did, not this video's own chance of being wrong: "on
+  validation clips with similar confidence, about 12% were wrong (240 clips)". When the
+  run had too few clips to fit on, it is the run-wide validation rate, the same for
+  every video, and the page says so. It cannot tell when a video shows something the
+  model never trained on. Otherwise the page says it is not available and why, and
+  withholds the number if the error model was fitted on a different number of clips.
 
-Predict refuses to start when the checkpoint is missing, when the run did not record
-its model version or class count, or when its training and evaluation records disagree
-about the model. It warns when they disagree about clip settings, when class names do
-not fit the class count, and when `infer.py` reports that the error model was refused
-or was fitted on a different number of clips.
+The model is rebuilt from the settings recorded next to the checkpoint. Predict refuses
+to start when the checkpoint is missing, when the run did not record its model version,
+class count or (for a frame model) pooling, or when its training and evaluation records
+state different values for a setting that changes the model's weights. It warns when they
+differ on clip settings, when class names do not fit the class count, and when `infer.py`
+reports that the error model was refused.
 
 **Find, track and count** runs `track.py` on what you type (Grounding DINO or OWLv2,
 then ByteTrack). You get an overlay video, which the preview plays, and a table of
 count, first seen and last seen per prompt. Counts are tracker estimates: a track
 that is lost and found again can be counted twice, so check the overlay. A result with
-no tracks is reported as that, with what the detector returned.
+no tracks is reported as that, with what the detector returned and what would change it.
+
+Keep **Frames step** at 1 for counts you mean to rely on. A step above 1 is faster, but
+it can change counts in both directions: a moving object can be missed, or split into
+several tracks. A fast small object can be missed even at step 1, because a new track must
+overlap its first box on the next frame. **Score threshold** is the score a box needs to
+start a track, and setting it to a box's score is enough for that box to be tracked.
 
 The detectors are downloaded from Hugging Face on first use: Grounding DINO is about
 0.7 GB and OWLv2 about 0.6 GB. Until the chosen model is in the local cache, the note
@@ -170,6 +182,7 @@ above the button gives the size and the folder, and the button reads "Download a
 0.7 GB, then track".
 
 Only one action runs at a time on this page, and Stop ends it and shows no result. The
+video and run cannot be changed while an action runs, and each result names its video. The
 page does not know about a training run on the Run page, so both can compete for the
 GPU; an out-of-memory failure says so. Output goes to
 `<run>/desktop-inference/<time>/` for a prediction and
