@@ -25,7 +25,8 @@ opens quickly and never blocks on the ML stack just to show you a form.
 - **Model & Training** - model version (the list updates for the chosen
   modality), transfer-learning options (added layers, embedding size, freeze
   backbone, PEFT/LoRA), training hyperparameters (batch size, epochs,
-  learning rate), and whatever else that modality/model needs: frame count
+  learning rate, and for images/video an optional **Trainable parameter
+  budget** such as `100k` or `1.5M`; blank means no limit), and whatever else that modality/model needs: frame count
   and pooling for video, continuous/categorical columns for GANDALF,
   fine-tuning mode for TabPFN, the time index column for DeepAR.
 - **Run** - choose an output directory, review the equivalent CLI command,
@@ -58,6 +59,13 @@ Previews load on a worker thread and read at most 50 table rows. Binary media
 payloads are shown as byte counts. Model controls reflect supported combinations;
 for example, TabPFN exposes regression, GPT-2 disables PEFT, and MViT uses 16 frames.
 Quick-check and standard-training presets set epochs, batch size, and backbone freezing.
+
+The trainable parameter budget is passed as `--trainable_params` (see the main
+README). Without PEFT it trains the new head plus the top backbone layers that
+fit; with PEFT / LoRA it picks the largest LoRA rank that fits and records it as
+the embedding size, so the Test page rebuilds the same model. It overrides
+Freeze backbone. Every image/video run writes the trainable and total counts to
+`parameter_summary.json` in its `trainval_output_*` folder.
 
 The default split is 70% training, 10% validation, and 20% holdout. Classification
 splits are stratified; grouped splits keep each group together, with approximate
