@@ -31,6 +31,9 @@ TRACK_DEFAULTS = {
     'grounding_dino': {'track_high_thresh': 0.35},
     'owlv2': {'track_high_thresh': 0.2},
 }
+# Fusing multiplies IoU by the box score, and confirming a new track needs the result
+# above 0.3. A zero-shot score under 0.3 could then never confirm, whatever the thresholds.
+ZERO_SHOT_DETECTORS = frozenset(TRACK_DEFAULTS)
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -132,11 +135,13 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
 def tracker_kwargs(args: argparse.Namespace) -> dict:
     return {'high_thresh': args.track_high_thresh, 'low_thresh': args.track_low_thresh,
             'new_track_thresh': args.new_track_thresh, 'match_thresh': args.match_thresh,
-            'track_buffer': args.track_buffer, 'class_agnostic': args.class_agnostic}
+            'track_buffer': args.track_buffer, 'class_agnostic': args.class_agnostic,
+            'fuse_score': args.detector not in ZERO_SHOT_DETECTORS}
 
 
 def save_track_args(args: argparse.Namespace, out: Path, detector: Detector) -> Path:
-    record = {**vars(args), 'detector_resolved': detector.describe() if detector is not None else None,
+    record = {**vars(args), 'tracker_settings': tracker_kwargs(args),
+              'detector_resolved': detector.describe() if detector is not None else None,
               'detector_licence': LICENCES.get(args.detector_model, 'see the model card'),
               'created': datetime.now().isoformat(timespec='seconds'),
               'python': platform.python_version(), 'command': sys.argv}
