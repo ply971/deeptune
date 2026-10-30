@@ -6,20 +6,22 @@ from pathlib import Path
 from typing import Sequence
 
 from spatial import io as sio
-from spatial.detect import Detection, Detector, clean_prompts
+from spatial.detect import Detection, Detector, clean_prompts, cross_label_suppress
 from spatial.track import ByteTracker
 
 
 def track_video(video_path, prompts: Sequence[str], detector: Detector, out_dir,
                 every_n_frames: int = 1, max_frames: int | None = None,
                 tracker_kwargs: dict | None = None, save_video: bool = False,
-                log=print) -> dict:
+                cross_label_nms: float | None = None, log=print) -> dict:
     """Detect + track one video and write its output folder.
 
     Frames are decoded once and streamed: sampled frames are detected in batches
     of ``detector.batch_size`` and fed to the tracker in order, so memory stays
     bounded by one batch. The tracker runs at ``fps / every_n_frames`` steps per
     second (``track_buffer`` is scaled accordingly, as in ByteTrack).
+    ``cross_label_nms`` (IoU) keeps only the best-scoring label where boxes of
+    different prompts overlap (see :func:`spatial.detect.cross_label_suppress`).
 
     Returns ``{"out_dir", "files", "summary"}``.
     """
@@ -44,6 +46,7 @@ def track_video(video_path, prompts: Sequence[str], detector: Detector, out_dir,
             return
         results = detector.detect(batch_frames, prompts, frame_indices=list(batch_idx))
         for fi, frame, dets in zip(batch_idx, batch_frames, results):
+            dets = cross_label_suppress(dets, cross_label_nms)
             det_frames.append({'frame': fi, 'time_s': round(fi / info.fps, 4),
                                'detections': [d.to_dict() for d in dets]})
             for t in tracker.update(dets, frame=frame):

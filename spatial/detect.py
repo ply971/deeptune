@@ -72,23 +72,54 @@ LICENCES = {
 
 
 def clean_prompts(prompts: Sequence[str]) -> list[str]:
-    """Strip prompts, drop empties and duplicates (order kept); reject dots.
-
-    Grounding DINO separates phrases with ``.``, so a dot inside a prompt would
-    split it into two phrases and break the label mapping.
-    """
+    """Strip prompts, drop empties and case-insensitive duplicates (order kept)."""
     out: list[str] = []
     for p in prompts:
         p = str(p).strip()
         if not p:
             continue
-        if '.' in p:
-            raise ValueError(f'prompt {p!r} must not contain "." (it separates phrases)')
         if p.lower() not in {q.lower() for q in out}:
             out.append(p)
     if not out:
         raise ValueError('at least one non-empty prompt is required')
     return out
+
+
+def grounding_dino_phrase(prompt: str) -> str:
+    """The text Grounding DINO sees for a prompt.
+
+    Grounding DINO separates phrases with ``.``, so dots inside a prompt
+    ("St. Bernard") are replaced by spaces; the detection label stays the
+    original prompt. Raises ``ValueError`` if nothing is left.
+    """
+    phrase = ' '.join(str(prompt).replace('.', ' ').split()).lower()
+    if not phrase:
+        raise ValueError(f'prompt {prompt!r} has no text left for Grounding DINO once dots are removed')
+    return phrase
+
+
+def check_grounding_dino_prompts(prompts: Sequence[str]) -> list[str]:
+    """Phrases for each prompt; rejects prompts that become identical (e.g. "St. Bernard" / "st bernard")."""
+    phrases = [grounding_dino_phrase(p) for p in prompts]
+    if len(set(phrases)) != len(phrases):
+        raise ValueError(f'prompts {list(prompts)} are identical for Grounding DINO once dots and case are removed')
+    return phrases
+
+
+def cross_label_suppress(dets: Sequence['Detection'], iou_thr: float | None) -> list['Detection']:
+    """Class-agnostic NMS: of boxes overlapping by more than ``iou_thr`` keep the
+    highest-scoring one, whatever its label. Stops one object found by two prompts
+    ("lobster" and "crab") from being counted twice. ``None`` or ``>= 1`` disables."""
+    dets = sorted(dets, key=lambda d: -d.score)
+    if iou_thr is None or iou_thr >= 1 or len(dets) < 2:
+        return list(dets)
+    from spatial.track import iou_matrix
+    iou = iou_matrix([d.box for d in dets], [d.box for d in dets])
+    kept: list[int] = []
+    for i in range(len(dets)):
+        if all(iou[i, k] <= iou_thr for k in kept):
+            kept.append(i)
+    return [dets[i] for i in kept]
 
 
 def pick_device(device: str | None = 'auto') -> str:
@@ -248,13 +279,20 @@ class _HFDetector(Detector):
 class GroundingDinoDetector(_HFDetector):
     """Grounding DINO through ``transformers``.
 
-    Boxes and scores come from the processor's
+    Pixel boxes come from the processor's
     ``post_process_grounded_object_detection(outputs, input_ids, threshold=box_threshold,
     text_threshold=..., target_sizes=...)``. Its ``text_labels`` are decoded token
-    phrases, which can merge or cut prompts ("lobster fish", "lob"), so the label is
-    instead taken as the prompt whose token span has the highest probability for
-    that box; boxes where no prompt token exceeds ``text_threshold`` are dropped
-    (the same rule the official phrase extraction uses).
+    phrases, which can merge or cut prompts ("lobster fish", "lob"), so instead:
+
+    - **label** = the prompt whose token span holds the highest probability for that
+      box (spans found by splitting ``input_ids`` on ``.`` and special tokens);
+    - **score** = that probability. The post-processing score is the max over *all*
+      text positions, including ``.``/``[SEP]``, which can be high for boxes no
+      prompt matches;
+    - a box is kept when its score exceeds both ``box_threshold`` and
+      ``text_threshold``.
+
+    Prompts may contain dots ("St. Bernard"): see :func:`grounding_dino_phrase`.
     """
 
     name = 'grounding_dino'
@@ -296,7 +334,8 @@ class GroundingDinoDetector(_HFDetector):
 
     def _detect_batch(self, frames, prompts, frame_indices):
         import torch
-        text = [list(prompts) for _ in frames]  # processor joins to "a. b."
+        phrases = check_grounding_dino_prompts(prompts)
+        text = [list(phrases) for _ in frames]  # processor joins to "a. b."
         inputs = self.processor(images=frames, text=text, return_tensors='pt', padding='longest')
         inputs = self._to_device(inputs)
         with torch.inference_mode():
@@ -312,7 +351,6 @@ class GroundingDinoDetector(_HFDetector):
             keep = probs[b].max(dim=-1).values > self.box_threshold  # same rule as post-processing
             kept = probs[b][keep]
             boxes = res['boxes'].detach().float().cpu().numpy()
-            scores = res['scores'].detach().float().cpu().numpy()
             if len(kept) != len(boxes):
                 raise RuntimeError('post-processing kept a different number of boxes than expected')
             if len(kept) == 0:
@@ -320,7 +358,8 @@ class GroundingDinoDetector(_HFDetector):
                 continue
             per_prompt = torch.stack([kept[:, s].max(dim=-1).values for s in spans], dim=1)
             best_p, best_i = per_prompt.max(dim=1)
-            ok = (best_p > self.text_threshold).numpy()
+            scores = best_p.numpy()
+            ok = (scores > self.box_threshold) & (scores > self.text_threshold)
             labels = [prompts[int(i)] for i in best_i.tolist()]
             out.append(finalize_detections(boxes[ok], scores[ok], [l for l, k in zip(labels, ok) if k],
                                            w, h, nms_iou=self.nms_iou))

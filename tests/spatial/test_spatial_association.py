@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from spatial.detect import Detection, FakeDetector, clean_prompts, finalize_detections
+from spatial.detect import (Detection, FakeDetector, check_grounding_dino_prompts, clean_prompts,
+                            cross_label_suppress, finalize_detections, grounding_dino_phrase)
 from spatial.track import ByteTracker, Track, apply_affine_to_tracks, iou_matrix, linear_assignment, KalmanFilter
 
 
@@ -102,10 +103,30 @@ def test_finalize_clips_drops_degenerate_and_runs_per_label_nms():
 
 def test_clean_prompts():
     assert clean_prompts([' lobster ', 'Lobster', '', 'fish']) == ['lobster', 'fish']
-    with pytest.raises(ValueError):
-        clean_prompts(['a. b'])
+    assert clean_prompts(['St. Bernard']) == ['St. Bernard']  # dots are fine in general (OWLv2)
     with pytest.raises(ValueError):
         clean_prompts(['  '])
+
+
+def test_grounding_dino_phrases_replace_dots():
+    # Grounding DINO separates phrases with '.', so dots become spaces in the text it sees.
+    assert grounding_dino_phrase('St. Bernard') == 'st bernard'
+    assert grounding_dino_phrase('  a.b  c ') == 'a b c'
+    with pytest.raises(ValueError):
+        grounding_dino_phrase('...')
+    assert check_grounding_dino_prompts(['St. Bernard', 'fish']) == ['st bernard', 'fish']
+    with pytest.raises(ValueError):
+        check_grounding_dino_prompts(['St. Bernard', 'st bernard'])
+
+
+def test_cross_label_suppress():
+    a = Detection((0, 0, 10, 10), 0.9, 'lobster')
+    b = Detection((0, 0, 10, 9), 0.6, 'crab')      # same object, other prompt
+    c = Detection((30, 30, 40, 40), 0.5, 'crab')   # elsewhere
+    d = Detection((5, 0, 15, 10), 0.4, 'crab')     # IoU 1/3 with a
+    assert cross_label_suppress([b, c, a, d], 0.7) == [a, c, d]
+    assert cross_label_suppress([b, c, a, d], 0.3) == [a, c]
+    assert cross_label_suppress([b, a], None) == [a, b]  # disabled: only sorted
 
 
 def test_fake_detector_lookup_counter_and_prompt_filter():

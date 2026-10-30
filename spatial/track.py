@@ -325,8 +325,16 @@ class ByteTracker:
                  track_buffer: int = 30, frame_rate: float = 30.0, fuse_score: bool = True,
                  class_agnostic: bool = False,
                  motion_compensator: Callable[[np.ndarray], np.ndarray] | None = None):
-        if not 0 <= low_thresh <= high_thresh:
-            raise ValueError('need 0 <= low_thresh <= high_thresh')
+        if not 0 <= low_thresh <= high_thresh <= 1:
+            raise ValueError(f'need 0 <= low_thresh ({low_thresh}) <= high_thresh ({high_thresh}) <= 1')
+        if new_track_thresh is not None and not 0 <= new_track_thresh <= 1:
+            raise ValueError(f'new_track_thresh must be in [0, 1], got {new_track_thresh}')
+        if not 0 < match_thresh <= 1:
+            raise ValueError(f'match_thresh (an IoU distance) must be in (0, 1], got {match_thresh}')
+        if track_buffer < 0:
+            raise ValueError(f'track_buffer must be >= 0, got {track_buffer}')
+        if not frame_rate > 0:
+            raise ValueError(f'frame_rate must be > 0, got {frame_rate}')
         self.high_thresh = float(high_thresh)
         self.low_thresh = float(low_thresh)
         self.new_track_thresh = float(high_thresh + 0.1 if new_track_thresh is None else new_track_thresh)

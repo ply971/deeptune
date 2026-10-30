@@ -20,7 +20,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from spatial.detect import DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, build_detector, clean_prompts
+from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, build_detector,
+                            check_grounding_dino_prompts, clean_prompts)
+from spatial.track import ByteTracker
 from spatial import io as sio
 
 # Tracker thresholds per detector score scale (ByteTrack's 0.5/0.6 assume a
@@ -71,15 +73,28 @@ def get_parser() -> argparse.ArgumentParser:
     p.add_argument('--track_buffer', type=int, default=30,
                    help='Steps a lost track can be re-found, at 30 steps/s (scaled by fps / every_n_frames; '
                         'default 30).')
+    p.add_argument('--cross_label_nms', type=float, default=None,
+                   help='IoU above which overlapping boxes of DIFFERENT prompts are merged into the '
+                        'best-scoring one, so one object found by two prompts is counted once (default: off; '
+                        'e.g. 0.7).')
     p.add_argument('--class_agnostic', action='store_true',
                    help='Match boxes across labels; each track takes the majority label.')
     p.add_argument('--save_video', action='store_true', help='Also write overlay.mp4 with boxes and track IDs.')
     return p
 
 
-def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
-    """Fill per-detector defaults so track_arguments.json records the values used."""
+def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> argparse.Namespace:
+    """Validate the arguments and fill per-detector defaults (recorded in
+    track_arguments.json). Every problem is reported through ``parser.error``
+    (usage + message, exit code 2) before any video is read or weights load."""
+    if any(not str(p).strip() for p in args.prompt):
+        parser.error('--prompt must not be blank')
     args.prompt = clean_prompts(args.prompt)
+    if args.detector == 'grounding_dino':
+        try:
+            check_grounding_dino_prompts(args.prompt)
+        except ValueError as exc:
+            parser.error(str(exc))
     d = DETECTOR_DEFAULTS[args.detector]
     if args.box_threshold is None:
         args.box_threshold = d['box_threshold']
@@ -93,15 +108,35 @@ def resolve_args(args: argparse.Namespace) -> argparse.Namespace:
         args.track_low_thresh = min(args.box_threshold, args.track_high_thresh)
     if args.new_track_thresh is None:
         args.new_track_thresh = round(args.track_high_thresh + 0.1, 4)
+    for name in ('box_threshold', 'text_threshold'):
+        v = getattr(args, name)
+        if v is not None and not 0 <= v <= 1:
+            parser.error(f'--{name} must be in [0, 1], got {v}')
+    if args.nms_iou <= 0:
+        parser.error('--nms_iou must be > 0 (use 1 to disable NMS)')
+    if args.cross_label_nms is not None and args.cross_label_nms <= 0:
+        parser.error('--cross_label_nms must be > 0')
     if args.every_n_frames < 1:
-        raise SystemExit('--every_n_frames must be >= 1')
+        parser.error('--every_n_frames must be >= 1')
     if args.batch_size < 1:
-        raise SystemExit('--batch_size must be >= 1')
+        parser.error('--batch_size must be >= 1')
+    if args.max_frames is not None and args.max_frames < 1:
+        parser.error('--max_frames must be >= 1')
+    try:
+        ByteTracker(**tracker_kwargs(args))
+    except ValueError as exc:
+        parser.error(f'invalid tracker settings: {exc}')
     return args
 
 
+def tracker_kwargs(args: argparse.Namespace) -> dict:
+    return {'high_thresh': args.track_high_thresh, 'low_thresh': args.track_low_thresh,
+            'new_track_thresh': args.new_track_thresh, 'match_thresh': args.match_thresh,
+            'track_buffer': args.track_buffer, 'class_agnostic': args.class_agnostic}
+
+
 def save_track_args(args: argparse.Namespace, out: Path, detector: Detector) -> Path:
-    record = {**vars(args), 'detector_resolved': detector.describe(),
+    record = {**vars(args), 'detector_resolved': detector.describe() if detector is not None else None,
               'detector_licence': LICENCES.get(args.detector_model, 'see the model card'),
               'created': datetime.now().isoformat(timespec='seconds'),
               'python': platform.python_version(), 'command': sys.argv}
@@ -119,40 +154,59 @@ def _video_out_dirs(videos: list[Path], out: Path) -> list[Path]:
 
 
 def main(argv=None, detector: Detector | None = None) -> dict:
-    """CLI entry point. ``detector`` lets callers (tests, notebooks) pass a ready
-    detector instead of loading ``--detector`` weights."""
+    """Run the CLI and return ``{"results", "errors"}`` (errors: video -> message).
+
+    ``detector`` lets callers (tests, notebooks) pass a ready detector instead of
+    loading ``--detector`` weights. Argument problems exit through ``parser.error``.
+    Every video is opened first, so unreadable files are reported before any
+    weights load; a folder run then continues past videos that fail. Use
+    :func:`cli` for the process exit code.
+    """
     from spatial.pipeline import track_video
-    args = resolve_args(get_parser().parse_args(argv))
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    parser = get_parser()
+    args = resolve_args(parser.parse_args(argv), parser)
     if args.video:
         videos = [Path(args.video)]
         if not videos[0].is_file():
-            raise SystemExit(f'video not found: {args.video}')
+            parser.error(f'video not found: {args.video}')
     else:
-        videos = sio.list_videos(args.video_dir)
+        try:
+            videos = sio.list_videos(args.video_dir)
+        except ValueError as exc:
+            parser.error(str(exc))
         if not videos:
-            raise SystemExit(f'no videos in {args.video_dir}')
-    if detector is None:
+            parser.error(f'no videos in {args.video_dir}')
+    errors: dict[str, str] = {}
+    readable = []
+    for v in videos:
+        try:
+            sio.video_info(v)
+            readable.append(v)
+        except ValueError as exc:
+            errors[str(v)] = f'{type(exc).__name__}: {exc}'
+    if args.video and errors:
+        parser.error(errors[str(videos[0])])
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    if readable and detector is None:
         kw = {'box_threshold': args.box_threshold, 'batch_size': args.batch_size,
               'nms_iou': args.nms_iou, 'device': args.device}
         if args.detector == 'grounding_dino':
             kw['text_threshold'] = args.text_threshold
         detector = build_detector(args.detector, args.detector_model, **kw)
     save_track_args(args, out, detector)
-    tracker_kwargs = {'high_thresh': args.track_high_thresh, 'low_thresh': args.track_low_thresh,
-                      'new_track_thresh': args.new_track_thresh, 'match_thresh': args.match_thresh,
-                      'track_buffer': args.track_buffer, 'class_agnostic': args.class_agnostic}
-    results, errors = {}, {}
-    for video, vdir in zip(videos, _video_out_dirs(videos, out)):
+    results = {}
+    for video, vdir in zip(readable, _video_out_dirs(readable, out)):
         try:
             results[str(video)] = track_video(video, args.prompt, detector, vdir, args.every_n_frames,
-                                              args.max_frames, tracker_kwargs, args.save_video)
+                                              args.max_frames, tracker_kwargs(args), args.save_video,
+                                              cross_label_nms=args.cross_label_nms)
         except Exception as exc:  # one bad file must not stop a folder run
             if args.video:
                 raise
             errors[str(video)] = f'{type(exc).__name__}: {exc}'
-            print(f'[track] {video.name}: FAILED ({errors[str(video)]})', file=sys.stderr)
+    for video, msg in errors.items():
+        print(f'[track] {Path(video).name}: FAILED ({msg})', file=sys.stderr)
     with (out / 'counts.csv').open('w', newline='', encoding='utf-8') as fh:
         w = csv.writer(fh)
         w.writerow(['video', 'label', 'count'])
@@ -161,8 +215,15 @@ def main(argv=None, detector: Detector | None = None) -> dict:
                 w.writerow([video, label, entry['count']])
     if errors:
         (out / 'errors.json').write_text(json.dumps(errors, indent=2), encoding='utf-8')
+        print(f'[track] {len(errors)} of {len(videos)} videos failed; see {out / "errors.json"}', file=sys.stderr)
     return {'results': results, 'errors': errors}
 
 
+def cli(argv=None, detector: Detector | None = None) -> int:
+    """Process exit code: 0 when every video succeeded, 1 when any failed
+    (argument errors exit with 2 through argparse)."""
+    return 1 if main(argv, detector)['errors'] else 0
+
+
 if __name__ == '__main__':
-    main()
+    sys.exit(cli())
