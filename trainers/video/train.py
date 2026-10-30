@@ -9,6 +9,8 @@ from cli import DeepTuneVisionOptions
 from utils import RunType, set_seed, build_video_model
 from trainers.param_budget import build_with_budget
 from src.video.multi_clip import wrap_for_test_clips
+from handlers.training_args import TrainingOptions
+from trainers.training_basics import data_fingerprint, seed_everything
 
 
 def main():
@@ -96,6 +98,11 @@ def train(
 
     if fixed_seed:
         set_seed(fixed_seed)
+    # --- training basics (T1) ---
+    training_options = TrainingOptions.from_args(args).validate(mode)
+    if training_options.seed is not None:
+        seed_everything(training_options.seed)
+    # --- end training basics ---
 
     if added_layers == 0:
         raise ValueError('As you apply one of transfer learning or PEFT, please choose 1 or 2 as your preferred number of added_layers.')
@@ -112,9 +119,14 @@ def train(
     val_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames,
                                                    clip_transform=clip_transform, train=False, options=video_options)
 
-    train_loader = DataLoader(train_dataset, **video_loader_kwargs(train_dataset, batch_size, True, video_options.num_workers))
-    val_loader = DataLoader(val_dataset, **video_loader_kwargs(val_dataset, batch_size, False, video_options.num_workers,
-                                                               role='val'))
+    train_kwargs = video_loader_kwargs(train_dataset, batch_size, True, video_options.num_workers)
+    val_kwargs = video_loader_kwargs(val_dataset, batch_size, False, video_options.num_workers, role='val')
+    if training_options.checkpoints_or_resumes:
+        # An exact resume needs fresh workers each epoch: a persistent worker's random
+        # state cannot be saved, and it draws no new base seed from the main generator.
+        train_kwargs['persistent_workers'] = val_kwargs['persistent_workers'] = False
+    train_loader = DataLoader(train_dataset, **train_kwargs)
+    val_loader = DataLoader(val_dataset, **val_kwargs)
 
     if trainable_params is None:
         model = build_video_model(
@@ -138,8 +150,9 @@ def train(
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR)
+    trainer = Trainer(model, train_loader=train_loader, val_loader=val_loader, learning_rate=learning_rate, mode=mode, num_epochs=num_epochs, output_dir=TRAINVAL_OUTPUT_DIR, training_options=training_options)
     trainer.fit_error_model = not getattr(args, 'no_error_model', False)
+    trainer.data_identity.update(train_file=data_fingerprint(train_df), val_file=data_fingerprint(val_df))
     # The error model must see what evaluation sees: with --test_clips N it is
     # fitted on N-clip averaged validation probabilities (A2 V-016).
     trainer.error_fit_info = {'test_clips': video_options.test_clips}

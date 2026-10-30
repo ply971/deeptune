@@ -5,6 +5,7 @@ from typing import Optional
 from utils import UseCase, RunType, get_model_architecture, set_seed
 from trainers.param_count import parse_param_count
 from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
+from handlers.training_args import TRAINING_BASICS_ARG_NAMES, add_training_basics_arguments, apply_config_defaults
 import json
 import os, shutil
 class DeepTuneVisionOptions:
@@ -36,7 +37,16 @@ class DeepTuneVisionOptions:
         if run_type == (RunType.TIMESERIES):
             self._add_timeseries_args()
 
+        # --- training basics (T1): --config file values become defaults, explicit flags win ---
+        apply_config_defaults(self.parser, args)
+        # --- end training basics ---
         parsed_args = self.parser.parse_args(args)
+        # --- training basics (T1) ---
+        self.config: Optional[str] = parsed_args.config
+        if run_type in (RunType.TRAIN, RunType.ONECALL):
+            for name in TRAINING_BASICS_ARG_NAMES:
+                setattr(self, name, getattr(parsed_args, name))
+        # --- end training basics ---
         # self.input_dir: Optional[Path] = parsed_args.input_dir.resolve() if parsed_args.input_dir else None
         self.out: Optional[Path] = parsed_args.out.resolve() if parsed_args.out else None
         self.batch_size: Optional[int] = parsed_args.batch_size
@@ -198,6 +208,13 @@ class DeepTuneVisionOptions:
     def _add_default_args(self):
         p = self.parser
 
+        # --- training basics (T1) ---
+        p.add_argument('--config', type=str, default=None, metavar='FILE',
+                       help="""JSON or YAML file of default values, keyed by flag name without the dashes, e.g. num_epochs: 20.
+Flags on the command line win. An unknown key is an error. Paths are relative to the current folder.
+A store_true flag set to true in the file cannot be turned off on the command line.""")
+        # --- end training basics ---
+
         # Dataset args
         # p.add_argument('--input_dir', type=Path, help='Directory containing input data.')
         p.add_argument('--mode', type=str, required=False, choices=['reg','cls'], help='Mode: Classification or Regression')
@@ -275,6 +292,7 @@ class DeepTuneVisionOptions:
         # timeseries specific
         p.add_argument('--time_idx_column', type=str, default='labels', help='integer typed column denoting the time index within data.')
         self._add_trainable_params_arg()
+        add_training_basics_arguments(p)  # T1
 
     def _add_trainable_params_arg(self):
         self.parser.add_argument(
@@ -296,6 +314,7 @@ to parameter_summary.json next to the model weights.""")
         p.add_argument('--train_df', type=Path, help='PARQUET file containing train data.')
         p.add_argument('--val_df', type=Path, help='PARQUET file containing validation data.')
         self._add_trainable_params_arg()
+        add_training_basics_arguments(p)  # T1
 
     def _add_timeseries_args(self):
         
