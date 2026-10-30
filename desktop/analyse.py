@@ -39,6 +39,10 @@ LIMIT_NOTE = ('A trained clip classifier answers only with its own classes. Trac
 TRACKER_NOTE = ('Counts are tracker estimates (unique track IDs), not measured accuracy. A track that is lost '
                 'and found again can be counted twice, so check the overlay before you trust a count.')
 CONFIDENCE_NOTE = "Confidence is the model's own score, not a measured accuracy on this video."
+EXPECTED_ERROR_NOTE = ('The expected error comes from validation clips only, so it cannot tell when this video shows '
+                       'something the model never trained on.')
+FRAMES_STEP_NOTE = ('A frames step above 1 can change counts in both directions: a moving object can be missed, or '
+                    'split into several tracks. Use 1 for counts you mean to rely on.')
 
 
 @dataclass(frozen=True)
@@ -126,7 +130,8 @@ def track_button_label(key: str) -> str:
 def loading_message(key: str) -> str:
     """First line of the live log. track.py prints nothing until a video is done."""
     choice = detector_by_key(key)
-    return (f'Loading {choice.label} and tracking. The first use downloads about {choice.download_gb} GB. '
+    download = '' if detector_is_cached(choice.model_id) else f'This first run downloads about {choice.download_gb} GB. '
+    return (f'Loading {choice.label} and tracking. {download}'
             'track.py reports no progress per frame, so this line can stay here until it finishes.\n')
 
 
@@ -223,7 +228,7 @@ def list_video_runs(out_dir: Path) -> RunChoices:
 
 def describe_run(run: gc.RunResults) -> str:
     """Which model this is, in the form every prediction is labelled with."""
-    args = run.cli_arguments or {}
+    args = gc.checkpoint_arguments(run)
     parts = [str(args.get('model_version') or 'unknown model')]
     # Native 3D models ignore --pooling, whatever the run recorded.
     if args.get('pooling') and args.get('model_version') not in gc.VIDEO_NATIVE_MODEL_VERSIONS:
@@ -244,16 +249,22 @@ def class_names_note(run: gc.RunResults, limit: int = 12) -> str:
     return f"It can only answer with: {shown}{', ...' if len(names) > limit else ''}."
 
 
-# Settings that decide the network's shape, and so whether the checkpoint fits.
-BUILD_SETTINGS = ('model_version', 'num_classes', 'mode', 'pooling', 'added_layers', 'embed_size', 'use_peft',
-                  'freeze_backbone')
+def build_settings(args: dict) -> tuple[str, ...]:
+    """Settings that decide the network's shape for this run, and so whether the checkpoint fits."""
+    names = ['model_version', 'num_classes', 'mode', 'added_layers', 'embed_size', 'use_peft']
+    if args.get('model_version') not in gc.VIDEO_NATIVE_MODEL_VERSIONS:  # native 3D models ignore pooling
+        names.append('pooling')
+    if args.get('use_peft'):  # without PEFT, freezing changes training and not the saved weights
+        names.append('freeze_backbone')
+    return tuple(names)
+
+
 # Settings that only change how test clips are built.
 CLIP_SETTINGS = ('num_frames', 'video_backend', 'temporal_sampling', 'clip_stride', 'clip_duration_sec',
                  'motion_source', 'test_clips')
 
 
-def _recorded_arguments(run_dir: Path, pattern: str) -> dict:
-    path = gc._first_glob(Path(run_dir), pattern)
+def _recorded_arguments(path: Optional[Path]) -> dict:
     if path is None:
         return {}
     try:
@@ -263,11 +274,11 @@ def _recorded_arguments(run_dir: Path, pattern: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def recorded_differences(run_dir: Path, names: tuple[str, ...]) -> list[str]:
-    """Settings the run's training and evaluation folders record differently.
-    The page prefers the evaluation record and infer.py the training one, so a difference matters."""
-    trained = _recorded_arguments(run_dir, 'train*/cli_arguments.json')
-    evaluated = _recorded_arguments(run_dir, 'eval*/cli_arguments.json')
+def recorded_differences(run: gc.RunResults, names: tuple[str, ...]) -> list[str]:
+    """Settings that the record next to the checkpoint and the evaluation record both state, differently.
+    A setting only one of them states is no conflict: gc.checkpoint_arguments takes it from there."""
+    trained = _recorded_arguments(Path(run.checkpoint_path).parent / 'cli_arguments.json' if run.checkpoint_path else None)
+    evaluated = _recorded_arguments(gc._first_glob(Path(run.run_dir), 'eval*/cli_arguments.json'))
     return [f'{name}: {trained[name]!r} in training, {evaluated[name]!r} in evaluation' for name in names
             if trained.get(name) is not None and evaluated.get(name) is not None and trained[name] != evaluated[name]]
 
@@ -279,13 +290,15 @@ def run_problems(run: gc.RunResults) -> list[str]:
     problems = []
     if not Path(run.checkpoint_path).is_file():
         problems.append(f'The checkpoint is missing: {run.checkpoint_path}')
-    args = run.cli_arguments or {}
-    # infer_config_from_run would otherwise fall back to resnet18 with 2 classes.
+    args = gc.checkpoint_arguments(run)
+    # infer_config_from_run would otherwise fall back to resnet18, 2 classes and mean pooling.
     required = ['model_version'] + ([] if args.get('mode') == 'reg' else ['num_classes'])
+    if args.get('model_version') not in gc.VIDEO_NATIVE_MODEL_VERSIONS:
+        required.append('pooling')
     missing = [name for name in required if not args.get(name)]
     if missing:
         problems.append(f"This run did not record {', '.join(missing)}, so its model cannot be rebuilt.")
-    differences = recorded_differences(run.run_dir, BUILD_SETTINGS)
+    differences = recorded_differences(run, build_settings(args))
     if differences:
         problems.append("This run's recorded settings disagree, so the model that fits its checkpoint is unknown. "
                         + '; '.join(differences) + '.')
@@ -295,11 +308,13 @@ def run_problems(run: gc.RunResults) -> list[str]:
 def run_warnings(run: gc.RunResults) -> list[str]:
     """What the user should know about a usable run's result."""
     warnings = []
-    differences = recorded_differences(run.run_dir, CLIP_SETTINGS)
+    differences = recorded_differences(run, CLIP_SETTINGS)
     if differences:
         warnings.append("Clip settings were recorded differently, so this prediction may not match the run's "
-                        'evaluation. ' + '; '.join(differences) + '. The log lists the values used.')
-    args = run.cli_arguments or {}
+                        'evaluation. ' + '; '.join(differences) + '. The value from training is used.')
+    args = gc.checkpoint_arguments(run)
+    if not args.get('num_frames'):
+        warnings.append(f'This run did not record how many frames it used, so {gc.InferenceConfig.num_frames} are used.')
     if args.get('mode') != 'reg':
         if not run.label_mapping:
             warnings.append('This run recorded no class names, so a prediction shows only a class number.')
@@ -334,9 +349,45 @@ def _finite(value: object) -> Optional[float]:
 
 
 def _present(value: object) -> bool:
-    if value is None:
+    if value is None or value == '':
         return False
     return not (isinstance(value, float) and math.isnan(value))
+
+
+def _error_model_fit(checkpoint_path: Optional[Path]) -> dict:
+    """fit_info of the run's error model, or {} if it cannot be read."""
+    found = find_error_model(checkpoint_path)
+    data = _recorded_arguments(found)
+    fit = data.get('fit_info')
+    if not isinstance(fit, dict):
+        return {}
+    return {'method': data.get('method'), **fit}
+
+
+def _clip_count(value: object) -> int:
+    try:
+        return max(1, int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1  # a run from before clip counts were recorded used one clip
+
+
+def describe_expected_error(estimate: float, is_classifier: bool, fit: dict, test_clips: object) -> str:
+    """Say only what the error model knows: how validation clips did, not this video's own chance of being wrong."""
+    fitted, used = _clip_count(fit.get('test_clips')), _clip_count(test_clips)
+    if fitted != used:
+        return (f"Expected error: withheld. The run's error model was fitted on {fitted} clip(s) per video and this "
+                f'prediction averages {used}, so its number does not apply.')
+    amount = f'{estimate:.1%}' if is_classifier else f'{estimate:.4g}'
+    clips = f"{fit['n_samples']} clips" if isinstance(fit.get('n_samples'), int) else ''
+    if fit.get('method') == 'constant':
+        reason = '; '.join(str(part) for part in (clips, fit.get('fallback_reason')) if part)
+        stated = f'about {amount} were wrong' if is_classifier else f'about {amount} absolute error, in target units'
+        return (f'Expected error: {stated}. This is the run-wide validation rate, the same for every video'
+                + (f' ({reason}).' if reason else '.'))
+    count = f' ({clips})' if clips else ''
+    if is_classifier:
+        return f'Expected error: on validation clips with similar confidence, about {amount} were wrong{count}.'
+    return f'Expected error: on similar validation clips, the absolute error was about {amount}, in target units{count}.'
 
 
 def summarise_prediction(results: gc.InferenceResults, run: gc.RunResults, video: Path) -> PredictionView:
@@ -370,9 +421,11 @@ def summarise_prediction(results: gc.InferenceResults, run: gc.RunResults, video
 
     estimate = _finite(row.get('expected_error')) if 'expected_error' in frame.columns else None
     if estimate is not None:
-        stated = (f'{estimate:.1%} chance that this prediction is wrong' if is_classifier
-                  else f'about {estimate:.4g} (expected absolute error, in target units)')
-        view.expected_error = f"Expected error: {stated}. Estimated by the run's error model, not measured on this video."
+        fit = _error_model_fit(run.checkpoint_path)
+        view.expected_error = describe_expected_error(estimate, is_classifier, fit,
+                                                      gc.checkpoint_arguments(run).get('test_clips'))
+        if 'withheld' not in view.expected_error and fit.get('method') != 'constant':
+            view.notes.append(EXPECTED_ERROR_NOTE)
     elif find_error_model(run.checkpoint_path) is not None:
         view.expected_error = ("Expected error: not available. This run's error model could not be used for this "
                                'prediction; the log gives the reason.')
@@ -520,6 +573,7 @@ class TrackedLabel:
 @dataclass
 class TrackResults:
     video_dir: Path
+    video: str = ''
     model: str = ''
     labels: list[TrackedLabel] = field(default_factory=list)
     num_frames: Optional[int] = None
@@ -564,8 +618,8 @@ def _parse_label(name: str, entry: object) -> TrackedLabel:
     return TrackedLabel(str(name), count, times[0], times[1])
 
 
-def _detector_used(out: Path, requested: Optional[str]) -> tuple[str, Optional[float]]:
-    """(model that ran, score that starts a track), from track_arguments.json."""
+def _detector_used(out: Path, requested: Optional[str]) -> tuple[str, Optional[float], Optional[float]]:
+    """(model that ran, score that starts a track, lowest score it keeps), from track_arguments.json."""
     record, _ = _read_json_object(out / 'track_arguments.json')
     record = record or {}
     resolved = record.get('detector_resolved') if isinstance(record.get('detector_resolved'), dict) else {}
@@ -576,7 +630,7 @@ def _detector_used(out: Path, requested: Optional[str]) -> tuple[str, Optional[f
     extras = [str(v) for v in (record.get('detector_licence'), resolved.get('device')) if v]
     if extras:
         text += f" ({', '.join(extras)})"
-    return text, _finite(record.get('new_track_thresh'))
+    return text, _finite(record.get('new_track_thresh')), _finite(record.get('box_threshold'))
 
 
 def _detected_boxes(video_dir: Path, size_limit: int = 64_000_000) -> tuple[Optional[int], Optional[float]]:
@@ -592,25 +646,31 @@ def _detected_boxes(video_dir: Path, size_limit: int = 64_000_000) -> tuple[Opti
     return len(scores), max(scores) if scores else None
 
 
-def no_tracks_message(video_dir: Path, track_score: Optional[float]) -> str:
-    """Why nothing was tracked, and what to change. An empty result is not a failure."""
+def no_tracks_message(video_dir: Path, track_score: Optional[float], box_threshold: Optional[float] = None) -> str:
+    """Why nothing was tracked, and advice that would change it. An empty result is not a failure."""
     boxes, best = _detected_boxes(video_dir)
-    advice = 'Try a lower score threshold or a different prompt.'
-    if boxes:
-        needed = f' Starting a track needs a score of at least {track_score:.2f}.' if track_score is not None else ''
-        return (f'No tracks found. The detector returned {boxes} box(es), best score {best:.2f}, but none of them '
-                f'became a track.{needed} {advice}')
+    if boxes and track_score is not None:
+        found = f'No tracks found. The detector returned {boxes} box(es), best score {best:.2f}'
+        if best < track_score:
+            reachable = max(0.01, math.floor(best * 100) / 100)  # rounded down, so the box still clears it
+            return (f'{found}, and starting a track needs a score of at least {track_score:.2f}. Set the score '
+                    f'threshold to {reachable:.2f} or lower, or try a different prompt.')
+        return (f'{found}, which is enough to start a track at {track_score:.2f}, but none was found again on the next '
+                'frame looked at: it appeared once, or moved too far between frames. A lower threshold will not help. '
+                'Use a frames step of 1, or try a different prompt.')
     if boxes == 0:
-        return f'No tracks found. The detector returned no boxes in the frames it looked at. {advice}'
-    return f'No tracks found. {advice}'
+        below = f' (below {box_threshold:.2f}, the lowest score kept)' if box_threshold is not None else ''
+        return (f'No tracks found. The detector returned no boxes in the frames it looked at. Try a lower score '
+                f'threshold{below} or a different prompt.')
+    return 'No tracks found. Try a lower score threshold or a different prompt.'
 
 
 def read_track_results(out: Path, video: Path, requested_detector: Optional[str] = None) -> TrackResults:
     """Read what one successful track.py run wrote for one video. Never raises on bad files."""
     out = Path(out)
     video_dir = out / Path(video).stem  # track.py: <out>/<video stem>/ for a single --video
-    results = TrackResults(video_dir=video_dir)
-    results.model, track_score = _detector_used(out, requested_detector)
+    results = TrackResults(video_dir=video_dir, video=Path(video).name)
+    results.model, track_score, box_threshold = _detector_used(out, requested_detector)
     summary, problem = _read_json_object(video_dir / 'summary.json')
     if summary is None:
         results.error = f'Tracking finished but its result could not be used: {problem}'
@@ -631,7 +691,7 @@ def read_track_results(out: Path, video: Path, requested_detector: Optional[str]
     overlay = video_dir / 'overlay.mp4'
     results.overlay = overlay if overlay.is_file() and overlay.stat().st_size > 0 else None
     if results.total_tracks == 0:
-        results.no_tracks_message = no_tracks_message(video_dir, track_score)
+        results.no_tracks_message = no_tracks_message(video_dir, track_score, box_threshold)
     return results
 
 

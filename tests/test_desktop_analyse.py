@@ -27,7 +27,7 @@ def write_clip(path: Path, frames: int = 12, size=(64, 48)) -> Path:
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*'mp4v'), 10, size)
     assert writer.isOpened()
     for value in range(frames):
-        writer.write(np.full((size[1], size[0], 3), value * 10, dtype=np.uint8))
+        writer.write(np.full((size[1], size[0], 3), value * 10 % 256, dtype=np.uint8))
     writer.release()
     return path
 
@@ -59,13 +59,15 @@ def write_track_output(out: Path, video: Path, labels: dict, overlay_from: Path 
     return folder
 
 
-def video_run(tmp_path: Path, *, error_model: bool = False, mode: str = 'cls', name='deeptune-1') -> Path:
+def video_run(tmp_path: Path, *, error_model: bool = False, mode: str = 'cls', name='deeptune-1',
+              model_version: str = 'r3d_18') -> Path:
     run = tmp_path / 'out' / name
     train = run / 'train_output'
     train.mkdir(parents=True)
     (train / 'model_weights.pth').write_bytes(b'not read by these tests')
     (train / 'cli_arguments.json').write_text(json.dumps(
-        {'modality': 'video', 'model_version': 'r3d_18', 'mode': mode, 'num_classes': 2, 'pooling': 'mean'}),
+        {'modality': 'video', 'model_version': model_version, 'mode': mode, 'num_classes': 2, 'pooling': 'mean',
+         'num_frames': 8}),
         encoding='utf-8')
     splits = run / 'data_splits_1'
     splits.mkdir()
@@ -254,7 +256,7 @@ def test_classifier_prediction_with_error_model(tmp_path):
     assert not view.error
     assert view.answer == 'Predicted class: run'
     assert view.confidence == 'Confidence: 87.3%'
-    assert '12.0% chance' in view.expected_error
+    assert 'about 12.0% were wrong' in view.expected_error and 'chance' not in view.expected_error
     assert 'deeptune-1' in view.model and 'r3d_18' in view.model and view.video == 'a.mp4'
 
 
@@ -495,6 +497,8 @@ def test_start_track_run_refuses_a_bad_config_before_launching(tmp_path, monkeyp
 
 
 def test_start_track_run_streams_the_log_and_writes_results(tmp_path, monkeypatch, clip):
+    monkeypatch.delenv('HF_HOME', raising=False)
+    monkeypatch.setenv('HF_HUB_CACHE', str(tmp_path / 'empty-cache'))
     fake_track(monkeypatch, tmp_path)
     out = tmp_path / 'o'
     done, log = drain(runner.start_track_run(analyse.TrackConfig(video=clip, prompts=['car'], out=out, detector='owlv2')))
@@ -859,7 +863,7 @@ def test_matching_recorded_settings_raise_nothing(tmp_path):
 
 
 def test_model_settings_that_disagree_stop_predict(tmp_path):
-    run_dir = video_run(tmp_path)
+    run_dir = video_run(tmp_path, model_version='resnet18')
     add_eval_args(run_dir, pooling='attention')
     problems = analyse.run_problems(gc.read_run_results(run_dir))
     assert len(problems) == 1 and "pooling: 'mean' in training, 'attention' in evaluation" in problems[0]
@@ -905,10 +909,9 @@ def test_class_names_that_do_not_fit_the_class_count_are_flagged(tmp_path):
 
 
 def test_native_model_is_not_described_with_a_pooling_it_ignores(tmp_path):
-    run = gc.read_run_results(video_run(tmp_path))
-    assert 'pooling' not in analyse.describe_run(run)
-    run.cli_arguments['model_version'] = 'resnet18'
-    assert 'mean pooling' in analyse.describe_run(run)
+    assert 'pooling' not in analyse.describe_run(gc.read_run_results(video_run(tmp_path)))
+    frames = video_run(tmp_path, name='deeptune-2', model_version='resnet18')
+    assert 'mean pooling' in analyse.describe_run(gc.read_run_results(frames))
 
 
 def test_infer_warnings_are_read_from_what_the_real_code_prints(tmp_path):
@@ -1081,7 +1084,9 @@ def test_real_run_layout_and_real_infer_reach_the_page_logic(tmp_path, monkeypat
     assert not view.error
     assert view.answer in ('Predicted class: left', 'Predicted class: right')
     assert view.confidence.startswith('Confidence: ')
-    assert 'chance that this prediction is wrong' in view.expected_error
+    # 12 clips are too few to fit on, so the real file says constant, and the page must say what that means.
+    assert 'run-wide validation rate, the same for every video' in view.expected_error
+    assert 'chance' not in view.expected_error
     assert analyse.prediction_log_warnings(log) == []
 
     # An error model fitted on other weights: refused, said on the page, and no number.
@@ -1098,3 +1103,278 @@ def test_real_run_layout_and_real_infer_reach_the_page_logic(tmp_path, monkeypat
     view, _ = predict('none')
     assert not view.error and 'This run has no error model' in view.expected_error
     assert view.answer.startswith('Predicted class: ')
+
+
+# ---------------------------------------------------------------------------
+# Review V-041
+# ---------------------------------------------------------------------------
+
+def moving_box(frame: int, speed: float = 12.0, score: float = 0.8):
+    from spatial.detect import Detection
+    return [Detection((5.0 + speed * frame, 5.0, 45.0 + speed * frame, 45.0), score, 'x')] if frame >= 1 else []
+
+
+def count_through_real_cli(tmp_path, clip, source, name, track_score=None, every_n=1):
+    """The real pipeline and tracker with the page's own flags. Only the detector is scripted."""
+    import track
+    from spatial.detect import FakeDetector
+    out = tmp_path / name
+    cfg = analyse.TrackConfig(video=clip, prompts=['x'], out=out, every_n_frames=every_n, track_score=track_score)
+    assert track.cli(analyse.build_track_argv(cfg), detector=FakeDetector(source)) == 0
+    return analyse.read_track_results(out, clip, 'grounding_dino')
+
+
+def test_page_default_frames_step_counts_a_moving_object_that_enters_late(ui, tmp_path):
+    clip = write_clip(tmp_path / 'long.mp4', frames=40, size=(640, 48))
+    source = {i: moving_box(i) for i in range(40)}
+    step = ui.dpg.get_value('analyse_every_n_input')
+    assert step == 1
+    assert count_through_real_cli(tmp_path, clip, source, 'page', every_n=step).labels[0].count == 1
+    # What the old default did to the same video.
+    assert count_through_real_cli(tmp_path, clip, source, 'five', every_n=5).labels[0].count == 0
+
+
+def test_a_step_above_one_is_disclosed_before_and_after_the_run(ui, tmp_path, clip, monkeypatch):
+    fake_track(monkeypatch, tmp_path)
+    open_page(ui, tmp_path, video=clip)
+    assert analyse.FRAMES_STEP_NOTE in text_under(ui, 'page_analyse')
+    assert 'missed' in analyse.FRAMES_STEP_NOTE and 'split' in analyse.FRAMES_STEP_NOTE
+    results = analyse.TrackResults(video_dir=tmp_path, video='a.mp4', labels=[], every_n_frames=5, num_frames=10)
+    analyse_page._render_tracking(results)
+    assert analyse.FRAMES_STEP_NOTE in text_under(ui, 'analyse_track_results')
+    analyse_page._render_tracking(analyse.TrackResults(video_dir=tmp_path, video='a.mp4', every_n_frames=1, num_frames=10))
+    assert analyse.FRAMES_STEP_NOTE not in text_under(ui, 'analyse_track_results')
+
+
+@pytest.mark.parametrize('detector', ['grounding_dino', 'owlv2'])
+@pytest.mark.parametrize('score', [0.05, 0.1, 0.15, 0.25, 0.3, 0.45, 0.6, 0.9])
+def test_box_from_frame_2_is_tracked_at_a_threshold_equal_to_its_score(tmp_path, detector, score):
+    import track
+    from spatial.detect import Detection
+    from spatial.track import ByteTracker
+    cfg = analyse.TrackConfig(video=Path('a.mp4'), prompts=['x'], out=tmp_path, detector=detector, track_score=score)
+    tracker = ByteTracker(frame_rate=30, **track.tracker_kwargs(parse_with_real_track_cli(analyse.build_track_argv(cfg))))
+    box = Detection((10.0, 10.0, 50.0, 50.0), score, 'x')
+    seen = set()
+    for frame in range(50):
+        seen |= {o.track_id for o in tracker.update([box] if frame >= 1 else [])}
+    assert len(seen) == 1
+
+
+def test_fusing_stays_the_default_for_other_callers_and_is_recorded(tmp_path, clip):
+    import track
+    from spatial.detect import FakeDetector
+    from spatial.track import ByteTracker
+    assert ByteTracker().fuse_score is True
+    assert track.cli(['--video', str(clip), '--prompt', 'x', '--out', str(tmp_path / 'o')], detector=FakeDetector({})) == 0
+    record = json.loads((tmp_path / 'o' / 'track_arguments.json').read_text(encoding='utf-8'))
+    assert record['tracker_settings']['fuse_score'] is False
+
+
+def test_advice_for_a_weak_box_is_true_when_followed(tmp_path):
+    clip = write_clip(tmp_path / 'still.mp4', frames=30)
+    source = {i: moving_box(i, speed=0.0, score=0.306) for i in range(30)}
+    first = count_through_real_cli(tmp_path, clip, source, 'default')
+    assert first.total_tracks == 0
+    assert 'best score 0.31' in first.no_tracks_message and 'at least 0.45' in first.no_tracks_message
+    assert 'Set the score threshold to 0.30 or lower' in first.no_tracks_message
+    assert count_through_real_cli(tmp_path, clip, source, 'followed', track_score=0.30).total_tracks == 1
+
+
+def test_message_does_not_advise_a_lower_threshold_that_cannot_help(tmp_path):
+    """A strong box seen once, and a box too fast to match: the threshold is not the problem."""
+    clip = write_clip(tmp_path / 'once.mp4', frames=30)
+    for name, source in (('once', {3: moving_box(3, speed=0.0)}), ('fast', {i: moving_box(i, speed=40.0) for i in range(30)})):
+        results = count_through_real_cli(tmp_path, clip, source, name)
+        assert results.total_tracks == 0
+        assert 'A lower threshold will not help' in results.no_tracks_message
+        assert 'needs a score of at least' not in results.no_tracks_message
+        assert 'at 0.45' in results.no_tracks_message
+        assert count_through_real_cli(tmp_path, clip, source, f'{name}-low', track_score=0.1).total_tracks == 0
+
+
+def test_message_for_no_boxes_names_the_lowest_score_kept(tmp_path):
+    clip = write_clip(tmp_path / 'empty.mp4', frames=6)
+    assert 'below 0.20' in count_through_real_cli(tmp_path, clip, {}, 'none').no_tracks_message
+
+
+def fitted_error_model(run_dir: Path, **fit) -> None:
+    (run_dir / 'train_output' / 'error_model.json').write_text(json.dumps({'method': fit.pop('method'), 'fit_info': fit}),
+                                                               encoding='utf-8')
+
+
+def stated(run_dir: Path, **columns):
+    frame = {'predicted_label': ['run'], 'confidence': [0.9], 'expected_error': [0.12], **columns}
+    return analyse.summarise_prediction(prediction(frame), gc.read_run_results(run_dir), Path('a.mp4'))
+
+
+def test_isotonic_estimate_is_worded_as_what_validation_showed(tmp_path):
+    run_dir = video_run(tmp_path)
+    fitted_error_model(run_dir, method='isotonic', n_samples=240, fallback_reason=None)
+    view = stated(run_dir)
+    assert view.expected_error == 'Expected error: on validation clips with similar confidence, about 12.0% were wrong (240 clips).'
+    assert any('never trained on' in note for note in view.notes)
+
+
+def test_constant_estimate_says_it_is_the_same_for_every_video(tmp_path):
+    run_dir = video_run(tmp_path)
+    fitted_error_model(run_dir, method='constant', n_samples=12, fallback_reason='only 12 fit samples (< 30)')
+    view = stated(run_dir)
+    assert 'run-wide validation rate, the same for every video' in view.expected_error
+    assert '12 clips' in view.expected_error and 'only 12 fit samples' in view.expected_error
+    assert 'similar confidence' not in view.expected_error
+
+
+def test_estimate_is_withheld_when_clip_settings_do_not_match(tmp_path):
+    run_dir = video_run(tmp_path)
+    fitted_error_model(run_dir, method='isotonic', n_samples=240, test_clips=1)
+    args = run_dir / 'train_output' / 'cli_arguments.json'
+    args.write_text(json.dumps({**json.loads(args.read_text(encoding='utf-8')), 'test_clips': 3}), encoding='utf-8')
+    text = stated(run_dir).expected_error
+    assert 'withheld' in text and 'fitted on 1 clip(s)' in text and 'averages 3' in text
+    assert '12' not in text
+
+
+def test_estimate_is_shown_when_clip_counts_match(tmp_path):
+    run_dir = video_run(tmp_path)
+    fitted_error_model(run_dir, method='isotonic', n_samples=240, test_clips=3)
+    args = run_dir / 'train_output' / 'cli_arguments.json'
+    args.write_text(json.dumps({**json.loads(args.read_text(encoding='utf-8')), 'test_clips': 3}), encoding='utf-8')
+    assert 'about 12.0%' in stated(run_dir).expected_error
+
+
+def test_changing_the_video_during_a_run_cannot_mislabel_its_result(ui, tmp_path, clip, monkeypatch):
+    fake_track(monkeypatch, tmp_path)
+    other = write_clip(tmp_path / 'video_B.mp4')
+    open_page(ui, tmp_path, video=clip, run=True)
+    ui.dpg.set_value('analyse_prompt_input', 'car')
+    dispatch(ui, 'analyse_track_button')
+    for item in (analyse_page.VIDEO_INPUT, 'analyse_browse_button', 'analyse_load_button', 'analyse_run_combo',
+                 'analyse_refresh_button'):
+        assert ui.dpg.get_item_configuration(item)['enabled'] is False, item
+    # The callbacks refuse too: a click can be queued, and a file dialog can already be open.
+    ui.dpg.set_value(analyse_page.VIDEO_INPUT, str(other))
+    dispatch(ui, 'analyse_load_button')
+    analyse_page.on_video_file_selected(0, {'file_path_name': str(other), 'selections': {other.name: str(other)}})
+    run_before = analyse_page._selected_run
+    dispatch(ui, 'analyse_run_combo')
+    analyse_page.on_refresh_runs()
+    assert analyse_page._selected_run is run_before
+    assert analyse_page._original == clip
+    wait_for_action(ui)
+    assert f'Video: {clip.name}' in text_under(ui, 'analyse_track_results')
+    assert analyse_page._player.path.parent.name == clip.stem
+    for item in (analyse_page.VIDEO_INPUT, 'analyse_load_button', 'analyse_run_combo', 'analyse_refresh_button'):
+        assert ui.dpg.get_item_configuration(item)['enabled'] is True, item
+
+
+def test_train_settings_rebuild_the_model_when_the_eval_record_lacks_them(tmp_path):
+    run_dir = video_run(tmp_path, model_version='resnet18')
+    args = run_dir / 'train_output' / 'cli_arguments.json'
+    saved = {**json.loads(args.read_text(encoding='utf-8')), 'pooling': 'single_frame', 'num_frames': 16}
+    args.write_text(json.dumps(saved), encoding='utf-8')
+    evaluated = {k: v for k, v in saved.items() if k not in ('pooling', 'num_frames')}
+    (run_dir / 'eval_output').mkdir()
+    (run_dir / 'eval_output' / 'cli_arguments.json').write_text(json.dumps(evaluated), encoding='utf-8')
+    run = gc.read_run_results(run_dir)
+    assert 'pooling' not in run.cli_arguments  # the eval record, which is the bug's source
+    assert analyse.run_problems(run) == []
+    argv = gc.build_infer_argv(gc.infer_config_from_run(run, Path('a.mp4'), tmp_path / 'o'))
+    assert argv[argv.index('--num_frames') + 1] == '16' and argv[argv.index('--pooling') + 1] == 'single_frame'
+    assert 'single_frame pooling' in analyse.describe_run(run)
+
+
+def test_settings_that_do_not_change_the_weights_are_not_refused(tmp_path):
+    native = video_run(tmp_path, name='deeptune-native')
+    add_eval_args(native, pooling='attention')
+    assert analyse.run_problems(gc.read_run_results(native)) == []
+    plain = video_run(tmp_path, name='deeptune-plain')
+    add_eval_args(plain, freeze_backbone=True)
+    assert analyse.run_problems(gc.read_run_results(plain)) == []
+
+
+def test_freeze_backbone_is_still_refused_for_a_peft_run(tmp_path):
+    run_dir = video_run(tmp_path)
+    args = run_dir / 'train_output' / 'cli_arguments.json'
+    args.write_text(json.dumps({**json.loads(args.read_text(encoding='utf-8')), 'use_peft': True, 'freeze_backbone': False}),
+                    encoding='utf-8')
+    add_eval_args(run_dir, freeze_backbone=True)
+    assert any('freeze_backbone' in p for p in analyse.run_problems(gc.read_run_results(run_dir)))
+
+
+def test_frame_model_with_no_recorded_pooling_is_refused(tmp_path):
+    run_dir = video_run(tmp_path, model_version='resnet18')
+    args = run_dir / 'train_output' / 'cli_arguments.json'
+    saved = json.loads(args.read_text(encoding='utf-8'))
+    del saved['pooling']
+    args.write_text(json.dumps(saved), encoding='utf-8')
+    assert any('pooling' in p for p in analyse.run_problems(gc.read_run_results(run_dir)))
+
+
+def test_run_that_records_no_frame_count_says_what_is_used(tmp_path):
+    run_dir = video_run(tmp_path)
+    args = run_dir / 'train_output' / 'cli_arguments.json'
+    saved = json.loads(args.read_text(encoding='utf-8'))
+    del saved['num_frames']
+    args.write_text(json.dumps(saved), encoding='utf-8')
+    assert any('so 8 are used' in w for w in analyse.run_warnings(gc.read_run_results(run_dir)))
+
+
+def test_argv_of_a_run_whose_records_agree_is_unchanged(tmp_path):
+    run_dir = video_run(tmp_path, model_version='resnet18')
+    add_eval_args(run_dir)
+    run = gc.read_run_results(run_dir)
+    assert gc.checkpoint_arguments(run) == run.cli_arguments
+
+
+def test_other_modalities_keep_their_eval_record(tmp_path):
+    checkpoint = tmp_path / 'train_output' / 'weights.pth'
+    checkpoint.parent.mkdir()
+    (checkpoint.parent / 'cli_arguments.json').write_text('{"modality": "images", "model_version": "a"}', encoding='utf-8')
+    run = gc.RunResults(run_dir=tmp_path, checkpoint_path=checkpoint, cli_arguments={'modality': 'images', 'model_version': 'b'})
+    assert gc.checkpoint_arguments(run)['model_version'] == 'b'
+
+
+@pytest.mark.parametrize('label', ['007', '1', 'NA', 'walk'])
+def test_class_name_is_shown_exactly_as_written(tmp_path, label):
+    out = tmp_path / 'infer'
+    out.mkdir()
+    pd.DataFrame({'sample_id': [0], 'predicted_class': [0], 'predicted_label': [label], 'confidence': [0.5]}).to_csv(
+        out / 'predictions.csv', index=False)
+    run = gc.read_run_results(video_run(tmp_path))
+    view = analyse.summarise_prediction(gc.read_inference_results(out), run, Path('a.mp4'))
+    assert view.answer == f'Predicted class: {label}'
+    assert view.confidence == 'Confidence: 50.0%'
+
+
+def test_empty_cells_stay_missing_in_numeric_columns(tmp_path):
+    (tmp_path / 'predictions.csv').write_text('sample_id,predicted_value,confidence\n0,2.5,\n', encoding='utf-8')
+    frame = gc.read_inference_results(tmp_path).predictions
+    assert frame['predicted_value'].iloc[0] == 2.5 and pd.isna(frame['confidence'].iloc[0])
+
+
+def test_empty_label_falls_back_to_the_class_number(tmp_path):
+    (tmp_path / 'predictions.csv').write_text('sample_id,predicted_class,predicted_label,confidence\n0,1,,0.5\n', encoding='utf-8')
+    run = gc.read_run_results(video_run(tmp_path))
+    assert analyse.summarise_prediction(gc.read_inference_results(tmp_path), run, Path('a.mp4')).answer == 'Predicted class: 1'
+
+
+def test_loading_message_mentions_a_download_only_when_one_will_happen(tmp_path, monkeypatch):
+    monkeypatch.delenv('HF_HOME', raising=False)
+    monkeypatch.setenv('HF_HUB_CACHE', str(tmp_path))
+    assert '0.6 GB' in analyse.loading_message('owlv2')
+    weights = tmp_path / 'models--google--owlv2-base-patch16-ensemble' / 'snapshots' / 'abc'
+    weights.mkdir(parents=True)
+    (weights / 'model.safetensors').write_bytes(b'x')
+    message = analyse.loading_message('owlv2')
+    assert 'GB' not in message and 'Loading OWLv2' in message
+
+
+def test_refresh_reads_the_run_record_again(ui, tmp_path, clip):
+    open_page(ui, tmp_path, video=clip, run=True)
+    assert 'r3d_18' in ui.dpg.get_value('analyse_run_info')
+    args = tmp_path / 'out' / 'deeptune-1' / 'train_output' / 'cli_arguments.json'
+    args.write_text(json.dumps({**json.loads(args.read_text(encoding='utf-8')), 'model_version': 'mc3_18'}), encoding='utf-8')
+    dispatch(ui, 'analyse_refresh_button')
+    assert 'mc3_18' in ui.dpg.get_value('analyse_run_info')
+    assert analyse_page._selected_run.cli_arguments['model_version'] == 'mc3_18'

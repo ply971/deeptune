@@ -113,7 +113,7 @@ def _problem(kind: str, text: str) -> None:
 
 def on_video_file_selected(sender: Any, app_data: Any) -> None:
     path = _shell.dialog_path(app_data)
-    if path:
+    if path and _active is None:
         dpg.set_value(VIDEO_INPUT, path)
         on_load_video()
 
@@ -121,6 +121,8 @@ def on_video_file_selected(sender: Any, app_data: Any) -> None:
 def on_load_video(sender: Any = 0, app_data: Any = None) -> None:
     """Check the typed path and preview it. Old results belong to the old video, so they go."""
     global _original
+    if _active is not None:  # the running action's results belong to the current video
+        return
     check = analyse.check_video(dpg.get_value(VIDEO_INPUT))
     _clear_prediction()
     _clear_tracking()
@@ -268,6 +270,8 @@ def _poll_player() -> None:
 def on_refresh_runs(sender: Any = 0, app_data: Any = None) -> None:
     """List the video runs, keeping the current choice when it is still there."""
     global _choices
+    if _active is not None:  # the running action's results belong to the current run
+        return
     out_text = (_shell.output_folder() or '').strip()
     if not out_text:
         _choices = analyse.RunChoices()
@@ -298,17 +302,22 @@ def _show_run_list(labels: list[str], note: str) -> None:
     kept = next((label for label, run_dir in _choices.runs.items() if run_dir == selected_dir), None)
     if kept is not None:
         dpg.set_value('analyse_run_combo', kept)
+        _load_run(selected_dir)  # the record may have changed since it was read
         return
     dpg.set_value('analyse_run_combo', labels[0])
     on_run_selected()
 
 
 def on_run_selected(sender: Any = 0, app_data: Any = None, user_data: Any = None) -> None:
-    global _selected_run
     run_dir = _choices.runs.get(dpg.get_value('analyse_run_combo'))
-    if run_dir is None:
+    if run_dir is None or _active is not None:
         return
     _clear_prediction()
+    _load_run(run_dir)
+
+
+def _load_run(run_dir: Path) -> None:
+    global _selected_run
     dpg.set_value('analyse_run_warning', '')
     try:
         _selected_run = gc.read_run_results(run_dir)
@@ -335,7 +344,7 @@ def _begin(kind: str, handle: RunHandle, out_dir: Path, video: Path, detector: s
     global _active, _last_out_dir
     _active = _Running(kind, handle, out_dir, video, time.monotonic(), detector, run)
     _last_out_dir = out_dir
-    _message(kind, 'Starting...', _colors().analysis)
+    _message(kind, f'Starting on {video.name}...', _colors().analysis)
     _shell.set_status('Analysing video', _colors().analysis)
     _set_running(True)
 
@@ -345,6 +354,10 @@ def _set_running(running: bool) -> None:
     for name in (PREDICT, TRACK):
         dpg.configure_item(f'analyse_{name}_button', enabled=not running)
         dpg.configure_item(f'analyse_{name}_stop_button', enabled=running and name == kind)
+    # A result belongs to the video and run it started with, so neither can change under it.
+    for item in (VIDEO_INPUT, 'analyse_browse_button', 'analyse_load_button', 'analyse_run_combo',
+                 'analyse_refresh_button'):
+        dpg.configure_item(item, enabled=not running)
     dpg.configure_item('analyse_active_indicator', show=running)
 
 
@@ -621,9 +634,12 @@ def _render_tracking(results: analyse.TrackResults) -> None:
                 with ui.table_row():
                     for cell in label.row:
                         dpg.add_text(cell)
+    dpg.add_text(f'Video: {results.video}', parent=parent, color=_colors().muted, wrap=0)
     frames = analyse.frames_note(results)
     if frames:
         dpg.add_text(frames, parent=parent, color=_colors().muted, wrap=0)
+    if (results.every_n_frames or 1) > 1:
+        dpg.add_text(analyse.FRAMES_STEP_NOTE, parent=parent, color=_colors().warning, wrap=0)
     if results.overlay is None:
         dpg.add_text('No overlay video was written for this run.', parent=parent, color=_colors().warning, wrap=0)
     dpg.add_text(f'Produced by the detector, not your trained model: {results.model}', parent=parent,
@@ -672,7 +688,8 @@ def _build_video_card(shell: Shell) -> None:
         with ui.group(horizontal=True):
             dpg.add_input_text(tag=VIDEO_INPUT, hint='Paste a video path or browse...', width=-280, on_enter=True,
                                callback=on_load_video)
-            dpg.add_button(label='Browse file', callback=shell.show_dialog, user_data=VIDEO_DIALOG)
+            dpg.add_button(label='Browse file', tag='analyse_browse_button', callback=shell.show_dialog,
+                           user_data=VIDEO_DIALOG)
             dpg.add_button(label='Load / preview', tag='analyse_load_button', callback=on_load_video)
         dpg.add_text('Choose a video to begin.', tag='analyse_video_status', color=colors.muted, wrap=850)
         with ui.group(tag='analyse_player_controls', show=False):
@@ -694,7 +711,7 @@ def _build_model_card(shell: Shell) -> None:
     colors = shell.palette
     with shell.card('USE MY TRAINED MODEL'):
         with ui.group(horizontal=True):
-            dpg.add_button(label='Refresh', callback=on_refresh_runs)
+            dpg.add_button(label='Refresh', tag='analyse_refresh_button', callback=on_refresh_runs)
             dpg.add_text('Video runs from the Run page\'s output folder.', color=colors.muted)
         dpg.add_combo(tag='analyse_run_combo', items=[], width=-1, callback=on_run_selected)
         dpg.add_text('No run chosen.', tag='analyse_run_info', color=colors.analysis, wrap=850)
@@ -720,16 +737,18 @@ def _build_track_card(shell: Shell) -> None:
         with ui.group(horizontal=True):
             dpg.add_combo(tag='analyse_detector_combo', items=[d.label for d in analyse.DETECTORS],
                           default_value=first.label, width=200, label='Detector', callback=on_detector_changed)
-            dpg.add_input_int(tag='analyse_every_n_input', label='Frames step', default_value=5, width=130,
+            dpg.add_input_int(tag='analyse_every_n_input', label='Frames step', default_value=1, width=130,
                               min_value=1, min_clamped=True)
             with ui.tooltip(dpg.last_item()):
-                dpg.add_text('Detect on every n-th frame. 1 looks at every frame and is the slowest.', wrap=380)
+                dpg.add_text(f'Detect on every n-th frame. 1 looks at every frame and is the slowest. '
+                             f'{analyse.FRAMES_STEP_NOTE}', wrap=380)
             dpg.add_input_double(tag='analyse_score_input', label='Score threshold', width=150, step=0.05,
                                  format='%.2f', min_value=0.01, max_value=1.0, min_clamped=True, max_clamped=True,
                                  default_value=analyse.default_track_score(first.key))
             with ui.tooltip(dpg.last_item()):
                 dpg.add_text('The score a box needs to start a track. Lower finds more, and finds more wrong things.',
                              wrap=380)
+        dpg.add_text(analyse.FRAMES_STEP_NOTE, color=colors.muted, wrap=850)
         dpg.add_text(analyse.detector_note(first.key), tag='analyse_detector_note', color=colors.muted, wrap=850)
         with ui.group(horizontal=True):
             button = dpg.add_button(tag='analyse_track_button', label=analyse.track_button_label(first.key), height=44,
