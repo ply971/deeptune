@@ -15,9 +15,10 @@ Streams:
 * ``motion``: dx, dy and magnitude per frame through the unchanged RGB filters
   of ``--motion_backbone`` (not trained on motion). The field comes from
   ``VideoReader.get_motion_vectors`` (codec vectors, Farneback flow as the
-  fallback), is rotated to the display orientation, resized to the input size,
-  rescaled to input pixels per frame, clipped to +-20 and divided by 20, as is
-  usual for flow inputs. Frames added by padding have zero motion.
+  fallback), is rotated to the display orientation, cut to the part of the frame
+  the rgb stream keeps (native presets centre-crop), resized to the input size,
+  rescaled to input pixels per frame, clipped to +-20 and multiplied by
+  ``--motion_gain``. Frames added by padding have zero motion.
 """
 from __future__ import annotations
 
@@ -32,14 +33,16 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from datasets.snippet_features import (FAILED_FILE, FORMAT_VERSION, STREAMS, FeatureStore, config_hash, parse_token_grid,
-                                       snippet_count, snippet_starts, to_float16, write_json_atomic)
+from datasets.snippet_features import (FAILED_FILE, FORMAT_VERSION, PREPROCESSING_VERSION, STREAMS, FeatureConfigError,
+                                       FeatureStore, config_hash, parse_token_grid, snippet_count, snippet_starts, to_float16,
+                                       write_json_atomic)
 from handlers.video_args import SNIPPET_FEATURE_ARG_NAMES, add_snippet_feature_arguments
 
 LOGGER = logging.getLogger('deeptune.video')
 
 MOTION_CLIP_PIXELS = 20.0
-MOTION_NORMALISATION = f'input pixels per frame, clipped to +-{MOTION_CLIP_PIXELS:g}, divided by {MOTION_CLIP_PIXELS:g}'
+MOTION_GAIN = 1.0 / MOTION_CLIP_PIXELS
+FULL_FRAME = (0.0, 1.0, 0.0, 1.0)
 BLOCK_SIZE = 8
 IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 
@@ -129,14 +132,53 @@ class _RgbPreprocess:
         return (clip - self.mean) / self.std
 
 
-def _motion_to_tensor(motion: np.ndarray, display_size: tuple[int, int], input_size: int):
-    """``[S, 2, h, w]`` pixels/frame at the display size -> float ``[S, 2, input, input]`` in [-1, 1]."""
+def crop_window(version: Optional[str], input_size: Optional[int], width: int, height: int) -> tuple[float, float, float, float]:
+    """(x0, x1, y0, y1), as fractions of the display frame: the part `_RgbPreprocess` keeps for this backbone.
+    A size override and frame backbones squash the whole frame; native presets resize, then centre-crop."""
+    from src.video.video3d import _KINETICS400_WEIGHTS, VIDEO3D_ARCHITECTURES
+    if input_size is not None or version not in VIDEO3D_ARCHITECTURES:
+        return FULL_FRAME
+    preset = _KINETICS400_WEIGHTS[version].transforms()
+    crop_h, crop_w = preset.crop_size
+    if len(preset.resize_size) == 2:
+        resized_h, resized_w = preset.resize_size
+    elif width <= height:  # one number is the short side, with torchvision's rounding
+        resized_w, resized_h = preset.resize_size[0], int(preset.resize_size[0] * height / width)
+    else:
+        resized_h, resized_w = preset.resize_size[0], int(preset.resize_size[0] * width / height)
+    top, left = int(round((resized_h - crop_h) / 2.0)), int(round((resized_w - crop_w) / 2.0))
+    return left / resized_w, (left + crop_w) / resized_w, top / resized_h, (top + crop_h) / resized_h
+
+
+def _motion_to_tensor(motion: np.ndarray, display_size: tuple[int, int], input_size: int, window=FULL_FRAME, gain: float = MOTION_GAIN):
+    """``[S, 2, h, w]`` pixels/frame at the display size -> float ``[S, 2, input, input]``: `window` of the frame
+    (see `crop_window`) at the input size, in input pixels per frame, clipped, times `gain`."""
     import torch
     width, height = display_size
+    x0, x1, y0, y1 = window
     tensor = torch.from_numpy(np.ascontiguousarray(motion))
-    tensor = torch.nn.functional.interpolate(tensor, size=(input_size, input_size), mode='bilinear', align_corners=False)
-    scale = torch.tensor([input_size / width, input_size / height], dtype=tensor.dtype).view(1, 2, 1, 1)
-    return (tensor * scale).clamp(-MOTION_CLIP_PIXELS, MOTION_CLIP_PIXELS) / MOTION_CLIP_PIXELS
+    centres = (torch.arange(input_size, dtype=tensor.dtype) + 0.5) / input_size
+    grid_y, grid_x = torch.meshgrid(2 * (y0 + (y1 - y0) * centres) - 1, 2 * (x0 + (x1 - x0) * centres) - 1, indexing='ij')
+    grid = torch.stack((grid_x, grid_y), dim=-1).expand(len(tensor), -1, -1, -1)
+    tensor = torch.nn.functional.grid_sample(tensor, grid, mode='bilinear', padding_mode='border', align_corners=False)
+    scale = torch.tensor([input_size / (width * (x1 - x0)), input_size / (height * (y1 - y0))], dtype=tensor.dtype).view(1, 2, 1, 1)
+    return (tensor * scale).clamp(-MOTION_CLIP_PIXELS, MOTION_CLIP_PIXELS) * gain
+
+
+def check_feature_input(stream: str, version: str, pretrained: bool, input_size: Optional[int], snippet_frames: int) -> None:
+    """Fail before decoding when a model with a fixed input could never run: inside the model this is an
+    AssertionError or a shape RuntimeError that ends the run and says nothing about the flags."""
+    from src.video.feature_backbones import fixed_input, frame_family
+    size, frames = fixed_input(version, pretrained)
+    # Without an override rgb frame backbones get the shared 224 transform; native presets and motion get the model's own size.
+    fed = input_size or (224 if stream == 'rgb' and frame_family(version) else None)
+    weights = 'its pretrained weights' if pretrained else 'no weights'
+    if size is not None and fed is not None and fed != size:
+        raise FeatureConfigError(f'{version} with {weights} only accepts {size}x{size} input, but the {stream} stream would '
+                                 f'feed {fed}x{fed}. Use --feature_input_size {size}.')
+    if frames is not None and snippet_frames != frames:
+        raise FeatureConfigError(f'{version} only accepts snippets of exactly {frames} frames, not {snippet_frames}. '
+                                 f'Use --snippet_frames {frames}.')
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +265,9 @@ class _StreamExtractor:
         meta = reader.metadata()
         starts = snippet_starts(frame_count, snippet_frames, stride)
         end = min(lo + frame_count, meta.frame_count)
-        info = {'frame_count': frame_count, 'motion_normalisation': MOTION_NORMALISATION, 'motion_source': None,
+        gain = self.config.get('motion_gain', MOTION_GAIN)
+        info = {'frame_count': frame_count, 'motion_source': None,
+                'motion_normalisation': f'input pixels per frame, clipped to +-{MOTION_CLIP_PIXELS:g}, times {gain:g}',
                 'last_snippet_valid_frames': int(min(snippet_frames, frame_count - starts[-1]))}
         intra = [0, 0]
         codec_meta = None
@@ -251,7 +295,9 @@ class _StreamExtractor:
                 filled = np.zeros((len(wanted), *field_.shape[1:]), dtype=np.float32)  # padded frames: no motion
                 filled[inside] = field_
                 for snippet in filled.reshape(len(chosen), snippet_frames, *field_.shape[1:]):
-                    yield _motion_to_tensor(snippet, (motion_meta.width, motion_meta.height), self.input_size)
+                    window = crop_window(self.config.get('geometry_backbone'), self.config.get('input_size'),
+                                         motion_meta.width, motion_meta.height)
+                    yield _motion_to_tensor(snippet, (motion_meta.width, motion_meta.height), self.input_size, window, gain)
 
         features = self._run_batches(tensors())
         info['intra_fraction'] = intra[0] / max(1, intra[1])
@@ -297,7 +343,7 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
                      motion_backbone: str = 'r3d_18', feature_weights: str = 'pretrained', snippet_frames: int = 16,
                      snippet_stride: Optional[int] = None, cache_tokens: str = 'none', batch_size: int = 8,
                      motion_method: str = 'auto', feature_input_size: Optional[int] = None, video_backend: str = 'auto',
-                     device=None, record_arguments: Optional[dict] = None) -> ExtractionReport:
+                     device=None, record_arguments: Optional[dict] = None, motion_gain: float = MOTION_GAIN) -> ExtractionReport:
     """Extract every requested stream of every video in `data` (manifest, parquet or DataFrame) into `out`.
 
     `record_arguments` is written to ``cli_arguments.json`` once the settings and rows have been accepted, so a
@@ -314,11 +360,15 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
     store = FeatureStore(out)
     extractors = {}
     for stream in streams:
+        backbone = model_version if stream == 'rgb' else motion_backbone
+        check_feature_input(stream, backbone, feature_weights == 'pretrained', feature_input_size, snippet_frames)
         config = {'format': FORMAT_VERSION, 'stream': stream, 'snippet_frames': snippet_frames, 'stride': stride,
-                  'backbone': model_version if stream == 'rgb' else motion_backbone, 'weights': feature_weights,
+                  'backbone': backbone, 'weights': feature_weights,
                   'input_size': feature_input_size, 'token_grid': list(grid) if grid else None,
                   'video_backend': video_backend, 'motion_method': motion_method if stream == 'motion' else None,
-                  'preprocessing_version': 2}
+                  'preprocessing_version': PREPROCESSING_VERSION[stream]}
+        if stream == 'motion':  # motion cuts the frame as the rgb backbone does, whatever its own backbone
+            config.update(geometry_backbone=model_version, motion_gain=motion_gain, motion_clip_pixels=MOTION_CLIP_PIXELS)
         store.check_config(stream, config)
         extractors[stream] = _StreamExtractor(stream, config, grid, batch_size, device)
     dataset, columns = open_feature_source(data)
@@ -348,12 +398,15 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
             'num_snippets': len(stored), 'last_snippet_valid_frames': info['last_snippet_valid_frames'],
             'backbone': extractor.config['backbone'], 'weights': extractor.backbone.weights_name,
             'weights_licence': extractor.backbone.weights_licence, 'input_size': extractor.input_size,
+            'field_of_view': list(crop_window(extractor.config.get('geometry_backbone', extractor.config['backbone']),
+                                              extractor.config['input_size'], meta.width, meta.height)),
             'dim': int(stored.shape[-1]), 'token_grid': list(extractor.stored_grid) if extractor.stored_grid else None,
             'float16': stats, 'seconds': time.perf_counter() - clock,
         }
         if stream == 'motion':
             sidecar.update(motion_source=info['motion_source'], intra_fraction=info['intra_fraction'],
-                           motion_normalisation=info['motion_normalisation'],
+                           motion_normalisation=info['motion_normalisation'], motion_gain=motion_gain,
+                           motion_clip_pixels=MOTION_CLIP_PIXELS,
                            motion_encoding='dx, dy, magnitude through RGB filters',
                            motion_weights_trained_on_motion=False)
         times = _snippet_times(reader, lo, snippet_starts(count, snippet_frames, stride))
@@ -368,16 +421,25 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
         return count
 
     # Checked before anything is decoded: one id cannot stand for two clips, wherever the clash is in the manifest.
+    # Case folded, because NTFS and APFS would put Clip and clip in one file.
     rows: dict = {}
     for i in range(len(dataset)):
         vid = row_video_id(dataset, columns, i)
         identity = (source_fingerprint(dataset._source(i)), {'start_sec': _value(dataset._starts, i), 'end_sec': _value(dataset._ends, i)})
-        if rows.setdefault(vid, (i, *identity))[1:] != identity:
+        known = rows.setdefault(vid.casefold(), (vid, i, *identity))
+        if known[0] != vid:
+            raise ValueError(f'The ids {known[0]!r} and {vid!r} differ only by case, and would share one feature file on '
+                             'some file systems; video_id values must be unique ignoring case.')
+        if known[2:] != identity:
             raise ValueError(f'Two different videos or trims have the id {vid!r}; video_id values must be unique.')
+        for stream in streams:
+            stored = (store.read_sidecar(stream, vid) or {}).get('video_id', vid)
+            if stored != vid:  # only reachable where the file system ignores case
+                raise ValueError(f'{vid!r} would overwrite the features of {stored!r} in {out}; the ids differ only by case.')
     if record_arguments is not None:
         write_json_atomic(Path(out) / 'cli_arguments.json', record_arguments)
 
-    for vid, (i, fingerprint, source_range) in rows.items():
+    for vid, i, fingerprint, source_range in rows.values():
         source = dataset._source(i)
         todo = [s for s in streams if not store.is_complete(s, vid, fingerprint, extractors[s].digest, source_range)]
         for stream in streams:
@@ -425,7 +487,7 @@ def main(argv=None) -> int:
                               motion_backbone=args.motion_backbone, feature_weights=args.feature_weights,
                               snippet_frames=args.snippet_frames, snippet_stride=args.snippet_stride,
                               cache_tokens=args.cache_tokens, batch_size=args.batch_size, motion_method=args.motion_method,
-                              feature_input_size=args.feature_input_size, video_backend=args.video_backend,
+                              feature_input_size=args.feature_input_size, video_backend=args.video_backend, motion_gain=args.motion_gain,
                               record_arguments={name: getattr(args, name) for name in SNIPPET_FEATURE_ARG_NAMES})
     print(json.dumps({'extracted': report.extracted, 'skipped': report.skipped, 'failed': len(report.failed),
                       'seconds': round(report.seconds, 2), 'megabytes_written': round(report.bytes_written / 1e6, 3)}))

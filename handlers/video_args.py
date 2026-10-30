@@ -99,7 +99,7 @@ left motion into right motion, which corrupts direction-dependent labels.""")
 
 # extract_features.py records these in <out>/cli_arguments.json.
 SNIPPET_FEATURE_ARG_NAMES = ('data', 'out', 'streams', 'model_version', 'motion_backbone', 'feature_weights', 'snippet_frames',
-                             'snippet_stride', 'cache_tokens', 'batch_size', 'motion_method', 'feature_input_size',
+                             'snippet_stride', 'cache_tokens', 'batch_size', 'motion_method', 'motion_gain', 'feature_input_size',
                              'video_backend')
 
 
@@ -125,6 +125,8 @@ token grid [N, T, H, W, D] for the attentive probe. An axis is capped at what th
     parser.add_argument('--batch_size', type=_positive_int, default=8, help='Snippets per forward pass (default 8).')
     parser.add_argument('--motion_method', choices=['auto', 'codec', 'farneback'], default='auto',
                         help='Motion source: codec motion vectors, Farneback flow, or auto = codec, else Farneback (default; recorded per video).')
+    parser.add_argument('--motion_gain', type=_positive_float, default=0.05,
+                        help='Multiplies motion after it is clipped to +-20 input pixels per frame (default 0.05, so the range is +-1). Recorded in the stream config and sidecar.')
     parser.add_argument('--feature_input_size', type=_positive_int, default=None,
                         help="Square input size. Default: the backbone's own preprocessing.")
     parser.add_argument('--video_backend', choices=['auto', 'torchcodec', 'pyav', 'opencv'], default='auto',

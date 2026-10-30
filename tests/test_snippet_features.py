@@ -753,3 +753,166 @@ def test_rotated_motion_is_backend_independent(tmp_path, method):
     flow = np.mean([farneback_flow(a, b)[8:24, 8:24].mean(axis=(0, 1)) for a, b in zip(shown, shown[1:])], axis=0)
     vectors = outputs[0][:, :, :, 8:24, 8:24].mean(axis=(0, 1, 3, 4))
     assert np.dot(flow, vectors) > 0 and np.argmax(np.abs(flow)) == np.argmax(np.abs(vectors))
+
+
+# -- second fix round (V-042) ---------------------------------------------------------
+def test_ids_differing_only_by_case_are_refused(videos, tmp_path):
+    """Clip and clip are one file on NTFS, so two videos would silently share one set of features."""
+    df = pd.DataFrame({'videos': [str(videos[0]), str(videos[1])], 'video_id': ['Clip', 'clip'], 'labels': [0, 1]})
+    with pytest.raises(ValueError, match='differ only by case'):
+        ef.extract_features(df, tmp_path / 'f', **SMALL)
+    assert not (tmp_path / 'f' / 'rgb').exists()
+    with pytest.raises(ValueError, match='differ only by case'):  # the same clip too: on Linux these are two files
+        ef.extract_features(df.assign(videos=str(videos[0])), tmp_path / 'g', **SMALL)
+
+
+def test_a_later_run_cannot_overwrite_an_id_differing_only_by_case(videos, tmp_path):
+    (tmp_path / 'probe').write_text('')
+    if not (tmp_path / 'PROBE').exists():
+        pytest.skip('this file system tells Clip and clip apart, so they are two entries')
+    ef.extract_features(pd.DataFrame({'videos': [str(videos[0])], 'video_id': ['Clip']}), tmp_path / 'f', **SMALL)
+    with pytest.raises(ValueError, match='would overwrite'):
+        ef.extract_features(pd.DataFrame({'videos': [str(videos[1])], 'video_id': ['clip']}), tmp_path / 'f', **SMALL)
+
+
+class _GeometryBackbone(torch.nn.Module):
+    """Passes its input through as a token grid: rgb brightness, or motion magnitude."""
+    native, default_input_size, weights_name, weights_licence = True, 64, None, 'none'
+
+    def __init__(self, version, pretrained=False, in_channels=3):
+        super().__init__()
+
+    def token_grid(self, x):
+        values = torch.linalg.vector_norm(x, dim=2) if x.shape[2] == 2 else x.mean(dim=2)
+        return values.unsqueeze(-1)
+
+
+def _marker_clip(path, width, height, left, top, frames=16):
+    """A textured square jittering on black, so it is the brightest and the only moving thing."""
+    from datasets.video_synth import write_clip
+    texture = np.random.default_rng(0).integers(150, 255, (16, 16, 3), dtype=np.uint8)
+    clip = []
+    for i in range(frames):
+        frame = np.zeros((height, width, 3), np.uint8)
+        x, y = left + (i % 4) * 2, top + (i % 3) * 2
+        frame[y:y + 16, x:x + 16] = texture
+        clip.append(frame)
+    return write_clip(path, clip)
+
+
+@pytest.mark.parametrize('tokens', ['1x4x4', 'none'])
+@pytest.mark.parametrize('model,motion', [('r3d_18', 'r3d_18'), ('mvit_v2_s', 'mvit_v2_s'), ('swin3d_t', 'swin3d_t'), ('mvit_v2_s', 'r3d_18')])
+def test_a_marker_lands_in_the_same_cell_in_both_streams(tmp_path, monkeypatch, model, motion, tokens):
+    """16:9 on native presets, which crop the sides. x = 30% was cell 0 of rgb but cell 1 of a squashed motion field."""
+    monkeypatch.setattr('src.video.feature_backbones.SnippetBackbone', _GeometryBackbone)
+    path = _marker_clip(tmp_path / 'wide.mp4', 256, 144, 70, 60)
+    args = dict(model_version=model, motion_backbone=motion, feature_weights='none', snippet_frames=16, batch_size=1,
+                cache_tokens='1x4x4')
+    manifest = pd.DataFrame({'videos': [str(path)], 'video_id': ['wide']})
+    report = ef.extract_features(manifest, tmp_path / 'f', streams=('rgb', 'motion'), motion_method='codec', **args)
+    assert not report.failed, report.failed
+    loaded = load_snippet_features(tmp_path / 'f', 'wide')
+    rgb, moving = loaded.stream('rgb')[0, 0, :, :, 0], loaded.stream('motion')[0, 0, :, :, 0]
+    assert np.unravel_index(rgb.argmax(), rgb.shape) == np.unravel_index(moving.argmax(), moving.shape)
+    assert loaded.meta['rgb']['field_of_view'] == loaded.meta['motion']['field_of_view']
+    if tokens == 'none':  # a pooled vector sees the same part of the frame, because the cut happens before the backbone
+        pooled = dict(args, cache_tokens='none')
+        ef.extract_features(manifest, tmp_path / 'p', streams=('rgb', 'motion'), motion_method='codec', **pooled)
+        sides = load_snippet_features(tmp_path / 'p', 'wide').meta
+        assert sides['rgb']['field_of_view'] == sides['motion']['field_of_view'] == loaded.meta['rgb']['field_of_view']
+
+
+@pytest.mark.parametrize('version', ['r3d_18', 'mvit_v2_s', 'swin3d_t'])
+@pytest.mark.parametrize('width,height', [(256, 144), (144, 256), (120, 120), (171, 128)])
+def test_crop_window_is_what_the_rgb_preset_really_keeps(version, width, height):
+    """Marks each column and row of a frame, runs the real preset and reads the kept range back."""
+    preprocess = ef._RgbPreprocess(version, True, None)
+    ramp_x = np.tile(np.linspace(0, 255, width)[None, :, None], (height, 1, 3)).astype(np.uint8)
+    ramp_y = np.tile(np.linspace(0, 255, height)[:, None, None], (1, width, 3)).astype(np.uint8)
+    x0, x1, y0, y1 = ef.crop_window(version, None, width, height)
+    mean, std = preprocess.mean[0, 0, 0, 0].item(), preprocess.std[0, 0, 0, 0].item()
+    seen_x = preprocess(np.stack([ramp_x] * 2))[0, 0].numpy() * std + mean
+    seen_y = preprocess(np.stack([ramp_y] * 2))[0, 0].numpy() * std + mean
+    assert seen_x[0].min() == pytest.approx(x0, abs=0.03) and seen_x[0].max() == pytest.approx(x1, abs=0.03)
+    assert seen_y[:, 0].min() == pytest.approx(y0, abs=0.03) and seen_y[:, 0].max() == pytest.approx(y1, abs=0.03)
+
+
+def test_a_size_override_and_frame_backbones_keep_the_whole_frame():
+    assert ef.crop_window('r3d_18', 64, 256, 144) == ef.FULL_FRAME
+    assert ef.crop_window('resnet18', None, 256, 144) == ef.FULL_FRAME
+
+
+def test_cropped_motion_is_in_input_pixels_of_the_crop():
+    field_ = np.zeros((1, 2, 18, 32), np.float32)
+    field_[:, 0] = 4.0  # 4 display pixels per frame on a 256 x 144 frame
+    field_[:, 1] = 2.0
+    x0, x1, y0, y1 = window = ef.crop_window('mvit_v2_s', None, 256, 144)
+    out = ef._motion_to_tensor(field_, (256, 144), 224, window, gain=1.0)
+    assert out[0, 0].numpy() == pytest.approx(4.0 * 224 / (256 * (x1 - x0)))
+    assert out[0, 1].numpy() == pytest.approx(2.0 * 224 / (144 * (y1 - y0)))
+    # A gradient across the frame shows that the sides really are cut off.
+    ramp = np.zeros((1, 2, 18, 32), np.float32)
+    ramp[:, 0] = np.linspace(0, 1, 32)
+    full, cut = [ef._motion_to_tensor(ramp, (256, 144), 32, w, gain=1.0) for w in (ef.FULL_FRAME, (0.25, 0.75, 0.0, 1.0))]
+    assert cut[0, 0, 0, 0] > 2 * full[0, 0, 0, 0]
+
+
+def test_streams_seeing_different_parts_of_the_frame_are_not_concatenated(videos, tmp_path):
+    ef.extract_features(_manifest(videos[:1]), tmp_path / 'f', streams=('rgb', 'motion'), **SMALL)
+    path = tmp_path / 'f' / 'motion' / 'v0.json'
+    sidecar = json.loads(path.read_text())
+    sidecar['field_of_view'] = [0.25, 0.75, 0.0, 1.0]
+    path.write_text(json.dumps(sidecar))
+    with pytest.raises(ValueError, match='different parts of the frame'):
+        load_snippet_features(tmp_path / 'f', 'v0')
+
+
+def test_motion_gain_is_recorded_and_changes_the_input_not_silently(videos, tmp_path):
+    ef.extract_features(_manifest(videos[:1]), tmp_path / 'f', streams=('motion',), **SMALL)
+    info = FeatureStore(tmp_path / 'f').info()['streams']['motion']['config']
+    sidecar = FeatureStore(tmp_path / 'f').read_sidecar('motion', 'v0')
+    assert info['motion_gain'] == sidecar['motion_gain'] == ef.MOTION_GAIN == pytest.approx(1 / ef.MOTION_CLIP_PIXELS)
+    assert info['motion_clip_pixels'] == sidecar['motion_clip_pixels'] == ef.MOTION_CLIP_PIXELS
+    assert f'{ef.MOTION_GAIN:g}' in sidecar['motion_normalisation']
+    with pytest.raises(FeatureConfigError, match='motion_gain'):  # one folder, one gain
+        ef.extract_features(_manifest(videos[:1]), tmp_path / 'f', streams=('motion',), motion_gain=1.0, **SMALL)
+    ef.extract_features(_manifest(videos[:1]), tmp_path / 'g', streams=('motion',), motion_gain=1.0, **SMALL)
+    assert FeatureStore(tmp_path / 'g').read_sidecar('motion', 'v0')['motion_gain'] == 1.0
+    assert not np.array_equal(_arrays(tmp_path / 'f', 'motion')['v0'], _arrays(tmp_path / 'g', 'motion')['v0'])
+    assert ef.build_parser().parse_args(['--data', 'd', '--out', 'o']).motion_gain == ef.MOTION_GAIN
+    assert ef.build_parser().parse_args(['--data', 'd', '--out', 'o', '--motion_gain', '0.2']).motion_gain == 0.2
+    with pytest.raises(SystemExit):
+        ef.build_parser().parse_args(['--data', 'd', '--out', 'o', '--motion_gain', '0'])
+    assert 'motion_gain' in SNIPPET_FEATURE_ARG_NAMES
+
+
+@pytest.mark.parametrize('settings,stream,advice', [
+    (dict(model_version='vit_h_14', feature_weights='pretrained'), 'rgb', '--feature_input_size 518'),
+    (dict(model_version='vit_h_14', feature_weights='pretrained', feature_input_size=224), 'rgb', '--feature_input_size 518'),
+    (dict(model_version='vit_b_16', feature_weights='none', feature_input_size=32), 'rgb', '--feature_input_size 224'),
+    (dict(model_version='mvit_v2_s', feature_weights='none', snippet_frames=8), 'rgb', '--snippet_frames 16'),
+    (dict(model_version='mvit_v2_s', feature_weights='none', snippet_frames=32), 'rgb', '--snippet_frames 16'),
+    (dict(model_version='mvit_v2_s', feature_weights='none', snippet_frames=16, feature_input_size=112), 'rgb', '--feature_input_size 224'),
+    (dict(motion_backbone='mvit_v2_s', feature_weights='none', snippet_frames=8), 'motion', '--snippet_frames 16'),
+])
+def test_impossible_model_input_is_refused_up_front(videos, tmp_path, settings, stream, advice):
+    with mock.patch('src.video.feature_backbones.SnippetBackbone', side_effect=AssertionError('built a model')), _NoDecode():
+        with pytest.raises(FeatureConfigError, match=advice):
+            ef.extract_features(_manifest(videos[:1]), tmp_path / 'f', streams=(stream,), **settings)
+    assert not (tmp_path / 'f').exists()
+
+
+@pytest.mark.parametrize('stream,version,pretrained,size,frames', [
+    ('rgb', 'vit_h_14', True, 518, 16), ('motion', 'vit_h_14', True, None, 16), ('rgb', 'vit_b_16', False, None, 2),
+    ('rgb', 'mvit_v2_s', False, None, 16), ('rgb', 'r3d_18', False, 64, 8), ('rgb', 'swin3d_t', False, 64, 8), ('rgb', 'resnet18', False, 32, 3),
+])
+def test_workable_model_input_is_accepted(stream, version, pretrained, size, frames):
+    ef.check_feature_input(stream, version, pretrained, size, frames)
+
+
+@pytest.mark.parametrize('version,size,frames', [('vit_b_16', 112, 2), ('mvit_v2_s', 224, 8), ('mvit_v2_s', 112, 16)])
+def test_what_the_check_refuses_really_cannot_run(version, size, frames):
+    """Keeps the check honest: each refused input fails in the real model."""
+    model = SnippetBackbone(version, pretrained=False)
+    with pytest.raises((AssertionError, RuntimeError)), torch.inference_mode():
+        model.token_grid(torch.zeros(1, frames, 3, size, size))

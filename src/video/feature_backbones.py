@@ -104,6 +104,22 @@ def frame_family(version: str) -> str | None:
     return None
 
 
+def fixed_input(version: str, pretrained: bool) -> tuple[int | None, int | None]:
+    """(square size, snippet frames) this model accepts and nothing else; None where it is free. Read from the
+    weights' metadata, so it needs no download. ViT and MViT have fixed position embeddings."""
+    if version == 'mvit_v2_s':
+        meta = _KINETICS400_WEIGHTS[version].meta
+        return meta['min_size'][0], meta['min_temporal_size']
+    if frame_family(version) == 'vit':
+        if not pretrained:
+            return 224, None  # torchvision's default image_size when no weights fix it
+        try:
+            return tv_models.get_model_weights(version).DEFAULT.meta['min_size'][0], None
+        except ValueError:  # unknown name: SnippetBackbone reports it
+            return None, None
+    return None, None
+
+
 class SnippetBackbone(nn.Module):
     """A frozen backbone in eval mode. `version`, `weights_name`, `weights_licence` and
     `default_input_size` describe it for the feature sidecars."""

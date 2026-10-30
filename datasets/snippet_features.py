@@ -31,8 +31,10 @@ seconds into the range when the frame rate is constant.
 weights_licence, stream`` plus ``video_id, source, source_fingerprint,
 config_hash, frame_count, start_frame, end_frame, duration_sec, variable_fps,
 num_snippets, last_snippet_valid_frames, shape, dim, token_grid, dtype,
-float16, seconds, bytes``. The motion stream adds ``motion_source,
-intra_fraction, motion_normalisation``; a variable-frame-rate video adds
+float16, seconds, bytes, source_range, field_of_view``. The motion stream adds
+``motion_source, intra_fraction, motion_normalisation, motion_gain,
+motion_clip_pixels, motion_encoding, motion_weights_trained_on_motion``; a
+variable-frame-rate video adds
 ``snippet_start_sec``.
 
 **float16** (:func:`to_float16`). A cast can overflow to inf (above 65504) and
@@ -65,6 +67,9 @@ from datasets.frame_cache import atomic_save_npy, atomic_write, valid_npy_memmap
 LOGGER = logging.getLogger('deeptune.video')
 
 FORMAT_VERSION = 1
+# Bumped when a stream's features change meaning. Motion: 2 = dx, dy, magnitude instead of one repeated filter;
+# 3 = the same crop of the frame as rgb, and an explicit gain.
+PREPROCESSING_VERSION = {'rgb': 2, 'motion': 3}
 STREAMS = ('rgb', 'motion')  # concatenation order
 INFO_FILE = 'features.json'
 FAILED_FILE = 'failed.json'
@@ -229,6 +234,16 @@ class FeatureStore:
             raise FeatureConfigError(f'{self.root} already holds {stream!r} features with other settings '
                                      f'(differs in: {", ".join(differing)}). Choose another --out folder or delete it.')
 
+    def check_motion_is_current(self, streams: Sequence[str]) -> None:
+        """Refuse to read motion features from before the current preprocessing: they cannot be trusted."""
+        known = self.info()['streams'].get('motion')
+        if 'motion' not in streams or not known:
+            return
+        version = (known.get('config') or {}).get('preprocessing_version', 0)
+        if version < PREPROCESSING_VERSION['motion']:
+            raise FeatureConfigError(f'{self.root} holds motion features from preprocessing version {version}; the current '
+                                     f"one is {PREPROCESSING_VERSION['motion']}. Run extract_features.py again into a new folder.")
+
     def register_stream(self, stream: str, config: dict, dim: int, token_grid) -> None:
         info = self.info()
         info['format_version'] = FORMAT_VERSION
@@ -311,6 +326,10 @@ class FeatureStore:
         if len({json.dumps(value, sort_keys=True) for value in ranges.values()}) > 1:
             raise ValueError(f'Video {video_id!r}: the streams come from different trims of the video: {ranges}. '
                              'Run extract_features.py again with all the streams.')
+        views = {name: side['field_of_view'] for name, side in meta.items() if 'field_of_view' in side}
+        if len({json.dumps(value) for value in views.values()}) > 1:
+            raise ValueError(f'Video {video_id!r}: the streams see different parts of the frame: {views}. Extract them with '
+                             'the same --model_version and --feature_input_size, or load one stream at a time.')
         if len({a.shape[:-1] for a in arrays}) > 1:
             shapes = {name: a.shape for name, a in zip(names, arrays)}
             raise ValueError(f'Video {video_id!r}: streams cannot be concatenated, their shapes differ: {shapes}. '
