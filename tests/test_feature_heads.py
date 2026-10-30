@@ -14,7 +14,7 @@ pytest.importorskip('av')
 import extract_features as ef
 import train_feature_head as tfh
 from datasets.feature_dataset import CachedFeatureDataset, snippet_indices
-from datasets.snippet_features import same_path
+from datasets.snippet_features import FeatureStore, same_path
 from datasets.video_datasets import open_video_dataset
 from datasets.video_io import VideoReader
 from datasets.video_synth import translating_clip
@@ -486,3 +486,57 @@ def test_dataset_refuses_streams_of_different_videos_when_built(videos, tmp_path
     with pytest.raises(ValueError, match='different videos'):
         CachedFeatureDataset(id_only, tmp_path / 'f', num_snippets=1)
     assert len(CachedFeatureDataset(id_only, tmp_path / 'f', streams=['motion'], num_snippets=1)) == 1
+
+
+def _bytes_row(path, video_id, label):
+    return pd.DataFrame({'videos': [Path(path).read_bytes()], 'video_id': [video_id], 'labels': [label]})
+
+
+@pytest.fixture(params=['dataframe', 'parquet'])
+def as_source(request, tmp_path):
+    """A bytes table as given, or as a parquet file, which reaches the memory-mapped clip store."""
+    def convert(frame, name):
+        if request.param == 'dataframe':
+            return frame
+        frame.to_parquet(tmp_path / f'{name}.parquet')
+        return tmp_path / f'{name}.parquet'
+    return convert
+
+
+def test_bytes_row_with_other_bytes_than_its_features_is_refused(videos, tmp_path, as_source):
+    first, second = videos['videos'].iloc[:2]
+    ef.extract_features(as_source(_bytes_row(first, 'z', 0), 'extracted'), tmp_path / 'f', **SMALL)
+    with pytest.raises(ValueError, match='differ from the bytes its features were extracted from'):
+        CachedFeatureDataset(as_source(_bytes_row(second, 'z', 1), 'other'), tmp_path / 'f', num_snippets=1)
+
+
+def test_matching_bytes_rows_still_load(videos, tmp_path, as_source):
+    first, second = videos['videos'].iloc[:2]
+    rows = pd.concat([_bytes_row(first, 'a', 0), _bytes_row(second, 'b', 1)], ignore_index=True)
+    ef.extract_features(as_source(rows, 'extracted'), tmp_path / 'f', **SMALL)
+    data = CachedFeatureDataset(as_source(rows, 'again'), tmp_path / 'f', num_snippets=1)
+    assert len(data) == 2 and data[1][1].item() == 1
+    fingerprint = FeatureStore(tmp_path / 'f').read_sidecar('rgb', 'b')['source_fingerprint']
+    assert data.sources == [FeatureStore(tmp_path / 'f').read_sidecar('rgb', 'a')['source_fingerprint'], fingerprint]
+
+
+def test_path_row_against_features_from_bytes_is_refused(videos, tmp_path):
+    first = videos['videos'].iloc[0]
+    ef.extract_features(_bytes_row(first, 'z', 0), tmp_path / 'f', **SMALL)
+    with pytest.raises(ValueError, match='extracted from clip bytes.*extract_features.py'):
+        CachedFeatureDataset(_row(first, 'z', 0), tmp_path / 'f', num_snippets=1)  # the same clip: it cannot be told
+
+
+def test_bytes_row_against_features_from_a_path_is_refused(videos, tmp_path):
+    first = videos['videos'].iloc[0]
+    ef.extract_features(_row(first, 'z', 0), tmp_path / 'f', **SMALL)
+    with pytest.raises(ValueError, match='holds clip bytes.*extracted from the file.*extract_features.py'):
+        CachedFeatureDataset(_bytes_row(first, 'z', 0), tmp_path / 'f', num_snippets=1)
+
+
+@pytest.mark.parametrize('extracted_from', [_row, _bytes_row])
+def test_id_only_row_stays_allowed_whatever_the_features_came_from(videos, tmp_path, extracted_from):
+    ef.extract_features(extracted_from(videos['videos'].iloc[0], 'z', 0), tmp_path / 'f', **SMALL)
+    id_only = pd.DataFrame({'video_id': ['z'], 'labels': [1]})
+    assert len(CachedFeatureDataset(id_only, tmp_path / 'f', num_snippets=1)) == 1
+

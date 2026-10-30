@@ -61,6 +61,29 @@ def row_video_id(dataset, columns: pd.DataFrame, i: int) -> str:
     return dataset.clip_key(i)[:16]
 
 
+def check_row_matches_features(dataset, i: int, vid: str, sidecar: dict) -> None:
+    """Refuse a row holding another video than its features came from. A row with only an id has nothing to compare.
+    Rows of clip bytes are hashed, which reads each clip once."""
+    source = sidecar.get('source')
+    if not source or not isinstance(dataset, (VideoDataset, ParquetVideoDataset)):
+        return
+    from_bytes = source.startswith('<')
+    remedy = 'Fix the row, use a row with only a video_id, or run extract_features.py on these rows again.'
+    if isinstance(dataset, VideoDataset):
+        if from_bytes:
+            raise ValueError(f'Video {vid!r}: this row names the file {dataset.paths[i]}, but its features were extracted '
+                             f'from clip bytes, so they cannot be matched to it. {remedy}')
+        if not same_path(dataset.paths[i], source):
+            raise ValueError(f'Video {vid!r}: this row names {dataset.paths[i]}, but its features were extracted from '
+                             f'{source}. {remedy}')
+    elif not from_bytes:
+        raise ValueError(f'Video {vid!r}: this row holds clip bytes, but its features were extracted from the file {source}, '
+                         f'so they cannot be matched to it. {remedy}')
+    elif dataset.clip_key(i) != sidecar.get('source_fingerprint'):
+        raise ValueError(f'Video {vid!r}: the clip bytes in this row differ from the bytes its features were extracted '
+                         f'from. {remedy}')
+
+
 def snippet_indices(available: int, wanted: int, train: bool, rng: Optional[np.random.Generator] = None) -> np.ndarray:
     """`wanted` snippet positions out of `available`: evenly spaced, or one random per segment when
     training. Short videos repeat positions, so every sample has the same shape."""
@@ -79,7 +102,8 @@ class CachedFeatureDataset(Dataset):
 
     `source`: the rows to use (for example a train split). `streams`: default
     every stream in the folder, concatenated on the last axis. `num_snippets`:
-    K. Construction checks that every row was extracted and reads no features.
+    K. Construction checks that every row was extracted from the video it holds and reads no features;
+    rows of clip bytes are hashed for that (:func:`check_row_matches_features`).
     """
 
     def __init__(self, source, features_dir, streams: Optional[Sequence[str]] = None, num_snippets: int = 8,
@@ -113,10 +137,8 @@ class CachedFeatureDataset(Dataset):
             check_streams_agree(vid, sidecars)
             sidecar = sidecars[self.streams[0]]
             source = sidecar.get('source')
+            check_row_matches_features(dataset, i, vid, sidecar)
             if source and not source.startswith('<'):
-                if isinstance(dataset, VideoDataset) and not same_path(dataset.paths[i], source):
-                    raise ValueError(f'Video {vid!r}: this row names {dataset.paths[i]}, but its features were extracted from '
-                                     f'{source}. Fix the row, or run extract_features.py on these rows again.')
                 self.sources[i] = str(Path(source).resolve()).casefold()
             elif source and sidecar.get('source_fingerprint'):
                 self.sources[i] = sidecar['source_fingerprint']
