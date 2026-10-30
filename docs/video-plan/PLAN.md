@@ -211,10 +211,15 @@ coordinator plan is in the session's plan file. Agent reports go in
 guarantee** (conformal / selective prediction). Every number is measured on
 public benchmarks or on the user's data, with confidence intervals.
 
-**Licences.** Prefer Apache/MIT/BSD weights (torchvision, RT-DETR v2,
-D-FINE, Grounding DINO, OWLv2, SAM 2, SegFormer, Mask2Former, VideoMAE).
-**SAM 3** and **V-JEPA 2** use Meta licences, and SAM 3 has gated checkpoints:
-make them optional backends, never defaults, and record the licence in the docs.
+**Licences** (corrected 2026-10-30 from the model cards / repo LICENSE files,
+after the Research Scout's F-002). Prefer Apache/MIT/BSD weights: torchvision,
+**V-JEPA 2 (MIT, can be a default)**, RT-DETR v2, D-FINE, Grounding DINO,
+OWLv2, SAM 2, SegFormer, Mask2Former, ViTPose. **VideoMAE (v1/v2) and
+TimeSformer weights are CC-BY-NC-4.0 (non-commercial)**, and VideoMAE V2 is
+gated: opt-in only, with the licence shown when they're chosen. **SAM 3** and
+**DINOv3** are gated under Meta's own licences: optional backends, never
+defaults. Ultralytics (AGPL-3.0) is never a dependency. Each run records the
+licence of every set of weights it used.
 
 ### New tasks (all via `transformers` 5.16.1 or torchvision, already installed)
 | Task | What | Builds on |
@@ -246,6 +251,70 @@ SAM 3 backend, the DeepTune-feature THUMOS run.
    unsupervised, explainability), then S2, S6 and S4, then R3.
 4. GUI (Wave 4) covers everything that landed. Course report in December;
    the paper follows if the measured results support one.
+
+### Accepted board proposals (user accepted all 13, 2026-10-30)
+Source: `.claude/board/PROPOSALS.md` and `scout-wave1.md`, with the Critic's
+challenges V-013/V-014 as constraints. Board ids P-101…P-112 = the Scout's
+P-001…P-012 (an id clash, see P-113).
+- **Changes to planned tasks:**
+  - R1 default = **V-JEPA 2 / 2.1 frozen + attentive probe**, with SigLIP 2 as
+    the appearance stream (P-101). Report accuracy at DeepTune's own frame
+    counts, not the papers' 64-frame multi-view numbers (V-014).
+  - B1's feature cache stores **pooled token grids** (e.g. 8×4×4), and the
+    attentive probe is a first-class head (P-102). Measure the pooling cost.
+  - T1 adds the **expert recipe**: label smoothing, clip-consistent
+    mixup/cutmix, layer-wise LR decay, EMA, multi-crop × multi-clip testing,
+    and peak-memory logging per option (P-103). On 8 GB: probe or side
+    network first, then LoRA on ViT-B, then LoRA on ViT-L.
+  - R2 = the paper core: **group-aware conformal abstention** on a separate,
+    group-disjoint calibration split, since validation is used for model
+    selection once early stopping exists (P-104, P-114, V-011).
+  - S1/S3: a parity check against the Apache `trackers` library, after
+    checking against the reference lapjv rule first (P-110, V-013). It
+    needs the user's OK to install.
+  - Phase 2/6: two-sided static-bias probes. SCUFO-style frozen-frame splits
+    on synthetic data (A3's P-001) and a SCUBA-style background swap on real
+    data (P-111).
+- **New features:**
+  - **Leakage / near-duplicate audit** every run, plus suggested `group`
+    columns when none exist (P-105, S).
+  - **Run card** next to each checkpoint: CIs, calibration, the abstention
+    guarantee, leakage audit, bias scores, trainable parameters, and the
+    weight licence of every backbone used (P-106, S–M).
+  - **Label-issue finder** from out-of-fold predictions; cleanlab is Apache
+    (P-107, M).
+  - **Data-efficiency curve**: "how many clips do I need?", from cached
+    features (P-108, S).
+  - **"Label these next"**: TypiClust cold start, then `expected_error`. Ships
+    only if a simulation beats random selection by more than the CI (P-109, M).
+  - **Text-query temporal search**: "when does the lobster appear?", low
+    confidence (P-112, L).
+- **Placement:** P-105, P-106 and P-108 go in Wave 2 with B3. P-107 and P-109
+  come after B3's out-of-fold predictions. P-112 goes after Wave 3 and is
+  the first to cut after S6/R3 if time is short.
+
+### Professional-quality rules (agreed 2026-10-30)
+1. **Real-data gate.** A feature is not "done" until the coordinator has run it
+   once on a real dataset on the GPU, with the number recorded in PROGRESS.md
+   next to a published baseline where one exists. Agent unit tests on dummy
+   models are necessary, not sufficient.
+2. **Training basics move to Wave 2 (new task T1):** mixed precision (bf16/fp16
+   autocast), resume from checkpoint, early stopping + best-checkpoint reload
+   (the error model must then be fitted on the best weights), LR schedulers,
+   gradient accumulation, YAML/JSON config files, optional experiment
+   logging (CSV always, MLflow/W&B when installed), full seeding. Plus the
+   **LoRA coverage fix**: `adjustedPeftVideo3D` picks targets with
+   `type(m) in [...]`, which misses torchvision's 3D conv subclasses, so on
+   r3d_18 LoRA reaches only the stem and downsample convs.
+3. **Depth before breadth.** The core path (data → strong models → evaluation
+   and reliability → localisation → GUI) is finished and validated before the
+   spatial extras grow. Detection, segmentation and pose stay thin,
+   well-tested wrappers around foundation models. If time is short, cut
+   S6 fusion and R3 auto-select first, then S2 fine-tuning and S5's
+   graph-conv head.
+4. **Review per merge.** Every agent branch gets a code review (correctness
+   pass) before merging, in addition to the coordinator's diff, test-diff and
+   targeted-test checks. The full suite runs after each wave.
 
 ---
 
