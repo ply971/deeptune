@@ -7,8 +7,9 @@ Keep entries short and factual. This is the handoff between sessions.
 | Phase | Status | Tests (passed/total) | Commit |
 |---|---|---|---|
 | 0 Foundation & GPU setup | done (1 known GPU smoke timeout → Phase 1) | 173/173 CPU and GPU | `video-analysis` |
-| 1 Data layer + MVs + feature cache | not started | | |
-| 2 Motion / untrimmed / scene-bias benchmarks | not started | | |
+| 1 Data layer + MVs + feature cache | tasks 1–6, 9–12 merged (A2); 7–8 feature cache = B1 (Wave 2) | 414 passed, 3 skipped (targeted, CPU) | `966a5c1` |
+| 2 Motion / untrimmed / scene-bias benchmarks | built (A3), fix round in progress, not merged | 60 passed (A3 worktree) | `video/A3-phase2-benchmarks` |
+| + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
 | 3 Temporal models | not started | | |
 | 4 Timeline + CtxPL localisation + unsupervised | not started | | |
 | 5 Evaluation | not started | | |
@@ -17,6 +18,39 @@ Keep entries short and factual. This is the handoff between sessions.
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
 
 ## Session log
+
+### 2026-10-30 — Wave 1 with parallel agents (coordinator session; HANDOFF)
+- **How the work runs:**
+  - Approved plan: Phases 1–8 via parallel agents in waves, coordinator-merged. PLAN.md §4b holds the scope extension, licences, the 13 accepted board proposals and the professional-quality rules.
+  - Agents work in manual git worktrees `.claude/wt/<task>`; the Agent tool's worktree isolation is broken here.
+  - They communicate through the board `.claude/board/` (README rules, FINDINGS, PROPOSALS, REVIEWS, INTERFACES, **QUEUE.md = exact next steps**).
+  - A read-only Critic reviews every branch before merge; a Research Scout researches and proposes.
+- **Merged into `video-analysis`:**
+  - A1, trainable-parameter budget + fixes (1e2e0ff)
+  - A4, per-prediction `expected_error` + fixes + multi-clip test (d517c15, 158ecdb); the A2×A4 trainer conflict was resolved per Critic V-033
+  - S1a, zero-shot detect + ByteTrack + fixes (71dce3d); the ID-swap bug V-001 is fixed
+  - A2, Phase 1 data layer (966a5c1)
+  - desktop visual upgrade from a parallel session, committed as-is at the user's request (680db84)
+- **Tests:** targeted CPU run after the A2+A4 merges: `414 passed, 3 skipped, 36 deselected, 24 warnings in 95.55s`. The **full suite has not been run since these merges**; it is due after A3.
+- **Open:**
+  - A3's merge-in + fix round is running in `.claude/wt/A3`: V-021 runner validated on test, V-022 single-frame claim scope, V-023 GUI single_frame, plus the flip guard.
+  - After A3: Critic re-check → merge → full suite → close Wave 1.
+- **Decisions:**
+  - The plan's licences were corrected: V-JEPA 2 is MIT; VideoMAE/TimeSformer are CC-BY-NC.
+  - The user accepted all 13 proposals.
+  - Wave 2 starts in a FRESH session with a fresh Critic and Scout.
+- **Needs the user's OK:**
+  - GPU runs: `check.ps1`, `bench_video_io.py --clips 200 --nvdec`, `smoke_track.py` (~1.3 GB download), and the fine-tuned single_frame check (V-022)
+  - `pip install trackers` (P-110)
+  - starting Wave 2
+- **Handoff to another tool (e.g. Codex):**
+  - Read AGENTS.md and create `.claude/board/LOCK` while working, so Claude's hourly check-ins only report.
+  - Continue the first open item in QUEUE.md.
+- **Known nits for later:**
+  - CLAUDE.md's "mimic CI" tip should say `'-1'`, not `''`.
+  - LoRA coverage on 3D models (T1).
+  - `infer.py allow_abbrev` (V-033 nit).
+  - Re-tune the S1a tracker thresholds with S4.
 
 ### 2026-10-30 ? Desktop visual upgrade (UI only)
 - Verified checkout: `video-analysis`, one commit ahead of origin; tracked tree was clean.
