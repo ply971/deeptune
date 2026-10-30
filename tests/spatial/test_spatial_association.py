@@ -38,6 +38,48 @@ def test_assignment_never_matches_infeasible_pairs():
     assert len(matches) == 0 and ur == [0] and uc == [0]
 
 
+def test_assignment_prefers_one_strong_match_over_two_weak_ones():
+    # Regression for review V-001. With lapjv(cost_limit=0.8) semantics each
+    # unmatched row/column costs 0.4: {(0,0)} totals 0.1 + 0.4 + 0.4 = 0.9, which
+    # beats {(0,1), (1,0)} at 0.7 + 0.7 = 1.4. Plain gated Hungarian picks the latter.
+    cost = np.array([[0.1, 0.7], [0.7, np.inf]])
+    matches, ur, uc = linear_assignment(cost, thresh=0.8)
+    assert sorted(map(tuple, matches.tolist())) == [(0, 0)]
+    assert ur == [1] and uc == [1]
+
+
+def _lapjv_oracle(cost, thresh):
+    """Brute force of lapjv(extend_cost=True, cost_limit=thresh): minimise the sum of
+    matched costs plus thresh/2 per unmatched row and column."""
+    n, m = cost.shape
+    best, best_set = np.inf, None
+    # every partial injective map rows -> cols (None = unmatched)
+    def rec(i, used, acc, pairs):
+        nonlocal best, best_set
+        if i == n:
+            total = acc + thresh / 2 * ((n - len(pairs)) + (m - len(pairs)))
+            if total < best - 1e-12:
+                best, best_set = total, sorted(pairs)
+            return
+        rec(i + 1, used, acc, pairs)
+        for j in range(m):
+            if j not in used and np.isfinite(cost[i, j]) and cost[i, j] <= thresh:
+                rec(i + 1, used | {j}, acc + cost[i, j], pairs + [(i, j)])
+    rec(0, frozenset(), 0.0, [])
+    return best_set
+
+
+def test_assignment_matches_lapjv_cost_limit_semantics_on_random_matrices():
+    rng = np.random.default_rng(0)
+    for trial in range(300):
+        n, m = rng.integers(1, 5), rng.integers(1, 5)
+        cost = rng.uniform(0, 1.2, (n, m))
+        cost[rng.uniform(size=(n, m)) < 0.15] = np.inf
+        thresh = float(rng.choice([0.5, 0.7, 0.8]))
+        got, _, _ = linear_assignment(cost, thresh)
+        assert sorted(map(tuple, got.tolist())) == _lapjv_oracle(cost, thresh), (trial, cost, thresh)
+
+
 def test_assignment_handles_empty_inputs():
     m, ur, uc = linear_assignment(np.zeros((0, 3)), 0.5)
     assert len(m) == 0 and ur == [] and uc == [0, 1, 2]

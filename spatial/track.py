@@ -34,9 +34,24 @@ Differences from the reference code (all deliberate):
   "fish" detection can never continue a "lobster" track). With
   ``class_agnostic=True`` labels are ignored for matching and each track's label
   is the majority vote of its matched detections.
-- Gating uses Hungarian matching on a cost matrix where pairs above the gate are
-  made infeasible, then any such pair is dropped; the reference uses ``lap.lapjv``
-  with ``cost_limit``. Both return only pairs under the gate.
+- Matching uses ``scipy.optimize.linear_sum_assignment`` on the extended
+  ``(n + m) x (n + m)`` matrix that ``lap.lapjv(extend_cost=True, cost_limit=t)``
+  builds internally (each row/column may stay unmatched at ``t / 2``), so the
+  matching rule is the reference's and ``lap`` is not needed. Ties (equal total
+  cost) may break differently from lapjv.
+- Score splits are inclusive: high is ``score >= high_thresh`` and low is
+  ``low_thresh <= score < high_thresh``. The reference uses ``score > track_thresh``
+  for high and ``0.1 < score < track_thresh`` for low, which drops a box scoring
+  exactly ``track_thresh`` from both stages.
+- ``max_time_lost = max(1, int(frame_rate / 30 * track_buffer))``, as in the reference
+  except for the floor of 1 (so a stride never disables re-finding).
+- Lost tracks removed for age this step leave the lost list immediately. The
+  reference subtracts the *previous* removed list, so such a track stays in
+  ``lost_stracks`` (and the next step's matching pool) for one more step and can
+  still be re-activated: effectively a buffer one step longer than configured.
+  Treated as a bug fix.
+- Duplicate removal (tracked vs lost, IoU > 0.85) only compares tracks of the same
+  label, unless ``class_agnostic``.
 
 Extension points (documented for S3 follow-ups):
 
@@ -94,7 +109,19 @@ def iou_matrix(a, b) -> np.ndarray:
 
 
 def linear_assignment(cost: np.ndarray, thresh: float):
-    """Minimum-cost matching keeping only pairs with ``cost <= thresh``.
+    """Gated minimum-cost matching with ``lap.lapjv(extend_cost=True, cost_limit=thresh)`` semantics.
+
+    Every row and every column may stay unmatched at a cost of ``thresh / 2``, so a
+    pair is matched only if that beats leaving both sides unmatched, and the total
+    ``sum(matched costs) + thresh / 2 * (#unmatched rows + #unmatched cols)`` is
+    minimised. This is the rule ByteTrack's reference ``matching.linear_assignment``
+    uses. Plain Hungarian on a gated matrix would instead maximise the *number* of
+    matches (two weak matches beating one strong one), which swaps IDs.
+
+    Implemented as the standard ``(n + m) x (n + m)`` extension that ``lap`` builds
+    internally: ``[[C, thresh/2], [thresh/2, 0]]``, solved with
+    ``scipy.optimize.linear_sum_assignment``. Pairs above ``thresh`` (and ``inf``)
+    are replaced by a large finite cost and can never be returned.
 
     Returns ``(matches [K, 2], unmatched_rows, unmatched_cols)``.
     """
@@ -103,9 +130,11 @@ def linear_assignment(cost: np.ndarray, thresh: float):
     if n == 0 or m == 0:
         return np.empty((0, 2), dtype=int), list(range(n)), list(range(m))
     big = 1e6
-    gated = np.where(cost > thresh, big, cost)
-    rows, cols = linear_sum_assignment(gated)
-    matches = [(r, c) for r, c in zip(rows, cols) if cost[r, c] <= thresh]
+    ext = np.full((n + m, n + m), thresh / 2.0)
+    ext[n:, m:] = 0.0
+    ext[:n, :m] = np.where(np.isfinite(cost) & (cost <= thresh), cost, big)
+    rows, cols = linear_sum_assignment(ext)
+    matches = [(r, c) for r, c in zip(rows, cols) if r < n and c < m and cost[r, c] <= thresh]
     mr = {r for r, _ in matches}
     mc = {c for _, c in matches}
     return (np.array(matches, dtype=int).reshape(-1, 2),
@@ -284,7 +313,7 @@ class ByteTracker:
     match_thresh: IoU-distance gate of the first association (reference 0.8).
     track_buffer: how many steps a lost track may be re-found (reference 30 at 30 fps).
     frame_rate: steps per second seen by the tracker; ``max_time_lost =
-        round(frame_rate / 30 * track_buffer)`` as in the reference.
+        max(1, int(frame_rate / 30 * track_buffer))`` (reference: no floor).
     fuse_score: multiply IoU by the detection score in the first association
         (reference behaviour for MOT17; off for MOT20).
     class_agnostic: ignore labels when matching (label = majority vote).
@@ -302,7 +331,7 @@ class ByteTracker:
         self.low_thresh = float(low_thresh)
         self.new_track_thresh = float(high_thresh + 0.1 if new_track_thresh is None else new_track_thresh)
         self.match_thresh = float(match_thresh)
-        self.max_time_lost = max(1, int(round(frame_rate / 30.0 * track_buffer)))
+        self.max_time_lost = max(1, int(frame_rate / 30.0 * track_buffer))
         self.fuse_score = fuse_score
         self.class_agnostic = class_agnostic
         self.motion_compensator = motion_compensator
@@ -408,7 +437,7 @@ class ByteTracker:
         self.lost.extend(lost)
         self.lost = _sub(self.lost, removed)
         self.removed.extend(removed)
-        self.tracked, self.lost = _remove_duplicates(self.tracked, self.lost)
+        self.tracked, self.lost = _remove_duplicates(self.tracked, self.lost, self.class_agnostic)
 
         return [TrackOutput(t.track_id, tuple(float(v) for v in t.box), t.score, t.label)
                 for t in self.tracked if t.is_activated]
@@ -424,13 +453,13 @@ def _sub(a: list[Track], b: list[Track]) -> list[Track]:
     return [t for t in a if t.track_id not in ids]
 
 
-def _remove_duplicates(tracked: list[Track], lost: list[Track]):
+def _remove_duplicates(tracked: list[Track], lost: list[Track], class_agnostic: bool = False):
     if not tracked or not lost:
         return tracked, lost
     dist = 1.0 - iou_matrix([t.box for t in tracked], [t.box for t in lost])
     dup_t, dup_l = set(), set()
     for p, q in zip(*np.where(dist < 0.15)):
-        if tracked[p].label != lost[q].label:
+        if not class_agnostic and tracked[p].label != lost[q].label:
             continue
         if tracked[p].frame_id - tracked[p].start_frame > lost[q].frame_id - lost[q].start_frame:
             dup_l.add(q)

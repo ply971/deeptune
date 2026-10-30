@@ -1,4 +1,5 @@
 """ByteTrack behaviour on synthetic moving squares with a scripted noisy detector."""
+import pytest
 from spatial.detect import Detection
 from spatial.track import ByteTracker
 
@@ -73,6 +74,24 @@ def test_crossing_with_occlusion_recovers_the_hidden_object_id(make_scene, track
     assert set(seq[0]) == {1}
     assert set(seq[1][:10]) == {2} and set(seq[1][16:]) == {2}
     assert {o.track_id for f in outs for o in outs[f]} == {1, 2}
+
+
+def test_stationary_track_keeps_its_id_when_a_neighbour_leaves_and_a_newcomer_appears():
+    # Regression for review V-001 (Critic's s1a_swap.py): A and B are tracked, B
+    # leaves, a new box appears just left of A. A has IoU 1.0 with its own box and
+    # must keep ID 1; the newcomer is not B and must not take ID 2.
+    A, B, new = (0.0, 0.0, 10.0, 10.0), (6.0, 0.0, 16.0, 10.0), (-6.0, 0.0, 4.0, 10.0)
+    table = {f: [Detection(A, 0.9, 'x'), Detection(B, 0.9, 'x')] for f in range(3)}
+    table[3] = [Detection(A, 0.9, 'x'), Detection(new, 0.9, 'x')]
+    table[4] = [Detection(A, 0.9, 'x'), Detection(new, 0.9, 'x')]
+    outs, _ = run(table, 5)
+    by_id = {o.track_id: o.box for o in outs[3]}
+    assert set(by_id) == {1}  # newcomer is unconfirmed on its first frame; B is lost
+    assert by_id[1] == pytest.approx(A, abs=0.5)
+    by_id = {o.track_id: o.box for o in outs[4]}
+    assert by_id[1] == pytest.approx(A, abs=0.5)
+    assert 2 not in by_id  # B's ID is not handed to the newcomer
+    assert by_id[3] == pytest.approx(new, abs=0.5)
 
 
 def test_track_buffer_expiry_gives_new_id(two_squares, track_ids_of):
