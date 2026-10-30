@@ -229,6 +229,65 @@ or a smaller `--embed_size`. SigLIP, text, tabular and timeseries runs do not su
 </tbody>
 </table>
 
+## Video data: decoding, sampling, augmentation, test-time clips
+
+**Storage.** With `--raw-data`, a class-folder dataset or a CSV/XLSX list of clips
+(`videos` = file paths, `labels`, optional `group`, `start_sec`, `end_sec`, any extra
+columns) is stored as **file paths** (`--video_storage paths`, the default): clips are
+decoded lazily per sample and never copied, so thousands of clips train without being
+held in memory. `--video_storage bytes` embeds the encoded clips in the parquet file
+(portable; DeepTune's original format). Parquet files of either kind, and saved runs of
+either kind, are detected automatically everywhere (train, evaluate, embed, `infer.py`).
+
+**Decoding** (`--video_backend auto|torchcodec|pyav|opencv`, `datasets/video_io.py`):
+PyAV by default (in-memory, frame-exact reads, display rotation applied); TorchCodec is
+used first if installed; OpenCV is the sequential-read fallback.
+
+**Temporal sampling** (`--temporal_sampling`):
+
+| value | frames per clip |
+|---|---|
+| `uniform` (default) | evenly spaced over the clip (same as before) |
+| `segment` | TSN: one random frame per segment while training, segment centres at test |
+| `dense` | `--num_frames` consecutive frames `--clip_stride` apart |
+| `motion` | MGSampler: evenly spaced along the cumulative motion curve (codec motion vectors or frame differences, `--motion_source`) |
+
+`--clip_duration_sec S` samples from an S-second window (random position while training,
+centred at test).
+
+**Augmentation** (training only, `--video_augment`): temporal jitter, one random-resized
+crop and one colour jitter per clip, applied identically to every frame; optional
+`--video_speed_perturb 0.2` (playback speed 0.8–1.2×). **Horizontal flip is off unless
+you add `--video_flip`**, because mirroring turns "moves left" into "moves right" and so
+corrupts any label that depends on direction.
+
+**Test-time clips** (`--test_clips N`): evaluation, embeddings and inference average the
+class probabilities of N clips per video; `infer.py` also writes a `clip_disagreement`
+column (0 = all clips agree).
+
+**Workers** (`--num_workers auto|N`): `auto` uses 0 workers on CPU; on Windows with a GPU
+0 workers below 500 clips (each spawned worker re-imports torch, which costs 15–40 s) and
+up to 4 above; `min(8, cpu/2)` elsewhere. Workers receive file paths, never clip bytes.
+
+**Splits.** A `group` column (for example the source video or the subject) is used
+automatically for video: every group stays in one split; `split_summary.json` records the
+per-split clip and group counts.
+
+**Codec motion vectors** (CoViAR) are available as
+`VideoReader(path).get_motion_vectors(indices)`: a `[T, 2, H/8, W/8]` field of dx, dy in
+pixels per frame (positive = right / down), zero with `is_intra=True` on I-frames, and an
+automatic Farneback fallback for codecs without motion vectors. They are exact for
+single-reference encoders (MPEG-4 Part 2, x264 `refs=1`);
+`datasets.video_io.reencode_for_motion_vectors` converts other H.264 files.
+
+All of these options are saved in `cli_arguments.json`, so the desktop Test page and
+`infer.py` rebuild the same pipeline. `scripts/bench_video_io.py` measures decode speed,
+old vs new dataset, and motion-vector vs Farneback cost.
+
+```powershell
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --num_frames 16 --temporal_sampling segment --video_augment --test_clips 3
+```
+
 ## Per-prediction error estimate (video & images)
 
 Every video (and image) prediction can carry an **`expected_error`** column:

@@ -3,6 +3,7 @@
 Uses generated moving-shape clips to check plumbing, not model quality.
 Run from the repository root: python scripts/smoke_video.py --model resnet18
 Native model example: python scripts/smoke_video.py --model r3d_18
+Old bytes-in-parquet format: python scripts/smoke_video.py --model resnet18 --parquet_bytes
 """
 import argparse
 import json
@@ -30,6 +31,8 @@ def main():
     parser.add_argument('--peft', action='store_true')
     parser.add_argument('--pooling', choices=['mean', 'attention'], default='mean')
     parser.add_argument('--manifest', action='store_true', help='Train from a labeled MP4 file list, as the desktop clip builder does.')
+    parser.add_argument('--parquet_bytes', action='store_true',
+                        help='Train from a parquet file with the clips embedded as bytes (the original format).')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='deeptune-video-') as folder:
         root = Path(folder)
@@ -56,7 +59,13 @@ def main():
             source = root / 'clips.csv'
             pd.DataFrame([(str(path.resolve()), path.parent.name) for path in sorted(root.glob('*/*.mp4'))],
                          columns=['videos', 'labels']).to_csv(source, index=False)
-        cfg = RunConfig(modality='video', df=source, out=args.out, model_version=args.model,
+        raw_data = True
+        if args.parquet_bytes:
+            source = root / 'clips.parquet'
+            pd.DataFrame([(path.read_bytes(), int(path.parent.name.split('-')[1])) for path in sorted(root.glob('*/*.mp4'))],
+                         columns=['videos', 'labels']).to_parquet(source)
+            raw_data = False
+        cfg = RunConfig(modality='video', df=source, out=args.out, model_version=args.model, raw_data=raw_data,
                         num_epochs=1, batch_size=4, num_frames=16 if args.model == 'mvit_v2_s' else 2,
                         added_layers=2, embed_size=16, freeze_backbone=True, use_peft=args.peft,
                         pooling=args.pooling)
@@ -85,7 +94,7 @@ def main():
         assert result.embeddings_shape == (8, 17), result.embeddings_shape
         assert result.run_status['status'] == 'success'
         print(json.dumps({'passed': True, 'model': args.model, 'peft': args.peft,
-                          'source': 'mp4_file_list' if args.manifest else 'class_folders',
+                          'source': 'bytes_parquet' if args.parquet_bytes else 'mp4_file_list' if args.manifest else 'class_folders',
                           'pooling': args.pooling, 'embeddings_shape': result.embeddings_shape,
                           'run': str(result.run_dir)}, indent=2))
 
