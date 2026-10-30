@@ -19,6 +19,7 @@ from helpers import transformations
 from inference.common import attach_expected_error
 from options import DEVICE, PIN_MEM
 from src.video.multi_clip import clip_disagreement, error_model_clips_mismatch, multi_clip_scores
+from src.video.multi_crop import wrap_for_test_crops
 from utils import build_video_model
 
 
@@ -48,7 +49,7 @@ def predict_video(
     clip softmax probabilities are averaged *before* the error model sees
     them, and a ``clip_disagreement`` column is added (0 = all clips agree)."""
     video_options = video_options or VideoDataOptions()
-    error_model_clips_mismatch(checkpoint_path, video_options.test_clips)
+    error_model_clips_mismatch(checkpoint_path, video_options.test_clips, test_crops=video_options.test_crops)
     model = build_video_model(
         model_version=model_version, num_classes=num_classes, added_layers=added_layers,
         embed_size=embed_size, freeze_backbone=freeze_backbone, mode=mode,
@@ -58,6 +59,7 @@ def predict_video(
     model.load_state_dict(state_dict)
     model.to(DEVICE)
     model.eval()
+    model = wrap_for_test_crops(model, video_options.test_crops, mode)  # --test_crops K: averaged inside each clip
 
     # See inference.vision.predict_images's matching comment: ParquetVideoDataset
     # needs 'labels' to already be numeric (or absent) to convert it to a

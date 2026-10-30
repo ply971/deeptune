@@ -35,6 +35,7 @@ __all__ = [
     "format_summary",
     "lora_coverage",
     "format_lora_coverage",
+    "lora_size_warning",
     "apply_top_down_budget",
     "lora_rank_line",
     "choose_lora_rank",
@@ -126,6 +127,19 @@ def format_lora_coverage(summary: dict) -> str | None:
     if coverage["lora_modules"] < coverage["eligible_modules"]:
         line += "; the other backbone modules stay frozen without LoRA"
     return line
+
+
+def lora_size_warning(summary: dict) -> str | None:
+    """A warning when the adapters are larger than the backbone they adapt, or
+    None. On 3D convs each rank costs a lot, since LoRA's first layer keeps the
+    conv's kernel: r3d_18 at DeepTune's default rank of 1000 has about 97M."""
+    breakdown = summary['breakdown']
+    lora, backbone = breakdown['lora']['trainable'], breakdown['backbone']['total']
+    if lora <= backbone:
+        return None
+    return (f'LoRA adds {lora:,} trainable parameters, more than the {backbone:,} of the backbone it adapts, so this '
+            f'is not parameter-efficient and may not fit in GPU memory. The rank is --embed_size: use a smaller one, '
+            f'or set --trainable_params.')
 
 
 def apply_top_down_budget(model: nn.Module, budget: int) -> dict:

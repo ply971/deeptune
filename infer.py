@@ -98,7 +98,7 @@ def _load_new_data(args: argparse.Namespace):
 # desktop Test page passes them explicitly). --num_workers is deliberately not
 # inherited: it describes the training machine, not the pipeline.
 RECORDED_VIDEO_SETTINGS = ('num_frames', 'pooling', 'video_backend', 'temporal_sampling', 'clip_stride',
-                           'clip_duration_sec', 'motion_source', 'test_clips')
+                           'clip_duration_sec', 'motion_source', 'test_clips', 'test_crops')
 
 
 def _recorded_run_arguments(checkpoint: Path) -> dict:

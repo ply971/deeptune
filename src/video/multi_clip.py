@@ -70,23 +70,32 @@ class MultiClipModel(nn.Module):
         return self.model.load_state_dict(state_dict, strict=strict, assign=assign)
 
 
-def wrap_for_test_clips(model: nn.Module, test_clips: int, mode: str) -> nn.Module:
+def wrap_for_test_clips(model: nn.Module, test_clips: int, mode: str, test_crops: int = 1) -> nn.Module:
+    from src.video.multi_crop import wrap_for_test_crops
+    model = wrap_for_test_crops(model, test_crops, mode)
     return MultiClipModel(model, mode) if int(test_clips) > 1 else model
 
 
-def error_model_clips_mismatch(checkpoint_path, test_clips: int, warn=print) -> bool:
+def error_model_clips_mismatch(checkpoint_path, test_clips: int, warn=print, test_crops: int = 1) -> bool:
     """Warn (and return True) when the run's error_model.json was fitted on a
-    different number of clips per video than `test_clips`. Runs from before
-    this check recorded nothing and were fitted on one clip."""
+    different number of clips per video than `test_clips`, or crops per clip
+    than `test_crops`. Runs from before this check recorded nothing and were
+    fitted on one clip and one crop."""
     import json
     from evaluators.error_model import find_error_model
     found = find_error_model(checkpoint_path)
     if found is None:
         return False
     try:
-        fitted = int((json.loads(found.read_text(encoding='utf-8')).get('fit_info') or {}).get('test_clips') or 1)
+        fit_info = json.loads(found.read_text(encoding='utf-8')).get('fit_info') or {}
+        fitted = int(fit_info.get('test_clips') or 1)
+        fitted_crops = int(fit_info.get('test_crops') or 1)
     except (OSError, ValueError, TypeError):
         return False
+    if fitted_crops != int(test_crops):
+        warn(f'Warning: the error model ({found}) was fitted on {fitted_crops} crop(s) per clip, but this run averages '
+             f'{test_crops}; expected_error may be miscalibrated. Use --test_crops {fitted_crops} to match it.')
+        return True
     if fitted == int(test_clips):
         return False
     warn(f'Warning: the error model ({found}) was fitted on {fitted} clip(s) per video, but this run averages '

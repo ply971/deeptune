@@ -154,15 +154,18 @@ def train(
     trainer.fit_error_model = not getattr(args, 'no_error_model', False)
     trainer.data_identity.update(train_file=data_fingerprint(train_df), val_file=data_fingerprint(val_df))
     # The error model must see what evaluation sees: with --test_clips N it is
-    # fitted on N-clip averaged validation probabilities (A2 V-016).
-    trainer.error_fit_info = {'test_clips': video_options.test_clips}
+    # fitted on N-clip averaged validation probabilities (A2 V-016), and with
+    # --test_crops K on the K-crop average inside each clip.
+    trainer.error_fit_info = {'test_clips': video_options.test_clips, 'test_crops': video_options.test_crops}
+    if video_options.test_crops > 1 and video_options.test_clips == 1 and trainer.fit_error_model:
+        trainer.error_fit_model = wrap_for_test_clips(model, 1, mode, test_crops=video_options.test_crops)
     if video_options.test_clips > 1 and trainer.fit_error_model:
         fit_dataset = ParquetVideoDataset.from_parquet(parquet_file=val_df, transform=transformations, num_frames=num_frames,
                                                        clip_transform=clip_transform, train=False, options=video_options,
                                                        num_clips=video_options.test_clips)
         trainer.error_fit_loader = DataLoader(fit_dataset, **video_loader_kwargs(fit_dataset, batch_size, False,
                                                                                  video_options.num_workers))
-        trainer.error_fit_model = wrap_for_test_clips(model, video_options.test_clips, mode)
+        trainer.error_fit_model = wrap_for_test_clips(model, video_options.test_clips, mode, test_crops=video_options.test_crops)
 
     print('The Trainer class is loaded successfully.')
 

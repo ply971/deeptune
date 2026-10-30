@@ -136,7 +136,7 @@ class VideoEmbeddingModel:
                  options: VideoDataOptions | None = None):
         self.options = options or VideoDataOptions()
         # --test_clips N: embeddings are averaged over N clips per video.
-        self.model = wrap_for_test_clips(model, self.options.test_clips, 'cls')
+        self.model = wrap_for_test_clips(model, self.options.test_clips, 'cls', test_crops=self.options.test_crops)
         self.model_version = model_version
         self.added_layers = added_layers
         self.embed_size = embed_size

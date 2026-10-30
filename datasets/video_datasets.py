@@ -103,6 +103,7 @@ class VideoDataOptions:
     video_flip: bool = False
     video_speed_perturb: float = 0.0
     test_clips: int = 1
+    test_crops: int = 1
     num_workers: object = 'auto'
 
     def __post_init__(self):
@@ -131,7 +132,7 @@ class VideoDataOptions:
 _OPTION_TYPES = {
     'video_backend': str, 'temporal_sampling': str, 'clip_stride': int, 'clip_duration_sec': float,
     'motion_source': str, 'video_augment': bool, 'video_flip': bool, 'video_speed_perturb': float,
-    'test_clips': int, 'num_workers': (int, str),
+    'test_clips': int, 'test_crops': int, 'num_workers': (int, str),
 }
 
 

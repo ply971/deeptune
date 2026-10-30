@@ -6,7 +6,7 @@ import torch.nn as nn
 import torchvision.models.video as video_models
 
 from src.video.video3d_peft import adjustedPeftVideo3D, lora_target_modules, upgrade_legacy_lora_state
-from trainers.param_budget import lora_coverage, parameter_group
+from trainers.param_budget import lora_coverage, lora_size_warning, parameter_group, summarize_parameters
 
 
 def _legacy_targets(model):
@@ -153,3 +153,26 @@ def test_weights_of_another_shape_fail_with_a_clear_message():
         _peft(rank=5).load_state_dict(state)
     with pytest.raises(RuntimeError, match='do not fit'):
         _peft().load_state_dict({'nonsense.weight': torch.zeros(1)})
+
+
+def test_cost_per_rank_on_r3d_18_and_the_warning_for_oversized_lora():
+    """The figures in the README: one rank costs about 98k here, so rank 1000 would be about 3x the backbone."""
+    one, two = summarize_parameters(_peft(1)), summarize_parameters(_peft(2))
+    per_rank = two['breakdown']['lora']['trainable'] - one['breakdown']['lora']['trainable']
+    assert 90_000 < per_rank < 100_000
+    assert 2.5 < per_rank * 1000 / one['breakdown']['backbone']['total'] < 3.5
+    assert lora_size_warning(one) is None
+    oversized = {'breakdown': {'lora': {'trainable': per_rank * 1000}, 'backbone': {'total': one['breakdown']['backbone']['total']}}}
+    assert '--embed_size' in lora_size_warning(oversized)
+
+
+def test_trainer_logs_the_oversized_lora_warning(tmp_path, caplog, monkeypatch):
+    import logging
+    from torch.utils.data import DataLoader, TensorDataset
+    import trainers.param_budget as budget
+    from trainers.vision.trainer import Trainer
+    monkeypatch.setattr(budget, 'lora_size_warning', lambda summary: 'LoRA is too big')
+    loader = DataLoader(TensorDataset(torch.randn(2, 2, 3, 16, 16), torch.tensor([0, 1])), batch_size=2)
+    with caplog.at_level(logging.WARNING):
+        Trainer(_peft(1), loader, loader, 1e-3, 'cls', 1, tmp_path)
+    assert 'LoRA is too big' in caplog.text

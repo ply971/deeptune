@@ -6,7 +6,7 @@ import it too (it must never import torch)."""
 # and infer.py, so inference rebuilds exactly the pipeline the run recorded.
 VIDEO_DATA_ARG_NAMES = ('video_backend', 'video_storage', 'temporal_sampling', 'clip_stride', 'clip_duration_sec',
                         'motion_source', 'video_augment', 'video_flip', 'video_speed_perturb', 'test_clips',
-                        'num_workers')
+                        'test_crops', 'num_workers')
 
 
 def _positive_int(text):
@@ -63,6 +63,8 @@ motion: MGSampler, evenly spaced along the cumulative motion curve (more frames 
                    help='Motion curve for --temporal_sampling motion: codec motion vectors (PyAV) or frame differences; auto = codec if available.')
     g.add_argument('--test_clips', type=_positive_int, default=1,
                    help='Clips per video at test/embedding/inference time; predictions average the clip probabilities (default 1).')
+    g.add_argument('--test_crops', type=int, choices=[1, 3, 5], default=1,
+                   help='Spatial views per clip at test/embedding/inference time: 3 along the long side, or 4 corners + centre (default 1). Multiplies with --test_clips, and so does the run time.')
     g.add_argument('--num_workers', type=_workers, default='auto',
                    help="""DataLoader worker processes for video. auto (default): 0 on CPU; on Windows + GPU 0 for
 datasets under 500 clips (each spawned worker re-imports torch, 15-40 s) and up to 4 above; min(8, cpu/2) elsewhere.""")
