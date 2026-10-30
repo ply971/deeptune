@@ -297,13 +297,16 @@ single-reference encoders (MPEG-4 Part 2, x264 `refs=1`);
 **Frame cache** (`--frame_cache DIR`, off by default): sampled frames are shrunk so their
 short side is `--frame_cache_size` pixels (default 256; `0` keeps the decoded size) and
 stored as memory-mapped arrays, keyed by the file, the sampling settings, the frame indices,
-the size and the decoder. Later reads decode nothing. Only deterministic clips are cached:
+the size and the decoder. A hit does not decode the sampled frames again, but each one still
+probes the file's metadata, which demuxes it and decodes one frame. Only deterministic clips are cached:
 all of validation, test, embedding and inference, and training with plain `uniform`
 sampling. Training with `segment`, `dense`, `motion`, `--clip_duration_sec` or
 `--video_augment` draws different frames every epoch, so those clips are decoded each time
 (a warning says so) rather than reusing one draw. The first read of a clip shrinks it once,
-so with a cache the frames the model's resize sees differ slightly from an uncached run;
-the setting is saved with the run, so inference uses the same pipeline. Interrupted or
+so with a cache the frames the model's resize sees differ slightly from an uncached run.
+The size belongs to the pipeline and the folder to the machine: `infer.py` inherits the size
+(`--frame_resize`, which also works without a cache; `0` turns it off) but not the folder, so
+pass `--frame_cache` again to use one, and it warns if the size differs from training. Interrupted or
 concurrent writes never leave a readable partial entry. The cache has no size limit; delete
 the folder to reclaim the space.
 
@@ -329,17 +332,17 @@ Finished videos are skipped, so an interrupted run continues where it stopped.
 
 | flag | default | meaning |
 |---|---|---|
-| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files |
+| `--data` | required | CSV/XLSX manifest or parquet (paths or bytes); an optional `video_id` column names the files. One id cannot stand for two videos or trims |
 | `--out` | required | feature folder; a folder holds one configuration per stream |
 | `--streams` | `rgb` | `rgb` and/or `motion` |
 | `--model_version` | `r3d_18` | `rgb` backbone: any DeepTune video or frame backbone |
-| `--motion_backbone` | `r3d_18` | `motion` backbone, first convolution inflated to 2 channels |
+| `--motion_backbone` | `r3d_18` | `motion` backbone; dx, dy and their magnitude go through its RGB filters, which were not trained on motion |
 | `--motion_method` | `auto` | `codec` motion vectors, `farneback` flow, or `auto` (codec, else Farneback; recorded per video) |
 | `--feature_weights` | `pretrained` | `none` = fixed random weights, for tests and timing only |
 | `--snippet_frames` / `--snippet_stride` | 16 / same | frames per snippet / between snippet starts |
 | `--cache_tokens` | `none` | `none` = one vector `[N, D]`; `8x4x4` = pooled token grid `[N, 8, 4, 4, D]` |
 | `--batch_size` | 8 | snippets per forward pass |
-| `--feature_input_size` | backbone's own | square input size |
+| `--feature_input_size` | backbone's own | square input size; keeps that backbone's normalisation |
 | `--video_backend` | `auto` | decoder |
 
 **Snippets.** `N = ceil((frames - snippet_frames) / stride) + 1` (1 for a short video), with the
@@ -347,11 +350,18 @@ last snippet padded by repeating the final frame. With a stride larger than the 
 snippet starts after the last frame.
 
 **Layout.** `<out>/rgb/<video_id>.npy` and `<out>/motion/<video_id>.npy` are float16 arrays, each
-with a `.json` sidecar (fps, snippet_frames, stride, backbone, weights, weights_licence, stream,
-frame range, and float16 rounding stats). `datasets.snippet_features.load_snippet_features(out,
+with a `.json` sidecar (fps, snippet_frames, stride, backbone, weights, the licence of exactly those
+weights where torchvision states one, the input size really fed, stream, frame range and trim, and
+float16 rounding stats; motion also records `motion_weights_trained_on_motion: false`). `datasets.snippet_features.load_snippet_features(out,
 video_id)` returns `[N, D_rgb + D_motion]` plus the split. A value that float16 cannot hold (NaN,
 inf, above 65504) fails that video instead of being stored; failures go to `<out>/failed.json`, and
 the command exits with status 1. Run it again to retry them.
+
+**Training a head.** `train_feature_head.py` needs only the feature folder and manifests with `videos`
+or `video_id` plus labels; the video files may be gone. It refuses splits that share an id, a source
+video (two trims of one video count) or a value of the `group` column, and warns if a split has no
+`group` column. `--test_df` writes `metrics.json` (accuracy, balanced accuracy, macro-F1, confusion
+matrix; MSE, RMSE, MAE, R2 for regression) and per-video `predictions.csv`, the input to a paired test.
 
 **Token grids and the attentive probe.** A mean-pooled vector throws away where and when something
 happened. `--cache_tokens 8x4x4` keeps a coarse grid, and `train_feature_head.py --head
