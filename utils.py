@@ -239,7 +239,7 @@ def build_video_model(
 #         json.dump(cli_dict, f, indent=4)
 
 
-def set_seed(use_fixed_seed: bool) -> None:
+def set_seed(use_fixed_seed: bool) -> int:
     if use_fixed_seed:
         SEED = 42
         fixed_seed(SEED)
