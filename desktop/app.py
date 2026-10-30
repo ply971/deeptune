@@ -47,7 +47,7 @@ if str(ROOT) not in sys.path:
 # only happen in this worker process, never in the long-lived GUI process
 # itself. An unfrozen `python desktop/app.py` never takes this branch;
 # runner.py keeps using a real python.exe + the on-disk script path there.
-if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker"):
+if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", "--track-worker"):
     # PyInstaller's windowed bootloader doesn't reliably pick up
     # PYTHONIOENCODING for this process's stdio the way a plain python.exe
     # does -- confirmed by testing: even with runner.py's env=utf-8 set,
@@ -66,6 +66,9 @@ if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker"):
     if sys.argv[1] == "--deeptune-worker":
         import deeptune
         sys.exit(deeptune.main(sys.argv[2:]))
+    elif sys.argv[1] == "--track-worker":
+        import track
+        sys.exit(track.cli(sys.argv[2:]))
     else:
         import infer
         sys.exit(infer.main(sys.argv[2:]))
@@ -73,6 +76,7 @@ if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker"):
 import dearpygui.dearpygui as dpg
 import pandas as pd
 
+from desktop import analyse_page
 from desktop import config as gc
 from desktop import dpg_context as ui
 from desktop.dpg_context import ItemId
@@ -109,6 +113,7 @@ NAV_ITEMS = [
     ("run", "04   Run"),
     ("results", "05   Results"),
     ("test", "06   Test"),
+    ("analyse", "07   Analyse Video"),
 ]
 
 _FONTS: dict[str, ItemId] = {}
@@ -263,6 +268,7 @@ def _set_status(message: str, color: tuple[int, int, int]) -> None:
 def on_nav_selected(sender: ItemId = 0, app_data: Any = None, user_data: str = "overview") -> None:
     if user_data != 'dataset' and _video_player is not None:
         _video_player.pause()
+    analyse_page.on_page_changed(user_data)
     for key, _ in NAV_ITEMS:
         dpg.set_value(f"nav_{key}", key == user_data)
         dpg.configure_item(f"page_{key}", show=key == user_data)
@@ -1403,6 +1409,7 @@ def _build_dialogs() -> None:
         # clip, or a labeled video CSV/XLSX list (already covered above).
         for ext in ('.*', '.csv', '.xlsx', '.parquet', *IMAGE_EXTENSIONS, *VIDEO_EXTENSIONS):
             dpg.add_file_extension(ext)
+    analyse_page.build_dialogs()
 
 
 # ---------------------------------------------------------------------------
@@ -1735,12 +1742,14 @@ def update_layout(width: int | None = None, height: int | None = None) -> None:
     for item, original_wrap in _WRAPPED_TEXT:
         dpg.configure_item(item, wrap=min(original_wrap, content_width))
     for tag, normal_width in (('data_path_input', -400 if key[2] == 'video' and _flag('raw_data_checkbox') else -280),
-                              ('test_data_path_input', -280), ('outdir_input', -190)):
+                              ('test_data_path_input', -280), ('outdir_input', -190),
+                              (analyse_page.VIDEO_INPUT, -280)):
         dpg.configure_item(tag, width=-1 if compact else normal_width)
     dpg.configure_item('status_text', wrap=sidebar_width - 40)
     dpg.configure_item('sidebar_note', wrap=sidebar_width - 40)
     dpg.configure_item('studio_art', width=min(780, content_width))
     _fit_video_preview()
+    analyse_page.fit_preview()
 
 
 def build_ui() -> None:
@@ -1788,6 +1797,11 @@ def build_ui() -> None:
                 _build_run_page()
                 _build_results_page()
                 _build_test_page()
+                analyse_page.build(analyse_page.Shell(
+                    card=_card, heading=_heading, set_status=_set_status, dialog_path=_dialog_path,
+                    show_dialog=on_show_dialog, themes=_THEMES, output_folder=lambda: _text('outdir_input'),
+                    palette=analyse_page.Palette(accent=ACCENT, analysis=ACCENT_LIGHT, success=SUCCESS, error=ERROR,
+                                                 warning=WARNING, primary=TEXT_PRIMARY, muted=TEXT_MUTED)))
     dpg.bind_item_theme('workspace_content', _THEMES['workspace'])
     dpg.bind_item_theme('preview_container', _THEMES['media'])
     dpg.bind_item_theme('video_play_button', _THEMES['run_button'])
@@ -1825,6 +1839,7 @@ def run_gui() -> None:
             update_layout()
             poll_run_state()
             poll_infer_run_state()
+            analyse_page.poll()
             poll_preview()
             poll_video_playback()
             dpg.render_dearpygui_frame()
@@ -1837,6 +1852,7 @@ def run_gui() -> None:
             _current_run.close()
         if _current_infer_run is not None:
             _current_infer_run.close()
+        analyse_page.shutdown()
         stop_video_playback(timeout=2)
         dpg.destroy_context()
 
