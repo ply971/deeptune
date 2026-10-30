@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--features', required=True, help='Feature folder written by extract_features.py.')
     p.add_argument('--train_df', required=True, help='Training rows: CSV/XLSX/parquet with videos (or video_id) and labels.')
     p.add_argument('--val_df', required=True, help='Validation rows.')
-    p.add_argument('--test_df', default=None, help='Optional test rows; the final metric goes to metrics.json.')
+    p.add_argument('--test_df', default=None, help='Optional test rows, disjoint from train and val; writes metrics.json and per-video predictions.csv.')
     p.add_argument('--out', required=True, type=Path, help='Output folder.')
     p.add_argument('--head', choices=['attentive_probe', 'linear_probe'], default='attentive_probe', help='Head (default attentive_probe).')
     p.add_argument('--streams', nargs='+', choices=['rgb', 'motion'], default=None,
@@ -44,20 +44,61 @@ def _loader(dataset, batch_size, shuffle, workers):
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=workers)
 
 
-def evaluate_head(model, loader, mode):
+def audit_splits(splits):
+    """Refuse splits that share a feature entry, a source video (so two trims of one video count) or a `group`."""
+    import itertools
+    import pandas as pd
+    for (left_name, left), (right_name, right) in itertools.combinations(splits.items(), 2):
+        for field in ('video_ids', 'sources', 'groups'):
+            a, b = getattr(left, field), getattr(right, field)
+            if a is None or b is None:
+                continue
+            shared = {str(v) for v in a if pd.notna(v)} & {str(v) for v in b if pd.notna(v)}
+            if shared:
+                raise ValueError(f'Split leakage: {left_name} and {right_name} share {field}: '
+                                 f'{sorted(shared)[:3]}. Use disjoint videos and groups.')
+    grouped = all(d.groups is not None for d in splits.values())
+    if not grouped:
+        print("WARNING: not every split has a 'group' column, so clips of one person or scene could still be on both "
+              'sides; only ids and source videos were checked.')
+    return {'checked_splits': list(splits), 'video_and_source_overlap': False,
+            'group_check': 'checked' if grouped else 'incomplete: group column missing from one or more splits'}
+
+
+def evaluate_head(model, loader, mode, predictions_path=None):
     import torch
+    import numpy as np
+    import pandas as pd
+    from sklearn.metrics import (accuracy_score, balanced_accuracy_score, confusion_matrix, f1_score, mean_absolute_error,
+                                 mean_squared_error, r2_score)
     from options import DEVICE
     model.eval()
-    right, squared, total = 0, 0.0, 0
+    truth, scores = [], []
     with torch.no_grad():
         for inputs, labels in loader:
             outputs = model(inputs.to(DEVICE)).cpu()
-            total += len(labels)
-            if mode == 'cls':
-                right += int((outputs.argmax(dim=1) == labels).sum())
-            else:
-                squared += float(((outputs.view(-1) - labels.float()) ** 2).sum())
-    return {'accuracy': right / total, 'n': total} if mode == 'cls' else {'mse': squared / total, 'n': total}
+            truth.extend(labels.numpy().reshape(-1).tolist())
+            scores.append(outputs.softmax(dim=1).numpy() if mode == 'cls' else outputs.numpy().reshape(-1))
+    if not truth:
+        raise ValueError('Cannot evaluate an empty feature dataset.')
+    scores = np.concatenate(scores)
+    prediction = scores.argmax(axis=1) if mode == 'cls' else scores
+    rows = {'video_id': loader.dataset.video_ids, 'target': truth, 'prediction': prediction}
+    if getattr(loader.dataset, 'groups', None) is not None:
+        rows['group'] = loader.dataset.groups
+    if mode == 'cls':
+        metrics = {'accuracy': accuracy_score(truth, prediction),
+                   'balanced_accuracy': balanced_accuracy_score(truth, prediction),
+                   'macro_f1': f1_score(truth, prediction, average='macro', zero_division=0),
+                   'confusion_matrix': confusion_matrix(truth, prediction, labels=range(scores.shape[1])).tolist()}
+        rows.update({f'probability_{i}': scores[:, i] for i in range(scores.shape[1])})
+    else:
+        mse = mean_squared_error(truth, prediction)
+        metrics = {'mse': mse, 'rmse': float(np.sqrt(mse)), 'mae': mean_absolute_error(truth, prediction),
+                   'r2': r2_score(truth, prediction) if len(truth) > 1 else None}
+    if predictions_path is not None:
+        pd.DataFrame(rows).to_csv(predictions_path, index=False)
+    return {**metrics, 'n': len(truth)}
 
 
 def train(args: argparse.Namespace) -> Path:
@@ -69,9 +110,15 @@ def train(args: argparse.Namespace) -> Path:
     common = dict(features_dir=args.features, streams=args.streams, num_snippets=args.num_snippets, target=args.target)
     train_set = CachedFeatureDataset(args.train_df, train=True, **common)
     val_set = CachedFeatureDataset(args.val_df, train=False, **common)
+    test_set = CachedFeatureDataset(args.test_df, train=False, **common) if args.test_df else None
+    splits = {'train': train_set, 'val': val_set}
+    if test_set is not None:
+        splits['test'] = test_set
+    audit = audit_splits(splits)
     options = dict(width=args.probe_width, depth=args.probe_depth, num_heads=args.probe_heads) if args.head == 'attentive_probe' else {}
     model = build_feature_head(args.head, train_set.feature_dim(), args.num_classes, args.mode, **options)
     args.out.mkdir(parents=True, exist_ok=True)
+    (args.out / 'split_audit.json').write_text(json.dumps(audit, indent=2), encoding='utf-8')
     trainer = Trainer(model, train_loader=_loader(train_set, args.batch_size, True, args.num_workers),
                       val_loader=_loader(val_set, args.batch_size, False, args.num_workers),
                       learning_rate=args.learning_rate, mode=args.mode, num_epochs=args.num_epochs, output_dir=args.out)
@@ -83,8 +130,8 @@ def train(args: argparse.Namespace) -> Path:
     arguments['input_dim'] = train_set.feature_dim()
     (args.out / 'cli_arguments.json').write_text(json.dumps(arguments, indent=2), encoding='utf-8')
     if args.test_df:
-        test_set = CachedFeatureDataset(args.test_df, train=False, **common)
-        metrics = evaluate_head(model, _loader(test_set, args.batch_size, False, 0), args.mode)
+        metrics = evaluate_head(model, _loader(test_set, args.batch_size, False, 0), args.mode,
+                                predictions_path=args.out / 'predictions.csv')
         (args.out / 'metrics.json').write_text(json.dumps(metrics, indent=2), encoding='utf-8')
         print(f'Test: {metrics}')
     return weights

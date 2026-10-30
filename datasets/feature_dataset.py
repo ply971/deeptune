@@ -13,6 +13,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
@@ -24,7 +25,7 @@ def _finite_or_none(values, i: int):
     return None if values is None or not np.isfinite(values[i]) else float(values[i])
 
 
-def open_feature_source(source):
+def open_feature_source(source, *, features_only=False):
     """(video dataset, its non-clip columns). Labels may be class names here: nothing is trained on this dataset."""
     root = None
     if isinstance(source, pd.DataFrame):
@@ -36,15 +37,19 @@ def open_feature_source(source):
             table = pd.read_csv(path)
         elif path.suffix.lower() == '.xlsx':
             table = pd.read_excel(path)
-        elif detect_video_storage(path) == 'paths':
+        elif (features_only and 'videos' not in pq.read_schema(path).names) or detect_video_storage(path) == 'paths':
             table = pd.read_parquet(path)
         else:  # bytes parquet: the dataset memory-maps large files instead of loading them
             dataset = open_video_dataset(path, num_frames=1)
             return dataset, dataset.data
     columns = table.drop(columns=['videos'], errors='ignore')
+    if features_only and 'videos' not in table.columns:
+        if 'video_id' not in table.columns or table['video_id'].isna().any():
+            raise ValueError('Feature-only manifests need a video_id for every row.')
+        return table, columns
     clips = table.drop(columns=['labels'], errors='ignore')
     if detect_video_storage(table) == 'paths':
-        return VideoDataset(clips, num_frames=1, root=root), columns
+        return VideoDataset(clips, num_frames=1, root=root, check_files=not features_only), columns
     return ParquetVideoDataset(clips, num_frames=1), columns
 
 
@@ -87,7 +92,7 @@ class CachedFeatureDataset(Dataset):
             raise FileNotFoundError(f'{features_dir} has no extracted features; run extract_features.py first.')
         self.num_snippets = int(num_snippets)
         self.train = bool(train)
-        dataset, columns = open_feature_source(source)
+        dataset, columns = open_feature_source(source, features_only=True)
         if target not in columns.columns:
             raise ValueError(f'The feature dataset needs a {target!r} column with the labels.')
         if not pd.api.types.is_numeric_dtype(columns[target]):
@@ -96,6 +101,22 @@ class CachedFeatureDataset(Dataset):
         self.labels = columns[target].to_numpy()
         self.float_labels = bool(pd.api.types.is_float_dtype(columns[target]))
         self.video_ids = [row_video_id(dataset, columns, i) for i in range(len(dataset))]
+        self.groups = columns['group'].tolist() if 'group' in columns else None
+        # A source path catches disjoint trims of one video and aliases with distinct IDs.
+        self.sources = ([str(Path(p).resolve()).casefold() for p in dataset.paths]
+                        if isinstance(dataset, VideoDataset) else list(self.video_ids))
+        trims = {name: pd.to_numeric(columns[name], errors='coerce').to_numpy(dtype=float)
+                 for name in ('start_sec', 'end_sec') if name in columns}
+        for i, vid in enumerate(self.video_ids):
+            sidecar = self.store.read_sidecar(self.streams[0], vid) or {}
+            source = sidecar.get('source')
+            if source and not source.startswith('<'):
+                self.sources[i] = str(Path(source).resolve()).casefold()
+            extracted = sidecar.get('source_range') or {}
+            for name, values in trims.items():
+                if name in extracted and extracted[name] != _finite_or_none(values, i):
+                    raise ValueError(f'Video {vid!r}: this row asks for {name}={_finite_or_none(values, i)}, but its features '
+                                     f'were extracted with {extracted[name]}. Run extract_features.py on these rows again.')
         missing = [(stream, vid) for vid in self.video_ids for stream in self.streams
                    if not self.store.array_path(stream, vid).is_file()]
         if missing:
