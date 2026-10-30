@@ -372,6 +372,102 @@ def test_video_end_to_end_train_eval_infer_with_expected_error(tmp_path, monkeyp
     assert list(old.columns) == [c for c in direct.columns if c != 'expected_error']
 
 
+class _OldPeftVideo3D(__import__('src.video.video3d_peft', fromlist=['x']).adjustedPeftVideo3D):
+    """The LoRA targets of a714204: exact types only, so 4 of r3d_18's 20 convs."""
+
+    def applyPEFT(self, model):
+        from peft import LoraConfig, get_peft_model
+        kinds = [nn.Conv3d, nn.Conv2d, nn.Linear]
+        targets = [n for n, m in model.named_modules() if type(m) in kinds and not (hasattr(m, 'groups') and m.groups != 1)]
+        return get_peft_model(model, LoraConfig(r=self.lora_attention_dimension, lora_alpha=16, lora_dropout=0.1,
+                                                bias='none', target_modules=targets))
+
+
+def _constant_error_model(fingerprint, **fit_info):
+    model = em.ErrorModel('cls', method='constant').fit(em.prediction_features(np.array([[0.6, 0.4]] * 3), 'cls'),
+                                                        [0, 1, 0], num_outputs=2)
+    model.fit_info.update(weights_sha256=fingerprint, weights_fingerprint_method=em.FINGERPRINT_METHOD, **fit_info)
+    return model
+
+
+@pytest.fixture
+def old_peft_video_run(tmp_path, monkeypatch):
+    """An old PEFT run: its weights, its error model and a record without lora_rank."""
+    import evaluators.video.evaluate as video_eval
+    import inference.video as video_inference
+    monkeypatch.setattr(video_eval, 'transformations', SMALL)
+    monkeypatch.setattr(video_inference, 'transformations', SMALL)
+    torch.manual_seed(0)
+    old = _OldPeftVideo3D(2, 'dummy_video3d', 2, 3)
+    run_dir = tmp_path / 'trainval'
+    run_dir.mkdir()
+    ckpt = run_dir / 'model_weights.pth'
+    torch.save(old.state_dict(), ckpt)
+    (run_dir / 'cli_arguments.json').write_text(json.dumps({'embed_size': 3, 'use_peft': True}), encoding='utf-8')
+    _constant_error_model(em.weights_fingerprint(old.state_dict()), validation_used_for_model_selection=True,
+                          selection_metric='val_loss', best_epoch=4).save(run_dir / 'error_model.json')
+    return ckpt, _video_split(tmp_path, 'test', 4, 5)
+
+
+def test_old_peft_video_run_keeps_expected_error_through_inference(old_peft_video_run, caplog):
+    from inference.video import predict_video
+    ckpt, test_pq = old_peft_video_run
+    predictions = predict_video(pd.read_parquet(test_pq), ckpt, 'dummy_video3d', 2, 2, 3, False, 'cls', True, 2, num_frames=2)
+    assert predictions['expected_error'].between(0, 1).all()
+    assert 'other weights' not in caplog.text
+
+
+def test_old_peft_video_run_keeps_expected_error_through_evaluate(old_peft_video_run, tmp_path):
+    import evaluators.video.evaluate as video_eval
+    ckpt, test_pq = old_peft_video_run
+    metrics = video_eval.evaluate(eval_df=test_pq, out=tmp_path, model_weights=ckpt, num_classes=2,
+                                  model_version='dummy_video3d', mode='cls', added_layers=2, embed_size=3,
+                                  batch_size=2, freeze_backbone=False, args=_Args(), use_peft=True,
+                                  model_str='old', num_frames=2)
+    eval_dir = next(tmp_path.glob('eval_output_old_*'))
+    assert metrics['error_estimate']['n'] == 4
+    assert pd.read_csv(eval_dir / 'predictions.csv')['expected_error'].between(0, 1).all()
+    # The calibration report says whether validation also chose the weights (V-040).
+    report = json.loads((eval_dir / 'error_calibration.json').read_text())
+    assert report['error_model']['validation_used_for_model_selection'] is True
+    assert report['error_model']['selection_metric'] == 'val_loss' and report['error_model']['best_epoch'] == 4
+
+
+def test_an_error_model_of_other_weights_is_still_refused_for_an_old_peft_run(old_peft_video_run, caplog):
+    from inference.video import predict_video
+    ckpt, test_pq = old_peft_video_run
+    _constant_error_model('0' * 64).save(ckpt.parent / 'error_model.json')
+    predictions = predict_video(pd.read_parquet(test_pq), ckpt, 'dummy_video3d', 2, 2, 3, False, 'cls', True, 2, num_frames=2)
+    assert 'expected_error' not in predictions.columns
+
+
+def test_old_peft_image_run_keeps_expected_error_through_inference(tmp_path, monkeypatch):
+    import io
+    from PIL import Image
+    from inference.vision import predict_images
+    from src.vision.swin_peft import adjustedPeftSwin
+
+    class OldSwin(adjustedPeftSwin):
+        def applyPEFT(self, model):
+            from peft import LoraConfig, get_peft_model
+            targets = [n for n, m in model.named_modules() if isinstance(m, nn.Linear) and ('qkv' in n or 'proj' in n)]
+            return get_peft_model(model, LoraConfig(r=2, lora_alpha=16, lora_dropout=0.1, bias='none', target_modules=targets))
+
+    monkeypatch.setattr(torchvision.models, 'swin_b', lambda weights=None: torchvision.models.SwinTransformer(
+        patch_size=[4, 4], embed_dim=8, depths=[1, 1], num_heads=[2, 2], window_size=[2, 2]))
+    old = OldSwin(2, 'dummy', 1, 2)
+    ckpt = tmp_path / 'model_weights.pth'
+    torch.save(old.state_dict(), ckpt)
+    _constant_error_model(em.weights_fingerprint(old.state_dict())).save(tmp_path / 'error_model.json')
+
+    buffer = io.BytesIO()
+    Image.fromarray(np.full((16, 16, 3), 80, dtype=np.uint8)).save(buffer, format='PNG')
+    predictions = predict_images(pd.DataFrame({'images': [buffer.getvalue()] * 2}), ckpt, model_architecture='swin',
+                                 model_version='dummy', num_classes=2, added_layers=1, embed_size=2,
+                                 freeze_backbone=False, mode='cls', use_peft=True, batch_size=2)
+    assert predictions['expected_error'].between(0, 1).all()
+
+
 def test_image_inference_adds_expected_error_only_with_error_model(tmp_path):
     import io
     from PIL import Image

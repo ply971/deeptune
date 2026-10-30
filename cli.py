@@ -2,11 +2,23 @@ from argparse import ArgumentParser, RawTextHelpFormatter
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-from utils import UseCase, RunType, get_model_architecture, set_seed
+from utils import UseCase, RunType, get_model_architecture, is_native_video_architecture, lora_rank_ignored_reason, set_seed
 from trainers.param_count import parse_param_count
 from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
+from handlers.training_args import TRAINING_BASICS_ARG_NAMES, add_training_basics_arguments, apply_config_defaults
 import json
 import os, shutil
+
+DEFAULT_LORA_RANK = 16
+
+
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise ValueError(text)
+    return value
+
+
 class DeepTuneVisionOptions:
     """
     Class for dynamically creating DeepTune's CLI arguments.
@@ -36,7 +48,16 @@ class DeepTuneVisionOptions:
         if run_type == (RunType.TIMESERIES):
             self._add_timeseries_args()
 
+        # --- training basics (T1): --config file values become defaults, explicit flags win ---
+        apply_config_defaults(self.parser, args)
+        # --- end training basics ---
         parsed_args = self.parser.parse_args(args)
+        # --- training basics (T1) ---
+        self.config: Optional[str] = parsed_args.config
+        if run_type in (RunType.TRAIN, RunType.ONECALL):
+            for name in TRAINING_BASICS_ARG_NAMES:
+                setattr(self, name, getattr(parsed_args, name))
+        # --- end training basics ---
         # self.input_dir: Optional[Path] = parsed_args.input_dir.resolve() if parsed_args.input_dir else None
         self.out: Optional[Path] = parsed_args.out.resolve() if parsed_args.out else None
         self.batch_size: Optional[int] = parsed_args.batch_size
@@ -174,6 +195,22 @@ class DeepTuneVisionOptions:
         
         self.model = self._parse_model_str(run_type)
         self.model_architecture = ( get_model_architecture(self.model_version) ) if self.model_version else 'not_provided'
+        if run_type in (RunType.TRAIN, RunType.ONECALL, RunType.EVAL, RunType.EMBED):
+            self.lora_rank: Optional[int] = self._parse_lora_rank(parsed_args.lora_rank, run_type)
+
+    def _parse_lora_rank(self, given: Optional[int], run_type: RunType) -> Optional[int]:
+        """What to record as lora_rank. Evaluation and embedding keep None when the
+        flag is absent, since the value then comes from the run's record. A training
+        run records the rank only when the model reads it, so that None keeps meaning
+        'the rank is embed_size', both for old runs and for the other PEFT models."""
+        if run_type in (RunType.EVAL, RunType.EMBED):
+            return given
+        if self.use_peft and is_native_video_architecture(self.model_version):
+            return DEFAULT_LORA_RANK if given is None else given
+        if given is not None:
+            print(f'--lora_rank {given} is ignored: {lora_rank_ignored_reason(self.model_version, self.use_peft)}')
+        return None
+
     
     def to_dict(self) -> dict:
         d = {}
@@ -198,6 +235,13 @@ class DeepTuneVisionOptions:
     def _add_default_args(self):
         p = self.parser
 
+        # --- training basics (T1) ---
+        p.add_argument('--config', type=str, default=None, metavar='FILE',
+                       help="""JSON or YAML file of default values, keyed by flag name without the dashes, e.g. num_epochs: 20.
+Flags on the command line win. An unknown key is an error. Paths are relative to the current folder.
+A store_true flag set to true in the file cannot be turned off on the command line.""")
+        # --- end training basics ---
+
         # Dataset args
         # p.add_argument('--input_dir', type=Path, help='Directory containing input data.')
         p.add_argument('--mode', type=str, required=False, choices=['reg','cls'], help='Mode: Classification or Regression')
@@ -208,7 +252,11 @@ class DeepTuneVisionOptions:
         # Model args
         p.add_argument('--model_version', type=str, help='Model version to use.')
         p.add_argument('--added_layers', type=int, choices=[1,2], help='Number of layers to add to the model.')
-        p.add_argument('--embed_size', type=int, help='The number of features desired to obtain when using the model to extract embeddings.')
+        p.add_argument('--embed_size', type=int, help='The number of features desired to obtain when using the model to extract embeddings. With --added_layers 2 this is the width of the hidden head layer.')
+        p.add_argument('--lora_rank', type=_positive_int, default=None, metavar='R',
+                       help=f"""LoRA rank for --use-peft on native video models (r3d_18, swin3d_t, ...), default {DEFAULT_LORA_RANK} for training.
+Evaluation and embedding read it from the run's cli_arguments.json. A run recorded without it used --embed_size as the rank.
+Other PEFT models ignore this flag and use --embed_size as their rank.""")
         p.add_argument('--freeze-backbone', action='store_true', help='Freeze backbone.')
         p.add_argument('--fixed-seed', action='store_true', help='Use fixed seed 42.')
         p.add_argument('--batch_size', type=int, help='Batch size.')
@@ -275,6 +323,7 @@ class DeepTuneVisionOptions:
         # timeseries specific
         p.add_argument('--time_idx_column', type=str, default='labels', help='integer typed column denoting the time index within data.')
         self._add_trainable_params_arg()
+        add_training_basics_arguments(p)  # T1
 
     def _add_trainable_params_arg(self):
         self.parser.add_argument(
@@ -282,8 +331,10 @@ class DeepTuneVisionOptions:
             help="""Trainable-parameter budget for images/video, e.g. 250000, 100k or 1.5M (default: no limit).
 Without --use-peft: the new head is always trained, then the top (output-side)
 backbone layers are unfrozen while they fit in the budget; the rest stays frozen.
-With --use-peft: picks the largest LoRA rank (= --embed_size) whose trainable
-count fits, and records that rank as embed_size.
+With --use-peft on native video models: picks the largest LoRA rank whose trainable
+count fits and records it as lora_rank; --embed_size stays the head's width.
+With --use-peft on other models: the same, but the rank is also the head's width,
+so it is recorded as embed_size.
 Overrides --freeze-backbone. The trainable/total count of every run is written
 to parameter_summary.json next to the model weights.""")
 
@@ -296,6 +347,7 @@ to parameter_summary.json next to the model weights.""")
         p.add_argument('--train_df', type=Path, help='PARQUET file containing train data.')
         p.add_argument('--val_df', type=Path, help='PARQUET file containing validation data.')
         self._add_trainable_params_arg()
+        add_training_basics_arguments(p)  # T1
 
     def _add_timeseries_args(self):
         

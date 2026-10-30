@@ -174,6 +174,7 @@ def build_video_model(
     mode: str,
     use_peft: bool = False,
     pooling: str = "mean",
+    lora_rank: int | None = None,
 ) -> nn.Module:
     """
     Builds DeepTune's video classifier for `model_version` - either a native
@@ -183,8 +184,15 @@ def build_video_model(
     [B, T, C, H, W] and share the same forward(x, extract_embed=False) API, so
     the rest of DeepTune's Trainer/TestTrainer/embedding pipeline treats them
     identically regardless of which family was chosen.
+
+    `lora_rank` applies to native PEFT models only, where None means the rank
+    equals embed_size, as in runs recorded before --lora_rank existed. The other
+    PEFT models tie the rank to embed_size and ignore it.
     """
     model_cls = get_video_model_cls(model_version, use_peft=use_peft)
+
+    if lora_rank is not None and not (use_peft and is_native_video_architecture(model_version)):
+        print(f'--lora_rank {lora_rank} is ignored: {lora_rank_ignored_reason(model_version, use_peft)}')
 
     if is_native_video_architecture(model_version):
         if pooling == "single_frame":
@@ -192,6 +200,9 @@ def build_video_model(
                 f"pooling='single_frame' needs a 2D image backbone (e.g. resnet18); "
                 f"{model_version} is a native video architecture."
             )
+        if use_peft:
+            return model_cls(num_classes, model_version, added_layers, embed_size, freeze_backbone, task_type=mode,
+                             lora_rank=lora_rank)
         return model_cls(num_classes, model_version, added_layers, embed_size, freeze_backbone, task_type=mode)
 
     if pooling == "single_frame":
@@ -215,6 +226,31 @@ def build_video_model(
         task_type=mode,
         pooling=pooling,
     )
+
+
+def lora_rank_ignored_reason(model_version: str, use_peft: bool) -> str:
+    """Why --lora_rank has no effect on this model; only native PEFT models read it."""
+    if not use_peft:
+        return 'this run does not use --use-peft.'
+    return f'it only applies to native video models, and {model_version} uses --embed_size as its LoRA rank.'
+
+
+def resolve_lora_rank(args, checkpoint=None) -> int | None:
+    """The LoRA rank to rebuild a native PEFT model with: args.lora_rank when it
+    is set, else the value recorded in cli_arguments.json next to `checkpoint`,
+    else None, which means the rank equals embed_size (old runs)."""
+    rank = getattr(args, 'lora_rank', None)
+    if isinstance(rank, int) and not isinstance(rank, bool):
+        return rank
+    if checkpoint is None:
+        return None
+    try:
+        recorded = json.loads((Path(checkpoint).parent / 'cli_arguments.json').read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return None
+    rank = recorded.get('lora_rank') if isinstance(recorded, dict) else None
+    return rank if isinstance(rank, int) and not isinstance(rank, bool) else None
+
 
 ### DEPRECATED ###
 # def save_cli_args(args: Namespace, outdir: Path) -> None:

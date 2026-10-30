@@ -78,13 +78,26 @@ breakdown) next to `model_weights.pth`.
   approximate) while they fit. The rest of the parameters stay frozen. BatchNorm
   running statistics are buffers, not parameters, so they still update in frozen
   layers during training.
-- **With `--use-peft`**: DeepTune picks the largest LoRA rank that fits. In DeepTune
-  the LoRA rank is also the head's hidden width (`--embed_size`), so the chosen rank
-  is saved as `embed_size` in `cli_arguments.json`, and evaluation, embedding and
-  the Test page rebuild the same model. The log and `parameter_summary.json`
-  (`lora_coverage`) also report how many backbone conv/linear modules received LoRA.
-  For the native 3D CNNs this is currently only some of them (r3d_18: 4 of 20 Conv3d
-  layers, the stem and the downsample convs), so most of the budget goes to the head.
+- **With `--use-peft`**: DeepTune picks the largest LoRA rank that fits.
+  - On native video models (`r3d_18`, `swin3d_t`, ...) the rank is `--lora_rank` (default
+    16) and only the rank is searched: `--embed_size` stays the head's hidden width. The
+    chosen rank is saved as `lora_rank` in `cli_arguments.json`. A budget too small for
+    rank 1 plus the head stops with an error instead of narrowing the head.
+  - Other PEFT models ignore `--lora_rank` and say so. Their rank is also the head's
+    hidden width, so the chosen rank is saved as `embed_size`.
+  - Evaluation, embedding and the Test page rebuild the same model from those records. A
+    run recorded without `lora_rank` used `--embed_size` as its rank, and still rebuilds.
+  - The log and `parameter_summary.json` (`lora_coverage`) report how many backbone
+    conv/linear modules received LoRA. On r3d_18 that is all 20 Conv3d layers. Runs saved
+    before this was fixed had LoRA on 4 of them; their weights still load, and the other
+    adapters start with no effect, so their predictions do not change.
+  - Swin's attention `qkv` and `proj` get no LoRA, because torchvision reads their weights
+    directly and an adapter there would do nothing. swin3d_t therefore reports 28 of 52.
+    Old Swin weights load with those adapters dropped and unchanged predictions. On 2D
+    Swin those two were the only targets, so old `--use-peft` Swin runs trained the head
+    alone; LoRA now goes on the patch embedding, MLPs and patch merging.
+  - Each LoRA rank on r3d_18 costs about 98k trainable parameters, because the adapter's
+    first layer keeps the conv's 3x3x3 kernel, so the default rank of 16 costs about 1.6M.
 
 The head alone has `fc1_in × embed_size + embed_size + embed_size × classes + classes`
 parameters with the default `--added_layers 2`. With the default `--embed_size 1000`
@@ -97,12 +110,66 @@ runs do not support it.
 ```powershell
 # images: a 256-wide head (~132k) plus as many top ResNet-18 layers as fit in 500k parameters
 .venv\Scripts\python.exe deeptune.py --modality images --df data\images --raw-data --out results --model_version resnet18 --embed_size 256 --trainable_params 500k
-# video: LoRA on r3d_18, rank chosen so that at most 100k parameters train
-.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --use-peft --trainable_params 100k
+# video: LoRA on r3d_18 with a 256-wide head, rank chosen so that at most 1M parameters train (rank 8)
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --use-peft --embed_size 256 --trainable_params 1M
 ```
 `tests/training/test_param_budget.py` checks the arithmetic of every example in this
 block, so keep it in sync when you change them.
-  
+
+## Training options (images and video)
+
+Everything here is off by default and does not change a plain run. All flags are saved
+in `cli_arguments.json`. SigLIP has its own training loop and refuses them, and text,
+tabular and timeseries runs do not support them.
+
+| Flags | What they do |
+|---|---|
+| `--precision bf16\|fp16` | Mixed precision on CUDA (fp16 with a GradScaler). On CPU it does nothing and logs that. |
+| `--checkpoint_every N`, `--resume FILE` | Write `last_checkpoint.pt` every N epochs and after the last one, and continue from it at the next epoch boundary. |
+| `--select_best`, `--early_stopping_patience N`, `--early_stopping_min_delta`, `--selection_metric` | Keep the best validation weights and reload them after training. Early stopping also stops the run after N epochs without improvement. |
+| `--lr_scheduler cosine\|step`, `--warmup_epochs`, `--lr_step_size`, `--lr_gamma`, `--min_lr` | Learning-rate schedule, updated at every optimizer step. |
+| `--grad_accum_steps N` | Update every N batches. The gradient is the mean over the samples of the window, and a shorter last window is still applied. BatchNorm still sees the small batches. |
+| `--freeze_bn auto\|on` | Keep backbone BatchNorm in eval mode with frozen parameters, so small batches do not disturb the pretrained statistics. `auto` does this when `--batch_size` is under 16 (a starting guess, not a measured cutoff) and the backbone has BatchNorm and pretrained weights. |
+| `--seed N` | Seeds python, numpy, torch, CUDA and DataLoader workers. In `deeptune.py` it also fixes the data split, so it varies training and keeps the test set. |
+| `--config FILE` | JSON or YAML defaults, keyed by flag name without the dashes. Flags on the command line win, and an unknown key is an error. |
+| `--experiment_logger mlflow\|wandb`, `--experiment_name` | Also log to MLflow or W&B if already installed. DeepTune does not install them. |
+| `--label_smoothing` | Training loss only. Validation reports plain cross-entropy, so scores stay comparable. |
+| `--mixup_alpha`, `--cutmix_alpha`, `--mix_prob` | Mixup and CutMix. All frames of a clip share one weight and one box, so the motion is kept. |
+| `--layer_decay` | Each trainable block one step further from the output gets a learning rate this many times smaller. Depth follows module registration order. |
+| `--ema_decay` | Validate, select and save an exponential moving average of the weights. |
+| `--test_crops 3\|5` | Spatial views at test time, video only. Multiplies with `--test_clips`. Each view is a 7/8 window of the already-resized frame, so it is not the larger-frame 3-crop protocol of the Kinetics papers. |
+
+```powershell
+# video: fp16, cosine schedule with warmup, early stopping on the best weights, resumable
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --seed 7 --precision fp16 --lr_scheduler cosine --warmup_epochs 1 --early_stopping_patience 5 --checkpoint_every 1
+# the same run after a crash; --num_epochs stays the total
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --seed 7 --precision fp16 --lr_scheduler cosine --warmup_epochs 1 --early_stopping_patience 5 --checkpoint_every 1 --resume results\deeptune-...\trainval_output_...\last_checkpoint.pt
+```
+
+**Resume.** A resumed run restores the model, optimizer, scheduler, scaler, EMA, best-so-far,
+logs and all random generators, and on CPU it ends with exactly the same weights as an
+uninterrupted run. It starts again from the last checkpoint, not from the middle of an
+epoch. The run stops if the train/val data differ from the checkpoint's, because the model
+would then have trained on samples now in validation or test: with `deeptune.py`, use
+`--fixed-seed` or `--seed` in both runs. `--resume_allow_data_change` overrides this for a
+deliberate warm start. Changed settings give a warning that names them. With checkpointing
+on, workers restart every epoch, which costs time on Windows.
+
+**Selection.** With `--select_best` or early stopping the validation split selects the
+weights, so its scores are optimistic and it is no longer exchangeable with test data.
+`training_run.json`, `error_model_fit.json` and the test `error_calibration.json` record
+this. The per-prediction error model is fitted on the reloaded best weights, on that same
+split, so use a separate split for any calibration that needs a coverage guarantee. A
+`--resume` of a run that selected must select too, otherwise it stops with an error.
+
+**Files next to the weights.** `training_metrics.csv` (per epoch: losses, accuracy, learning
+rate, updates, seconds, GPU and process memory) and `training_run.json` (the seed in effect,
+the options, what selected the weights, the run's memory maximum, and `environment`: commit,
+torch version, cuDNN determinism flags) are always written. `peak_process_rss_mb` is sampled
+at the end of each epoch and is not a peak of that epoch: on Windows it is the process's
+lifetime high-water mark, elsewhere the current RSS. `peak_memory_meaning` in
+`training_run.json` says the same.
+
 ## Models *DeepTune* Supports (Up to Date)
 
 
