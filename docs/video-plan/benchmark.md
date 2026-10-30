@@ -221,3 +221,26 @@ direction-labelled data (`direction`, `scene_bias`, `untrimmed`). Any future aug
 should call the same guard.
 
 Regenerate the figures on this page with `python scripts/make_benchmark_figures.py`.
+
+### First results (CPU, small; see `docs/video-plan/reports/A3-phase2-benchmarks.md`)
+
+All runs used seed 0, 64×64 clips with 12 frames, and a 112 px input. **Frozen** means only the
+head is trained (5 epochs, lr 1e-3, 300 train / 200 test clips).
+
+**direction**
+
+| Model | Test accuracy |
+|---|---|
+| flow_logreg | 1.000 |
+| single_frame:resnet18 (frozen) | 0.52 |
+| mean:resnet18 (frozen) | 0.51 |
+| attention:resnet18 (frozen) | 0.505 |
+| r3d_18 (frozen) | 0.505 |
+| r3d_18, fully fine-tuned (200 / 200 clips, 3 epochs, lr 1e-4) | **1.000** |
+
+**scene_bias**
+
+| Model | Biased val | Unbiased test |
+|---|---|---|
+| single_frame:resnet18 (frozen) | 0.935 | 0.505 |
+| flow_logreg | 0.995 | 0.995 |
