@@ -433,14 +433,14 @@ def test_gui_budget_field_round_trips_and_is_shown_for_images_and_video(ui, tmp_
 def test_lora_coverage_counts_adapted_and_eligible_modules(tmp_path, caplog):
     import logging
     from trainers.param_budget import format_lora_coverage, lora_coverage
-    # r3d_18 today: LoRA reaches only the stem and the 3 downsample convs (V-007; T1 will fix).
+    # r3d_18: LoRA reaches all 20 convs, including torchvision's Conv3DSimple subclass (V-007, fixed in T1).
     peft = peft_video3d(4)
     coverage = lora_coverage(peft)
     adapted = {n.split(".lora_A")[0] for n, _ in peft.named_parameters() if ".lora_A" in n}
     assert coverage == {"lora_modules": len(adapted), "eligible_modules": 20, "eligible_by_type": {"Conv3d": 20}}
-    assert coverage["lora_modules"] == 4
+    assert coverage["lora_modules"] == 20
     line = format_lora_coverage(summarize_parameters(peft))
-    assert line.startswith("LoRA adapters on 4 of 20 eligible backbone modules (20 Conv3d)")
+    assert line.startswith("LoRA adapters on 20 of 20 eligible backbone modules (20 Conv3d)")
     # Same eligible count without PEFT; no LoRA line then.
     plain = summarize_parameters(adjustedVideo3D(3, "dummy_video3d", 2, 4))
     assert plain["lora_coverage"]["eligible_modules"] == 20 and plain["lora_coverage"]["lora_modules"] == 0
@@ -452,9 +452,9 @@ def test_lora_coverage_counts_adapted_and_eligible_modules(tmp_path, caplog):
     loader = DataLoader(TensorDataset(torch.randn(2, 4, 3, 32, 32), torch.tensor([0, 1])), batch_size=2)
     with caplog.at_level(logging.INFO):
         Trainer(peft, loader, loader, 1e-3, "cls", 1, tmp_path)
-    assert "LoRA adapters on 4 of 20" in caplog.text
+    assert "LoRA adapters on 20 of 20" in caplog.text
     written = json.loads((tmp_path / "parameter_summary.json").read_text(encoding="utf-8"))
-    assert written["lora_coverage"]["lora_modules"] == 4 and written["lora_coverage"]["eligible_modules"] == 20
+    assert written["lora_coverage"]["lora_modules"] == 20 and written["lora_coverage"]["eligible_modules"] == 20
 
 
 def _readme_budget_examples():

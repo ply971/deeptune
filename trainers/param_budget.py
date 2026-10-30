@@ -92,8 +92,7 @@ def lora_coverage(model: nn.Module) -> dict:
     included, e.g. torchvision's Conv3DSimple) in the backbone, not counting
     LoRA's own A/B layers; a LoRA-wrapped layer is counted once, through its
     ``base_layer``. ``lora_modules`` counts the layers that have a ``lora_A``.
-    Reporting both makes partial coverage visible (e.g. r3d_18 PEFT currently
-    puts LoRA on 4 of its 20 Conv3d layers, review V-007).
+    Reporting both makes partial coverage visible.
     """
     eligible: dict[str, int] = {}
     for name, module in model.named_modules():

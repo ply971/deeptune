@@ -1,8 +1,87 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
+from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 
 from src.video.video3d import _build_backbone
+
+
+def lora_target_modules(model):
+    """Names of the modules that get a LoRA adapter.
+
+    Conv3d covers the 3D-CNN backbones (r3d_18, mc3_18, r2plus1d_18) and Linear
+    the video-transformer backbones (mvit_v2_s, swin3d_*). The check is
+    isinstance, because torchvision's 3D ResNets build their convs from
+    subclasses (Conv3DSimple, Conv3DNoTemporal); an exact type check reached
+    only the stem and downsample convs, 4 of r3d_18's 20 (V-007). Grouped convs
+    are skipped, as is the Linear subclass inside nn.MultiheadAttention, whose
+    weights that module reads directly, and any conv subclass with a forward of
+    its own, which plain_conv_subclasses cannot convert.
+    """
+    targets = []
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Conv3d)):
+            if module.groups != 1 or _plain_conv_base(module) is None:
+                continue
+        elif not isinstance(module, nn.Linear) or isinstance(module, NonDynamicallyQuantizableLinear):
+            continue
+        targets.append(name)
+    return targets
+
+
+def _plain_conv_base(module):
+    """nn.Conv2d or nn.Conv3d if ``module`` computes exactly what that class does, else None."""
+    base = nn.Conv3d if isinstance(module, nn.Conv3d) else nn.Conv2d
+    same = type(module).forward is base.forward and type(module)._conv_forward is base._conv_forward
+    return base if same else None
+
+
+def plain_conv_subclasses(model):
+    """Turn conv subclasses into their plain base class, in place.
+
+    PEFT builds each adapter with ``type(base_layer)(in, r, kernel, stride,
+    padding, bias=False)``, which Conv3DSimple's constructor (in_planes,
+    out_planes, midplanes, stride, padding) rejects. These subclasses only
+    differ in that constructor, so the class change alters neither the weights
+    nor the forward pass, and the module names stay the same.
+    """
+    for module in model.modules():
+        if isinstance(module, (nn.Conv2d, nn.Conv3d)) and type(module) not in (nn.Conv2d, nn.Conv3d):
+            base = _plain_conv_base(module)
+            if base is not None:
+                module.__class__ = base
+
+
+def upgrade_legacy_lora_state(model, state_dict):
+    """Convert weights saved before the V-007 fix to this model's layout.
+
+    Those runs had LoRA on the stem and downsample convs only. In their state
+    dict, a conv that has an adapter now holds plain ``X.weight`` where this
+    model has ``X.base_layer.weight`` and ``X.lora_A/B``. The plain weights move
+    to ``base_layer`` and the new adapters are stored with lora_B = 0, so the
+    delta is exactly zero and the old model's predictions are kept.
+
+    Returns (state dict, number of upgraded modules); a state dict with the
+    current layout comes back as it is.
+    """
+    current = model.state_dict()
+    upgraded = dict(state_dict)
+    modules = set()
+    for key in current:
+        if '.base_layer.' not in key or key in state_dict:
+            continue
+        legacy_key = key.replace('.base_layer.', '.')
+        if legacy_key in upgraded:
+            upgraded[key] = upgraded.pop(legacy_key)
+            modules.add(key.split('.base_layer.')[0])
+    if not modules:
+        return state_dict, 0
+    for key, value in current.items():
+        module = key.split('.lora_')[0]
+        if '.lora_' in key and module in modules and key not in upgraded:
+            upgraded[key] = torch.zeros_like(value) if '.lora_B.' in key else value
+    return upgraded, len(modules)
 
 
 class adjustedPeftVideo3D(nn.Module):
@@ -80,16 +159,8 @@ class adjustedPeftVideo3D(nn.Module):
             peft_model: PEFTed adjusted video backbone.
         """
 
-        target_modules = []
-        # Conv3d covers the 3D-CNN backbones (r3d_18, mc3_18, r2plus1d_18);
-        # Linear covers the video-transformer backbones (mvit_v2_s, swin3d_*).
-        available_types = [nn.modules.conv.Conv3d, nn.modules.conv.Conv2d, nn.modules.linear.Linear]
-
-        for n, m in model.named_modules():
-            if type(m) in available_types:
-                if isinstance(m, (nn.Conv2d, nn.Conv3d)) and m.groups != 1:
-                    continue
-                target_modules.append(n)
+        target_modules = lora_target_modules(model)
+        plain_conv_subclasses(model)
         print('Target Modules', target_modules)
 
         self.lora_config = LoraConfig(r=self.lora_attention_dimension, lora_alpha=16, lora_dropout=0.1, bias="none", target_modules=target_modules)
@@ -97,6 +168,21 @@ class adjustedPeftVideo3D(nn.Module):
 
         peft_model = get_peft_model(model, self.lora_config)
         return peft_model
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        """Also loads weights saved before the V-007 LoRA coverage fix (see
+        upgrade_legacy_lora_state); a checkpoint that fits neither layout gets
+        an error naming the likely reasons."""
+        state_dict, upgraded = upgrade_legacy_lora_state(self, state_dict)
+        if upgraded:
+            print(f'Checkpoint from before the LoRA coverage fix: {upgraded} more conv layers now have an adapter, '
+                  'initialised to no effect, so predictions match the old model.')
+        try:
+            return super().load_state_dict(state_dict, strict=strict, assign=assign)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f'These weights do not fit the {self.video_version} PEFT model. Check --model_version, --added_layers, '
+                f'--embed_size (the LoRA rank) and --num_classes against the run that saved them.\n{exc}') from exc
 
     def forward(self, x, extract_embed=False):
         """
