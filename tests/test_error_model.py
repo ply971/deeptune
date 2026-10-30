@@ -16,15 +16,28 @@ from evaluators.error_model import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _overconfident(n, rng):
-    """3-class probabilities whose true error rate depends on confidence
-    (and is ~1.6x what 1 - max_prob claims: an over-confident model)."""
+def _overconfident(n, rng, return_oracle=False):
+    """3-class probabilities whose true error rate is a function of max_prob
+    (the feature the error model sees) and is ~1.6x what 1 - max_prob
+    claims: an over-confident model.
+
+    Column 0 holds the confidence c and is always the arg-max: the other
+    two columns split the remaining 1 - c with both shares <= c, i.e.
+    a in [1 - c/(1-c), c/(1-c)] intersected with [0, 1]."""
     c = rng.uniform(1 / 3, 1.0, n)
-    a = rng.uniform(0, 1, n)
+    ratio = c / np.maximum(1 - c, 1e-12)
+    a = rng.uniform(np.clip(1 - ratio, 0, 1), np.clip(ratio, 0, 1))
     probs = np.column_stack([c, (1 - c) * a, (1 - c) * (1 - a)])
-    p_wrong = np.clip(1.6 * (1 - c), 0, 0.95)
+    p_wrong = np.clip(1.6 * (1 - probs.max(axis=1)), 0, 0.95)
     wrong = (rng.uniform(size=n) < p_wrong).astype(float)
-    return probs, wrong
+    return (probs, wrong, p_wrong) if return_oracle else (probs, wrong)
+
+
+def test_synthetic_fixture_error_depends_only_on_max_prob():
+    probs, _, p_wrong = _overconfident(20000, np.random.default_rng(9), return_oracle=True)
+    assert np.array_equal(probs.argmax(axis=1), np.zeros(len(probs), dtype=int))
+    np.testing.assert_allclose(probs.sum(axis=1), 1.0)
+    np.testing.assert_allclose(p_wrong, np.clip(1.6 * (1 - probs[:, 0]), 0, 0.95))
 
 
 def test_features_for_classification():
@@ -60,7 +73,7 @@ def test_error_targets():
 def test_stated_error_matches_observed_per_decile_on_held_out_data():
     rng = np.random.default_rng(0)
     fit_probs, fit_wrong = _overconfident(4000, rng)
-    test_probs, test_wrong = _overconfident(4000, rng)
+    test_probs, test_wrong, test_oracle = _overconfident(4000, rng, return_oracle=True)
     model = ErrorModel('cls').fit(prediction_features(fit_probs, 'cls'), fit_wrong)
     assert model.method_used == 'isotonic'
     stated = model.predict(prediction_features(test_probs, 'cls'))
@@ -70,6 +83,18 @@ def test_stated_error_matches_observed_per_decile_on_held_out_data():
         assert row['n'] == 400
         assert abs(row['gap']) < 0.1, row
     assert report['summary']['calibration_error'] < 0.05
+    # Noise-free check against the truth: per decile, the stated error must
+    # match the generator's true P(wrong) of the same samples (no test-set
+    # sampling noise in this comparison).
+    order = np.argsort(stated, kind='mergesort')
+    truth_gaps = np.array([abs(stated[idx].mean() - test_oracle[idx].mean())
+                           for idx in np.array_split(order, 10)])
+    assert truth_gaps.max() < 0.06, truth_gaps
+    assert truth_gaps.mean() < 0.02, truth_gaps
+    # Against observed outcomes, it may lose only a little calibration
+    # relative to the oracle itself on the same held-out draws.
+    oracle = calibration_table(test_oracle, test_wrong, n_bins=10)
+    assert report['summary']['calibration_error'] <= oracle['summary']['calibration_error'] + 0.02
     # Raw 1 - max_prob is badly over-confident on the same data; the error
     # model is what makes the number honest.
     raw = calibration_table(1 - test_probs.max(axis=1), test_wrong)
