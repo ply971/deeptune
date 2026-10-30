@@ -344,7 +344,8 @@ in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py
   as before (they keep pooling logits).
 - **What the benchmark shows** (`tests/models/test_temporal_oracle.py`, untrained tiny backbone, CPU,
   held-out scenes): `early_fusion`, `tsm`, `cnn_rnn` and `two_stream` learn the direction of motion from
-  240 clips, and `single_frame`, `mean` and `attention` stay at chance. `temporal_transformer` needs
+  240 clips, as does `slow_fusion` (on an untrained r3d_18, not the default r2plus1d_18), and `single_frame`,
+  `mean`, `attention` and `tsm` with its shift turned off stay at chance. `temporal_transformer` needs
   1500 clips (at 800 it stayed near chance). `late_fusion` needs 800 clips and the slower variant of the
   task: it sees two frames, and at the default speeds these cannot tell the direction on the benchmark's
   wrap-around world. Real ResNets are not yet measured on these models.

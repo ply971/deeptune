@@ -72,10 +72,10 @@ class Task:
         return self._decode(frame.assign(videos=paths), motion)
 
 
-def _fit(pooling, x, y, seed=0, budget=None):
+def _fit(pooling, x, y, seed=0, budget=None, version='resnet_tiny'):
     torch.manual_seed(seed)
     torch.set_num_threads(2)
-    model = build_video_model('resnet_tiny', 2, 1, 32, False, 'cls', pooling=pooling)
+    model = build_video_model(version, 2, 1, 32, False, 'cls', pooling=pooling)
     epochs, lr = budget or BUDGET[pooling.partition(':')[0]]
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
     generator = torch.Generator().manual_seed(seed)
@@ -203,6 +203,28 @@ def test_temporal_transformer_beats_chance_given_enough_clips(tmp_path_factory):
     reversed_accuracy = _accuracy(model, x.flip(1), y)
     shuffled = [_accuracy(model, x[:, order], y) for order in _permutations()]
     print(f'temporal_transformer: held-out {accuracy:.3f}, reversed {reversed_accuracy:.3f}, shuffled {np.round(shuffled, 3)}')
+    assert accuracy >= MOTION_AWARE_MIN
+    assert reversed_accuracy <= REVERSED_MAX
+    assert np.mean(shuffled) <= accuracy - 0.2
+
+
+def test_tsm_without_its_shift_cannot_see_motion(task):
+    """The control for TSM: the same model and budget, with no channel shifted, is a frame average. The shift is what works."""
+    model = _fit('tsm:tsm_fold_div=1000', *task.split('train'))
+    accuracy = _accuracy(model, *task.split('test'))
+    print(f'tsm without shift: held-out {accuracy:.3f}')
+    assert accuracy <= CHANCE_MAX
+
+
+@pytest.mark.slow
+def test_slow_fusion_beats_chance_and_depends_on_frame_order(task):
+    """--video_arch slow_fusion is a native 3D CNN; dummy_video3d is an untrained r3d_18, the same family as the default."""
+    model = _fit('mean', *task.split('train'), budget=(8, 1e-3), version='dummy_video3d')
+    x, y = task.split('test')
+    accuracy = _accuracy(model, x, y)
+    reversed_accuracy = _accuracy(model, x.flip(1), y)
+    shuffled = [_accuracy(model, x[:, order], y) for order in _permutations()]
+    print(f'slow_fusion: held-out {accuracy:.3f}, reversed {reversed_accuracy:.3f}, shuffled {np.round(shuffled, 3)}')
     assert accuracy >= MOTION_AWARE_MIN
     assert reversed_accuracy <= REVERSED_MAX
     assert np.mean(shuffled) <= accuracy - 0.2

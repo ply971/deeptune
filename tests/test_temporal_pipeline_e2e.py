@@ -109,3 +109,22 @@ def test_a_two_stream_run_works_from_the_desktop_test_page_settings(tmp_path, sm
     import infer
     parsed = infer.build_parser().parse_args(argv)
     assert parsed.pooling == 'two_stream:num_frames=8' and parsed.motion_source == 'mv'
+
+
+@pytest.mark.parametrize('recorded,expected,motion', [
+    ({'pooling': 'two_stream:fusion=fc,num_frames=8', 'motion_source': 'mv'}, 'two_stream:fusion=fc,num_frames=8', 'mv'),
+    ({'pooling': 'tsm:tsm_fold_div=4'}, 'tsm:tsm_fold_div=4', None),
+    ({'pooling': 'attention'}, 'attention', None),  # a run from before Phase 3
+    ({}, 'mean', None),
+])
+def test_the_desktop_test_page_rebuilds_a_recorded_run(tmp_path, recorded, expected, motion):
+    from desktop.config import RunResults, build_infer_argv, infer_config_from_run
+    import infer
+    run = RunResults(tmp_path, cli_arguments={'modality': 'video', 'model_version': 'resnet18', 'num_classes': 2, **recorded},
+                     checkpoint_path=tmp_path / 'm.pth')
+    argv = build_infer_argv(infer_config_from_run(run, tmp_path / 'clip.mp4', tmp_path / 'i'))
+    parsed = infer.build_parser().parse_args(argv)
+    assert parsed.pooling == expected
+    assert ('--motion_source' in argv) == (motion is not None)
+    if motion:
+        assert parsed.motion_source == motion
