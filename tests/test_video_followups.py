@@ -65,7 +65,7 @@ def test_trainer_fits_the_error_model_on_multi_clip_probabilities(tmp_path):
     assert fit['test_clips'] == 3 and fit['n_samples'] == 30 and fit['val_dataset_size'] == 30
 
     # Refit by hand on the 3-clip averaged probabilities: same model as the Trainer's.
-    model.eval()
+    model.cpu().eval()
     with torch.no_grad():
         probs = torch.softmax(MultiClipModel(model, 'cls')(multi.x), 1).numpy()
     expected = ErrorModel('cls').fit(prediction_features(probs, 'cls'), error_targets(probs, multi.y.numpy(), 'cls'),

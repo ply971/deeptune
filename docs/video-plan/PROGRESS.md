@@ -24,7 +24,7 @@ Keep entries short and factual. This is the handoff between sessions.
   - pip check ok. All three smoke runs ok. Total 353 s. The old r3d_18 smoke timeout (G15) is gone.
   - pytest: `1 failed, 505 passed, 3 skipped, 30 warnings in 295.66s`.
   - The failure is `tests/test_video_followups.py::test_trainer_fits_the_error_model_on_multi_clip_probabilities`. After `Trainer` moves the model to `cuda:0`, the test's hand refit passes CPU tensors. It fails with the GPU visible and passes on CPU.
-  - The test is unchanged, per CLAUDE.md, and awaits the user's OK. A scratch copy with `model.cpu().eval()` passes on the GPU (`1 passed`), so the production fit is unaffected.
+  - The user approved the one-line fix, `model.cpu().eval()`. `tests/test_video_followups.py`: `9 passed` with the GPU visible and `9 passed` on CPU. `check.ps1` has not been re-run since; it is due at the end of the wave.
 - **`scripts\bench_video_io.py --clips 200 --nvdec`** (generated clips: H.264, 112 px, 64 frames):
   - 8 frames, uniform: PyAV 60.9 clips/s, OpenCV 54.0. Real 1080p files: PyAV 1.8 clips/s, OpenCV 1.0.
   - PyAV + NVDEC, all 64 frames: 10.4 clips/s. There is no software all-frames row, so this says nothing about an NVDEC speed-up. TorchCodec is not installed.
