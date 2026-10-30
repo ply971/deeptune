@@ -352,3 +352,54 @@ def test_desktop_test_page_passes_the_cache_settings_on():
                           video_options={'frame_cache': 'C:/c', 'frame_cache_size': 128})
     argv = build_infer_argv(cfg)
     assert argv[argv.index('--frame_cache') + 1] == 'C:/c' and argv[argv.index('--frame_cache_size') + 1] == '128'
+
+
+# -- whole pipeline ---------------------------------------------------------------------
+def test_deeptune_and_the_test_page_run_through_the_cache(tmp_path, monkeypatch):
+    """deeptune.py -> train / eval / embed -> infer.py, with the settings rebuilt from the saved run."""
+    import torchvision
+    import deeptune
+    import desktop.config as config
+    import embed.video.embed as embed_mod
+    import evaluators.video.evaluate as eval_mod
+    import infer
+    import inference.video as infer_mod
+    import trainers.video.train as train_mod
+    small = torchvision.transforms.Compose([torchvision.transforms.Resize((32, 32)), torchvision.transforms.ToTensor()])
+    for module in (train_mod, eval_mod, embed_mod, infer_mod):
+        monkeypatch.setattr(module, 'transformations', small)
+    versions = dict(config.MODEL_VERSIONS_BY_MODALITY)
+    versions['video'] = [*versions['video'], 'dummy_video3d']
+    monkeypatch.setattr(config, 'MODEL_VERSIONS_BY_MODALITY', versions)
+
+    rows = []
+    for label, dx in (('left', -2), ('right', 2)):
+        for i in range(6):
+            rows.append({'videos': str(translating_clip(tmp_path / f'{label}_{i}.mp4', 10, dx, 0, size=32, seed=i)), 'labels': label})
+    manifest = tmp_path / 'clips.csv'
+    pd.DataFrame(rows).to_csv(manifest, index=False)
+    cache = tmp_path / 'cache'
+    out = tmp_path / 'out'
+    deeptune.main(['--modality', 'video', '--out', str(out), '--model_version', 'dummy_video3d', '--num_epochs', '1', '--batch_size', '4',
+                   '--num_frames', '2', '--added_layers', '1', '--embed_size', '16', '--fixed-seed', '--df', str(manifest), '--raw-data',
+                   '--frame_cache', str(cache), '--frame_cache_size', '24'])
+    run = next(out.glob('deeptune-*'))
+    assert len(_entries(cache)) >= 12  # train, val and test clips (deterministic uniform sampling)
+    assert all(min(np.load(p).shape[1:3]) == 24 for p in _entries(cache))
+    saved = json.loads(next(run.glob('trainval_output_*/cli_arguments.json')).read_text())
+    assert saved['frame_cache'] == str(cache) and saved['frame_cache_size'] == 24
+
+    test_rows = pd.read_parquet(next(run.glob('data_splits_*/test_split.parquet')))
+    data = tmp_path / 'new.csv'
+    test_rows[['videos', 'labels']].to_csv(data, index=False)
+    argv = config.build_infer_argv(config.infer_config_from_run(config.read_run_results(run), data, tmp_path / 'infer'))
+    assert argv[argv.index('--frame_cache') + 1] == str(cache) and argv[argv.index('--frame_cache_size') + 1] == '24'
+    with mock.patch.object(VideoReader, 'get_frames', side_effect=AssertionError('test clips were cached by the evaluation')):
+        assert infer.main(argv) == 0
+    assert len(pd.read_csv(tmp_path / 'infer' / 'predictions.csv')) == len(test_rows)
+
+
+def test_cache_modules_do_not_import_torch():
+    code = ("import sys, datasets.frame_cache, datasets.snippet_features, handlers.video_args;"
+            "sys.exit('torch' in sys.modules)")
+    assert subprocess.run([sys.executable, '-c', code], cwd=REPO).returncode == 0
