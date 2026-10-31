@@ -136,3 +136,18 @@ def test_pretrained_embeddings_use_the_bare_tiny_backbone():
     backbone = load_embedding_model(None, 'pretrained', 'vjepa2_tiny', 2, 8, 2, args, 'cls')
     assert args.weights_licence.startswith('none')
     assert backbone.default_input_size == 32
+
+
+def test_the_real_weights_smoke_script_runs_on_tiny_models(tmp_path):
+    """The script the GPU gate uses. Tiny versions, so nothing downloads; a broken script would only show at the gate."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / 'scripts' / 'smoke_modern_backbones.py'
+    spec = importlib.util.spec_from_file_location('smoke_modern_backbones', path)
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+    out = tmp_path / 'smoke.json'
+    assert smoke.main(['--versions', 'vjepa2_tiny', 'videomae_tiny', 'siglip2_tiny', 'dinov3_tiny', '--frames', '4', '8', '--out', str(out)]) == 0
+    results = json.loads(out.read_text())
+    grids = {(r['version'], r['frames']): r['token_grid'] for r in results}
+    assert grids[('vjepa2_tiny', 8)] == [4, 4, 4] and grids[('siglip2_tiny', 8)] == [8, 4, 4]
+    assert ('videomae_tiny', 8) not in grids, 'it only accepts 4 frames, so that pair is skipped'

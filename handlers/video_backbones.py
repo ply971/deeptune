@@ -72,7 +72,6 @@ HUB_BACKBONES = {b.version: b for b in (
     HubBackbone('siglip2_tiny', 'siglip', 'frame', None, input_size=32, mean=HALF, std=HALF),
     HubBackbone('dinov3_tiny', 'dinov3', 'frame', None, input_size=32),
 )}
-# For --help and the desktop's list of command-line-only models. `siglip` and `siglip_tiny` were already on that list.
 HUB_VIDEO_VERSIONS = tuple(v for v, b in HUB_BACKBONES.items() if b.kind == 'video')
 
 _accepted: set = set()
