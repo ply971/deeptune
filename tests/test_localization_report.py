@@ -3,6 +3,8 @@
 `_ref_*` below are copied from github.com/moayadeldin/CtxPL (MIT), eval/eval_detection.py and eval/utils_eval.py, read on
 2026-10-31, with only the imports adapted. They are the oracle: the production code is a separate implementation.
 """
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -263,3 +265,49 @@ def test_expected_error_is_attached_when_calibrated():
     table = pd.DataFrame({'t-start': np.zeros(len(stated))})
     out = lr.attach_expected_error(table, stated, lr.validate_uncertainty(stated, wrong))
     assert out['expected_error'].tolist() == stated.tolist()
+
+
+def test_applying_uncertainty_to_the_rows_it_was_checked_on_is_refused():
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
+    validation = {**lr.validate_uncertainty(stated, wrong), 'split': 'test'}
+    table = pd.DataFrame({'t-start': np.zeros(len(stated))})
+    with pytest.raises(ValueError, match='validated on the test rows'):
+        lr.attach_expected_error(table, stated, validation, applied_to='test')
+    assert 'expected_error' in lr.attach_expected_error(table, stated, validation, applied_to='new_videos').columns
+
+
+def _segments_with_known_errors(seed=0, n=3000):
+    """Each segment is in its own video. It is a false positive with probability equal to its stated uncertainty."""
+    rng = np.random.default_rng(seed)
+    stated = rng.random(n)
+    wrong = rng.random(n) < stated
+    truth = gt([(f'v{i}', 10, 20, 0) for i in range(n)])
+    prediction = pred([(f'v{i}', 30, 40, 0, .5) if bad else (f'v{i}', 10, 20, 0, .5) for i, bad in enumerate(wrong)])
+    return truth, prediction, stated
+
+
+def test_segment_uncertainty_is_checked_against_false_positives_per_decile():
+    truth, prediction, stated = _segments_with_known_errors()
+    got = lr.validate_segment_uncertainty(truth, prediction, stated, split='validation')
+    assert got['calibrated'] and got['unit'] == 'segment' and got['split'] == 'validation' and len(got['table']['bins']) == 10
+    shrunk = lr.validate_segment_uncertainty(truth, prediction, stated ** 3)
+    assert not shrunk['calibrated'] and shrunk['ranks_errors']
+
+
+def test_video_uncertainty_uses_label_errors():
+    scores = np.array([[.9, .1], [.2, .8], [.7, .3]])
+    labels = np.array([[1, 0], [1, 0], [1, 1]])
+    assert lr.video_label_errors(scores, labels).tolist() == [0, 1, 0]
+    got = lr.validate_video_uncertainty([.1, .9, .2], scores, labels)
+    assert got['unit'] == 'video' and got['n'] == 3
+
+
+def test_report_cli(tmp_path):
+    truth, prediction, stated = _segments_with_known_errors(n=400)
+    truth.to_csv(tmp_path / 'gt.csv', index=False)
+    prediction.assign(uncertainty=stated).to_csv(tmp_path / 'p.csv', index=False)
+    assert lr.main(['--ground_truth', str(tmp_path / 'gt.csv'), '--predictions', str(tmp_path / 'p.csv'), '--out', str(tmp_path / 'r'), '--uncertainty_column', 'uncertainty']) == 0
+    report = json.loads((tmp_path / 'r' / 'localization_report.json').read_text())
+    assert 'avg_0.1_0.7' in report['detection']['averages'] and report['uncertainty']['unit'] == 'segment'
+    assert report['detection']['map_per_threshold']['0.5'] == pytest.approx(_ap(truth, prediction, [0.5])[0])
+    assert pd.read_csv(tmp_path / 'r' / 'per_class_ap.csv')['0.5'].iloc[0] == pytest.approx(_ap(truth, prediction, [0.5])[0])

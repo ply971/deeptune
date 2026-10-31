@@ -334,6 +334,10 @@ def load_eval_scores(eval_dir, mode: Optional[str] = None) -> tuple[str, np.ndar
     probabilities.npy, which holds every class; predictions.csv leaves them out above 50 classes."""
     eval_dir = Path(eval_dir)
     table = pd.read_csv(eval_dir / 'predictions.csv')
+    if 'target' in table.columns:  # train_feature_head.py's format: video_id, target, prediction[, group], probability_<k>
+        columns = sorted((c for c in table.columns if c.startswith('probability_')), key=lambda c: int(c.split('_')[1]))
+        mode = mode or ('cls' if columns else 'reg')
+        return mode, table['target'].to_numpy(), table[columns].to_numpy() if mode == 'cls' else table['prediction'].to_numpy(), table
     mode = mode or ('cls' if 'true_label' in table.columns else 'reg')
     if mode == 'reg':
         if 'true_value' not in table.columns:
@@ -441,6 +445,8 @@ def compare_eval_dirs(dir_a, dir_b, test_df=None, grouper=None, n_boot: int = DE
     mode_b, truth_b, scores_b, table_b = load_eval_scores(dir_b)
     if mode != mode_b or len(truth_a) != len(truth_b) or not np.array_equal(truth_a, truth_b):
         raise ValueError('These two evaluations were not made on one test set: their rows or labels differ.')
+    if 'video_id' in table_a.columns and 'video_id' in table_b.columns and not table_a['video_id'].equals(table_b['video_id']):
+        raise ValueError('These two evaluations were not made on one test set: their video ids differ, or are in another order.')
     groups, sources = split_units(test_df, grouper)
     return compare_models(mode, truth_a, scores_a, scores_b, groups, sources, n_boot, seed)
 

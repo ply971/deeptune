@@ -77,6 +77,8 @@ def export_from_args(args, splits: dict, model_weights, use_case: str, model_ver
     model = wrap_for_test_crops(model, options.test_crops, 'cls').to(device).eval()
     parts = {name: embed_split(model, path, model_version, num_frames, options, clips, batch_size, grouper, want_std=tta, want_motion='motion' in extras, device=device)
              for name, path in splits.items()}
+    if mode is None:  # an embedding run may not name it: --mode is only needed to rebuild a head
+        mode = 'reg' if np.issubdtype(next(iter(parts.values())).target.dtype, np.floating) else 'cls'
     export_dir = Path(out) / f'dfanalyze_export_{model_str}_{UNIQUE_ID}'
     rows = list(parts) if args.dfanalyze_rows == 'all' else [main_split]
     provenance = {'embedding_source': getattr(args, 'embedding_source', None), 'clips_per_video': int(clips), 'crops_per_clip': int(options.test_crops),

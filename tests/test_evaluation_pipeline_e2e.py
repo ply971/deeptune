@@ -156,6 +156,34 @@ def test_std_is_zero_for_identical_clips_and_mean_matches_the_model(tmp_path, sm
     assert np.abs(part.embedding_std).max() < 1e-3 and part.target.tolist() == [1]
 
 
+def _embed_cli(tmp_path, monkeypatch, *extra):
+    import embed.video.embed as embed_mod
+    rows = lambda name, start: pd.DataFrame([{'videos': str(translating_clip(tmp_path / f'{name}{i}.mp4', 6, i + 1, 0, size=32, seed=i + start)), 'labels': i % 2, 'group': f'{name}{i}'}
+                                             for i in range(4)])
+    rows('tr', 0).to_parquet(tmp_path / 'train.parquet')
+    rows('te', 10).to_parquet(tmp_path / 'test.parquet')
+    monkeypatch.setattr('sys.argv', ['embed.py', '--df', str(tmp_path / 'test.parquet'), '--out', str(tmp_path / 'out'), '--model_version', 'dummy_video3d',
+                                     '--use_case', 'pretrained', '--batch_size', '2', '--num_frames', '2', '--num_workers', '0', '--grouper', 'group',
+                                     '--export_dfanalyze', *extra])
+    embed_mod.main()
+    return next((tmp_path / 'out').glob('dfanalyze_export_*'))
+
+
+def test_export_from_the_embedding_script_with_pretrained_features(tmp_path, small_pipeline, monkeypatch):
+    folder = _embed_cli(tmp_path, monkeypatch, '--dfanalyze_train_df', str(tmp_path / 'train.parquet'), '--dfanalyze_dims', '2', '--dfanalyze_rows', 'all')
+    manifest = json.loads((folder / 'dfanalyze_export.json').read_text())
+    assert manifest['rows_in_dfanalyze_csv'] == ['train', 'embed'] and manifest['pca']['n_fit_rows'] == 4 and manifest['mode'] == 'cls'
+    assert manifest['embedding_source'].startswith('bare backbone dummy_video3d')
+    assert not any('read too high' in w for w in manifest['warnings'])  # a pretrained model never trained on them
+    assert len(pd.read_csv(folder / 'dfanalyze.csv')) == 8
+
+
+def test_the_embedding_script_needs_training_rows_for_pca(tmp_path, small_pipeline, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        _embed_cli(tmp_path, monkeypatch, '--dfanalyze_dims', '2')
+    assert '--dfanalyze_train_df' in capsys.readouterr().err
+
+
 def test_flags_are_refused_where_they_do_not_apply(tmp_path, capsys):
     import deeptune
     frame = tmp_path / 'x.parquet'

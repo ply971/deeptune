@@ -23,11 +23,18 @@ from evaluators.video.validation import FoldScores, run_validation
 FIT_SPLIT_FOLDER = 'calibration_fit'
 
 
+def _holds_paths(table: pa.Table) -> bool:
+    if 'videos' not in table.column_names:
+        return False
+    kind = table.schema.field('videos').type
+    return pa.types.is_string(kind) or pa.types.is_large_string(kind)
+
+
 def _absolute_videos(table: pa.Table, split_path: Path) -> pa.Table:
     """Relative paths mean relative to their split file, and fold files live elsewhere."""
-    index = table.schema.get_field_index('videos')
-    if index < 0 or not (pa.types.is_string(table.schema.field(index).type) or pa.types.is_large_string(table.schema.field(index).type)):
+    if not _holds_paths(table):
         return table
+    index = table.schema.get_field_index('videos')
     root = split_path.resolve().parent
     values = [value if value is None or Path(value).is_absolute() else str(root / value) for value in table.column(index).to_pylist()]
     return table.set_column(index, 'videos', pa.array(values, type=table.schema.field(index).type))
@@ -47,7 +54,7 @@ def _video_ids(table: pa.Table) -> list[str]:
     ids = _column(table, 'video_id')
     if ids is not None:
         return [str(value) for value in ids]
-    paths = _column(table, 'videos') if pa.types.is_string(table.schema.field('videos').type) else None
+    paths = _column(table, 'videos') if _holds_paths(table) else None
     return [Path(path).name for path in paths] if paths else [str(i) for i in range(table.num_rows)]
 
 
@@ -85,7 +92,7 @@ def run_video_validation(args, train_path, val_path, out, train_fn, evaluate_fn,
     def apparent(train_rows, val_rows, eval_rows, name) -> FoldScores:
         return fit_predict(train_rows, val_rows, eval_rows, name, error_model=False)  # its validation rows are its training rows
 
-    videos = _column(pool, 'videos') if pa.types.is_string(pool.schema.field('videos').type) else None
+    videos = _column(pool, 'videos') if _holds_paths(pool) else None
     summary = run_validation(scheme, np.asarray(_column(pool, 'labels')), fit_predict, root, mode=mode, ids=_video_ids(pool),
                              groups=_column(pool, grouper), sources=videos, k=args.k, n_boot=args.n_boot,
                              seed=_validation_seed(args), ci_boot=args.report_boot or DEFAULT_BOOTSTRAPS,

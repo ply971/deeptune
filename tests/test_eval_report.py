@@ -277,3 +277,24 @@ def test_class_names_read_both_mapping_directions(tmp_path):
 def test_report_cli_refuses_a_temperature_without_a_named_split(tmp_path):
     with pytest.raises(SystemExit):
         rp.main(['--eval_dir', str(tmp_path), '--fit_dir', str(tmp_path)])
+
+
+def _probe_output(folder, scores, ids):
+    folder.mkdir()
+    frame = pd.DataFrame({'video_id': ids, 'target': Y, 'prediction': scores.argmax(axis=1)})
+    for k in range(scores.shape[1]):
+        frame[f'probability_{k}'] = scores[:, k]
+    frame.to_csv(folder / 'predictions.csv', index=False)
+
+
+def test_feature_probe_outputs_can_be_compared(tmp_path):
+    """P-119: train_feature_head.py's predictions.csv, for the paired test between probes."""
+    ids = [f'v{i}' for i in range(len(Y))]
+    _probe_output(tmp_path / 'a', P, ids)
+    _probe_output(tmp_path / 'b', P[::-1], ids)
+    got = rp.compare_eval_dirs(tmp_path / 'a', tmp_path / 'b', n_boot=20)
+    assert got['mode'] == 'cls' and got['metrics']['accuracy']['point'] == pytest.approx(rp.classification_metrics(Y, P)['accuracy'] - rp.classification_metrics(Y, P[::-1])['accuracy'])
+    _probe_output(tmp_path / 'c', P, ids[::-1])
+    with pytest.raises(ValueError, match='video ids differ'):
+        rp.compare_eval_dirs(tmp_path / 'a', tmp_path / 'c', n_boot=5)
+

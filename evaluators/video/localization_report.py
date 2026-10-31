@@ -15,9 +15,15 @@ Tables use the reference's columns: `video-id, t-start, t-end, label`, plus `sco
 
 Task 7, evidential uncertainty: `validate_uncertainty` checks stated uncertainty against observed error per decile, on
 held-out data. CtxPL's outputs do not exist in DeepTune yet (Phase 4), so this has only run on synthetic arrays.
+
+    python -m evaluators.video.localization_report --ground_truth gt_segments.csv --predictions segments.csv --out DIR
 """
 from __future__ import annotations
 
+import argparse
+import json
+import sys
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
@@ -209,9 +215,63 @@ def segment_false_positives(ground_truth: pd.DataFrame, prediction: pd.DataFrame
     return (~match_segments(ground_truth, prediction, tiou)['matched'].to_numpy()).astype(np.float64)
 
 
-def attach_expected_error(segments: pd.DataFrame, uncertainty, validation: dict) -> pd.DataFrame:
-    """Adds `expected_error` from the uncertainty only if `validation` found it calibrated; otherwise the table is unchanged."""
+def validate_segment_uncertainty(ground_truth: pd.DataFrame, prediction: pd.DataFrame, uncertainty, tiou: float = 0.5, split: str = 'validation') -> dict:
+    """Per segment: does stated uncertainty follow the rate of false positives at `tiou`, on held-out rows named `split`?"""
+    result = validate_uncertainty(uncertainty, segment_false_positives(ground_truth, prediction, tiou))
+    return {**result, 'unit': 'segment', 'error': f'false positive at tIoU {tiou:g}', 'split': split}
+
+
+def video_label_errors(scores, labels) -> np.ndarray:
+    """Per video: 1 when the top-scoring class is not one of its labels. `scores`, `labels`: [videos, classes]."""
+    scores, labels = np.asarray(scores, dtype=np.float64), np.asarray(labels)
+    if scores.shape != labels.shape or scores.ndim != 2:
+        raise ValueError('Expected scores and labels of one shape, [videos, classes].')
+    return (labels[np.arange(len(scores)), scores.argmax(axis=1)] != 1).astype(np.float64)
+
+
+def validate_video_uncertainty(uncertainty, scores, labels, split: str = 'validation') -> dict:
+    """Per video: does stated uncertainty follow the rate of video-level label errors, on held-out rows named `split`?"""
+    return {**validate_uncertainty(uncertainty, video_label_errors(scores, labels)), 'unit': 'video', 'error': 'top class not among the labels', 'split': split}
+
+
+def attach_expected_error(segments: pd.DataFrame, uncertainty, validation: dict, applied_to: Optional[str] = None) -> pd.DataFrame:
+    """Adds `expected_error` from the uncertainty only if `validation` found it calibrated; otherwise the table is unchanged.
+
+    `applied_to` names the split of `segments`. A check on the rows it is then applied to says nothing about new rows, so
+    that is refused when both are named."""
+    if applied_to is not None and validation.get('split') == applied_to:
+        raise ValueError(f'The uncertainty was validated on the {applied_to} rows themselves; validate it on other held-out rows.')
     out = segments.copy()
     if validation.get('calibrated'):
         out['expected_error'] = np.asarray(uncertainty, dtype=np.float64)
     return out
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description='Detection mAP, per-class AP and boundary error of predicted segments.')
+    p.add_argument('--ground_truth', type=Path, required=True, help='CSV with video-id, t-start, t-end, label (a benchmark gt_segments.csv has these).')
+    p.add_argument('--predictions', type=Path, required=True, help='CSV with video-id, t-start, t-end, label, score.')
+    p.add_argument('--out', type=Path, required=True, help='Folder for localization_report.json and per_class_ap.csv.')
+    p.add_argument('--boundary_tiou', type=float, default=0.5, help='tIoU at which predictions count as matched for the boundary error (default 0.5).')
+    p.add_argument('--uncertainty_column', help='Column of --predictions holding per-segment uncertainty in [0, 1]: also checks it against false positives.')
+    p.add_argument('--split', default='validation', help='Name of these held-out rows, recorded with the uncertainty check (default validation).')
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    truth, prediction = pd.read_csv(args.ground_truth), pd.read_csv(args.predictions)
+    report = localization_report(truth, prediction, boundary_tiou=args.boundary_tiou)
+    if args.uncertainty_column:
+        _check_columns(prediction, (args.uncertainty_column,), 'prediction')
+        report['uncertainty'] = validate_segment_uncertainty(truth, prediction, prediction[args.uncertainty_column], args.boundary_tiou, args.split)
+    args.out.mkdir(parents=True, exist_ok=True)
+    path = args.out / 'localization_report.json'
+    path.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    pd.DataFrame(report['detection']['per_class_ap']).T.rename_axis('class').to_csv(args.out / 'per_class_ap.csv')
+    print(path)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
