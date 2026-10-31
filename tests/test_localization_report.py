@@ -374,3 +374,43 @@ def test_nan_uncertainty_is_rejected():
     with pytest.raises(ValueError, match='finite'):
         lr.attach_expected_error(pd.DataFrame({'a': [0, 1]}), [.1, np.nan], validation, applied_to='test')
 
+
+def _honest_verdicts(n, seeds=100):
+    verdicts = []
+    for seed in range(seeds):
+        rng = np.random.default_rng(seed)
+        stated = rng.random(n)
+        verdicts.append(lr.validate_uncertainty(stated, (rng.random(n) < stated) * 1.)['verdict'])
+    return pd.Series(verdicts)
+
+
+def test_honest_data_needs_hundreds_of_rows_to_pass_the_default_rule():
+    """The real behaviour, with no rule set aside: calibrated data rarely passes at 100 rows and usually does at 800."""
+    passed = {n: _honest_verdicts(n).eq('calibrated').mean() for n in (100, 300, 800)}
+    assert passed[100] <= .10 and .15 <= passed[300] <= .60 and passed[800] >= .80
+
+
+def test_a_failure_of_honest_small_samples_reads_inconclusive_not_miscalibrated():
+    verdicts = _honest_verdicts(100)
+    assert verdicts.eq('inconclusive').mean() >= .75 and verdicts.eq('miscalibrated').mean() <= .20
+
+
+def test_verdicts_for_too_few_rows_and_real_miscalibration():
+    few = lr.validate_uncertainty(np.full(99, .3), np.array([0., 0., 1.] * 33))
+    assert not few['calibrated'] and few['verdict'] == 'inconclusive' and '500 to 800' in few['verdict_note']
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t ** 4)
+    big = lr.validate_uncertainty(stated, wrong)
+    assert big['verdict'] == 'miscalibrated' and big['verdict_note'] is None and big['calibration_error'] > big['gap_if_calibrated_p95']
+    stated = np.r_[np.full(900, .2), np.full(100, .05)]
+    wrong = np.r_[(np.arange(900) % 5 == 0) * 1., (np.arange(100) % 2 == 0) * 1.]
+    assert lr.validate_uncertainty(stated, wrong)['verdict'] == 'miscalibrated'
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
+    assert lr.validate_uncertainty(stated, wrong)['verdict'] == 'calibrated'
+
+
+def test_an_inconclusive_check_attaches_nothing():
+    stated = np.full(99, .3)
+    check = lr.validate_uncertainty(stated, np.array([0., 0., 1.] * 33), unit='segment', split='validation')
+    table = pd.DataFrame({'t-start': np.zeros(99)})
+    assert 'expected_error' not in lr.attach_expected_error(table, stated, check, applied_to='test').columns
+

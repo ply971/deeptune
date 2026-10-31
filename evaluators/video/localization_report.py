@@ -35,7 +35,8 @@ DEFAULT_TIOU_THRESHOLDS = tuple(np.round(np.arange(0.1, 1.0, 0.1), 1).tolist())
 AVERAGE_RANGES = {'avg_0.1_0.5': (0.1, 0.5), 'avg_0.1_0.7': (0.1, 0.7), 'avg_0.1_0.9': (0.1, 0.9)}
 SEGMENT_COLUMNS = ('video-id', 't-start', 't-end')
 _UNCERTAINTY_MAX_GAP = 0.05  # largest count-weighted |stated - observed| still called calibrated
-_UNCERTAINTY_MIN_ROWS = 100  # below this a decile holds under 10 rows, and a pass means little
+_UNCERTAINTY_MIN_ROWS = 100  # a floor, not a working size: see WORKING_ROWS_NOTE
+WORKING_ROWS_NOTE = 'Calibrated data needs about 500 to 800 rows to pass this check reliably, as the weighted gap of a smaller sample is mostly noise.'
 _UNCERTAINTY_MAX_BIN_GAP = 0.10  # a decile further off than this must at least have the stated value inside its joint interval
 
 
@@ -186,6 +187,16 @@ def localization_report(ground_truth: pd.DataFrame, prediction: pd.DataFrame, vi
 
 
 # -- task 7: is evidential uncertainty an error estimate? ------------------------------------------------------------
+def _gap_if_calibrated(stated: np.ndarray, n_bins: int, draws: int = 400, seed: int = 0) -> float:
+    """95th percentile of the weighted gap when errors really occur at the stated rates, over the same deciles as the table."""
+    rng = np.random.default_rng(seed)
+    totals = np.zeros(draws)
+    for rows in np.array_split(np.argsort(stated, kind='mergesort'), min(n_bins, len(stated))):
+        chance = stated[rows]
+        totals += np.abs((rng.random((draws, len(rows))) < chance).sum(axis=1) - chance.sum())
+    return float(np.percentile(totals / len(stated), 95))
+
+
 def _outside_joint_interval(rows: dict, n_bins: int) -> bool:
     """Is the stated mean outside this decile's Wilson interval, Bonferroni-corrected so that all deciles hold together at about 95%?"""
     from scipy.stats import norm
@@ -203,7 +214,15 @@ def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap:
 
     `calibrated` needs all of: at least `min_rows` rows; a count-weighted gap of at most `max_gap`; and in every decile a gap
     of at most `max_bin_gap`, or the stated value inside the decile's interval (Wilson, Bonferroni-corrected so that the deciles
-    hold jointly at about 95%), so that a small decile is not failed for its noise alone. `calibration_failures` says which failed. `ranks_errors` is the weaker property, that more
+    hold jointly at about 95%). `calibration_failures` says which failed.
+
+    Failing is not the same as being miscalibrated. The weighted gap of a small sample is mostly noise: truly calibrated data
+    with uniform uncertainties passes about 1% of the time at 100 rows, 35% at 300 and 92% at 800. So `verdict` separates three
+    outcomes: 'calibrated' (passed), 'miscalibrated' (a decile is outside its joint interval, or the weighted gap is above the
+    95th percentile of what calibrated data of this size gives, `gap_if_calibrated_p95`), and 'inconclusive' (it failed, but the
+    data are consistent with being calibrated). Only 'calibrated' may be attached as an error estimate.
+
+    `ranks_errors` is the weaker property, that more `ranks_errors` is the weaker property, that more
     uncertain rows go wrong more often (AUROC above 0.5 and a positive Spearman correlation). A rank-only signal may still
     be mapped to an error rate by fitting an `ErrorModel` on held-out rows; it must not be stated as a probability as is."""
     from scipy.stats import spearmanr
@@ -227,11 +246,14 @@ def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap:
     off = [b for b in table['bins'] if abs(b['gap']) > max_bin_gap and _outside_joint_interval(b, len(table['bins']))]
     if off:
         failures.append(f"{len(off)} decile(s) off by more than {max_bin_gap:g} with the stated value outside their joint 95% interval, worst {max(abs(b['gap']) for b in off):.3f}")
+    null_gap = _gap_if_calibrated(stated, n_bins)
+    verdict = 'calibrated' if not failures else 'miscalibrated' if off or gap > null_gap else 'inconclusive'
     both = len(set(observed.tolist())) == 2
     correlation = float(spearmanr(stated, observed).statistic) if both and np.ptp(stated) > 0 else None
     auroc = _auroc(stated, observed.astype(bool))
     return {'n': int(len(stated)), 'unit': unit, 'split': split, 'calibration_error': gap, 'max_gap_allowed': max_gap, 'min_rows': min_rows,
-            'max_bin_gap_allowed': max_bin_gap, 'calibrated': not failures, 'calibration_failures': failures, 'spearman': correlation, 'auroc_error_detection': auroc,
+            'max_bin_gap_allowed': max_bin_gap, 'calibrated': not failures, 'calibration_failures': failures, 'verdict': verdict, 'gap_if_calibrated_p95': null_gap,
+            'verdict_note': WORKING_ROWS_NOTE if verdict == 'inconclusive' else None, 'spearman': correlation, 'auroc_error_detection': auroc,
             'ranks_errors': bool(auroc is not None and auroc > 0.5 and correlation is not None and correlation > 0),
             'table': table}
 
