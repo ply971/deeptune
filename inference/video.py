@@ -39,6 +39,7 @@ def predict_video(
     label_mapping: Optional[dict] = None,
     video_options: Optional[VideoDataOptions] = None,
     lora_rank: Optional[int] = None,
+    with_probabilities: bool = False,
 ) -> pd.DataFrame:
     """Runs `checkpoint_path`'s model over every row of `df` (a 'videos'
     column of file paths or clip bytes, detected automatically, + optional
@@ -51,7 +52,9 @@ def predict_video(
     them, and a ``clip_disagreement`` column is added (0 = all clips agree).
 
     `lora_rank` is the run's recorded rank for a native PEFT model; None means
-    it equals `embed_size`, as in runs recorded before --lora_rank existed."""
+    it equals `embed_size`, as in runs recorded before --lora_rank existed.
+
+    `with_probabilities` adds a ``probability_<k>`` column per class, which ensembles average."""
     video_options = video_options or VideoDataOptions()
     error_model_clips_mismatch(checkpoint_path, video_options.test_clips, test_crops=video_options.test_crops)
     model = build_video_model(
@@ -118,6 +121,9 @@ def predict_video(
             result['abs_error'] = [abs(float(t) - float(p)) for t, p in zip(raw_labels, predicted)]
     # Per-prediction error estimate (A4): only when the run saved error_model.json.
     # Hash the file's weights, not the model's: loading may have upgraded old LoRA layouts.
+    if scores and mode == 'cls' and with_probabilities:
+        for k, column in enumerate(torch.cat(scores).numpy().T):
+            result[f'probability_{k}'] = column
     if scores:
         attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), state_dict)
     return result

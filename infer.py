@@ -33,7 +33,9 @@ from inference.data import (
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description='Run a trained DeepTune model on new data.', allow_abbrev=False)
     p.add_argument('--modality', required=True, choices=['images', 'text', 'tabular', 'timeseries', 'video'])
-    p.add_argument('--checkpoint', required=True, type=Path, help="The run's checkpoint (file or directory, per modality).")
+    p.add_argument('--checkpoint', type=Path, default=None, help="The run's checkpoint (file or directory, per modality). Required unless --ensemble is given.")
+    p.add_argument('--ensemble', nargs='+', type=Path, default=None, metavar='RUN',
+                   help="Video only: average class probabilities over these trained runs (checkpoint files or their folders), each with the settings it recorded, instead of --checkpoint.")
     p.add_argument('--data', required=True, type=Path, help='New data: a folder (images/video) or a CSV/XLSX/parquet file.')
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--batch_size', type=int, default=16)
@@ -162,10 +164,22 @@ def _required_stub() -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.ensemble:
+        if args.modality != 'video':
+            parser.error('--ensemble is for the video modality.')
+        from inference.ensemble import ensemble_runs
+        ensemble_runs(args.ensemble, args.data, args.out, args.batch_size, args.label_mapping, args.accept_weights_licence)
+        return 0
+    if args.checkpoint is None:
+        parser.error('--checkpoint is required unless --ensemble is given.')
     args.out.mkdir(parents=True, exist_ok=True)
     if args.modality == 'video':
         used = apply_recorded_video_settings(args, argv)
+        from handlers.video_backbones import accept_weights_licences
+        accept_weights_licences(args.accept_weights_licence)  # or the acceptance the run recorded
+        accept_weights_licences(_recorded_run_arguments(args.checkpoint).get('accept_weights_licence'))
         if args.video_arch is not None:  # --video_arch given here; a recorded run's --pooling already holds its architecture
             from utils import is_native_video_architecture
             args.pooling = pooling_from_args(args, num_frames_given='num_frames' in {t.split('=', 1)[0][2:] for t in argv})
