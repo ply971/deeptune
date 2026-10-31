@@ -29,6 +29,9 @@ FRAMES = 8
 # Epochs and learning rate per model family. Training accuracy is not used anywhere below.
 BUDGET = {'early_fusion': (15, 2e-3), 'tsm': (10, 2e-3), 'cnn_rnn': (10, 2e-3), 'two_stream': (15, 2e-3),
           'single_frame': (15, 2e-3), 'mean': (10, 2e-3), 'attention': (10, 2e-3), 'late_fusion': (25, 2e-3)}
+TT_POOLING = 'temporal_transformer:num_frames=8,tt_dim=64,tt_heads=4,tt_layers=2'
+TT_BUDGET = (15, 3e-4)
+SLOW_SPEEDS = (0.5, 1.0)  # half the default speed, in px/frame at 32 px
 
 
 def _transform(size):
@@ -39,9 +42,9 @@ def _transform(size):
 class Task:
     """A generated direction benchmark, decoded once per motion source."""
 
-    def __init__(self, root: Path, size: int, n_train: int, speed_range=(1.0, 2.0)):
+    def __init__(self, root: Path, size: int, n_train: int, speed_range=(1.0, 2.0), seed: int = 0):
         self.root, self.size = root, size
-        self.ds = make_direction_dataset(root, n_train=n_train, n_val=0, n_test=200, size=size, seed=0, codec='mp4v',
+        self.ds = make_direction_dataset(root, n_train=n_train, n_val=0, n_test=200, size=size, seed=seed, codec='mp4v',
                                          speed_range=speed_range)
         self._cache = {}
 
@@ -94,6 +97,11 @@ def _accuracy(model, x, y):
     with torch.no_grad():
         predicted = torch.cat([model(x[i:i + 32]).argmax(1) for i in range(0, len(x), 32)])
     return (predicted == y).float().mean().item()
+
+
+def passes_motion_oracle(accuracy, reversed_accuracy, shuffled):
+    """The three checks every motion model's oracle makes, as one verdict."""
+    return bool(accuracy >= MOTION_AWARE_MIN and reversed_accuracy <= REVERSED_MAX and np.mean(shuffled) <= accuracy - 0.2)
 
 
 def _permutations(count=3, frames=FRAMES):
