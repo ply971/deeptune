@@ -41,20 +41,21 @@ They resample whole groups when a group column exists. 0 writes no report and sk
 def add_dfanalyze_arguments(parser, embed_run: bool = False) -> None:
     parser.add_argument('--export_dfanalyze', action='store_true',
                         help="""Video only. Write clip embeddings and labels as CSV files for df-analyze, in dfanalyze_export_*/.
-dfanalyze_export.json holds the command to run. The CSV holds only features and the target unless --dfanalyze_extras ids is given.""")
+dfanalyze_export.json holds the command to run. The CSV holds features, the target and, when the data has groups, a group column for df-analyze's --grouper.""")
     parser.add_argument('--dfanalyze_extras', nargs='*', choices=DFANALYZE_EXTRAS, default=[], metavar='EXTRA',
                         help="""Optional additions to the export (default none):
 tta: mean and standard deviation of the embedding over --dfanalyze_clips clips.
 motion: motion_mean, motion_std, motion_max, motion_p90 from a frame-difference curve.
-ids: group, split and video_id columns. These are not features: the printed command passes them to df-analyze's --grouper and --drops.""")
+ids: split and video_id columns. These are not features: the printed command passes them to df-analyze's --drops.""")
     parser.add_argument('--dfanalyze_clips', type=_at_least(2), default=5,
                         help='Clips per video for --dfanalyze_extras tta (default 5). Every split is sampled deterministically, as at test time.')
     parser.add_argument('--dfanalyze_dims', type=_at_least(1), default=None, metavar='N',
                         help="""Reduce the embedding to N PCA components (default: keep every dimension; df-analyze advises under 100 features).
 PCA is fitted on the training rows only and then applied to every split. With tta the standard deviations get their own N.""")
-    parser.add_argument('--dfanalyze_rows', choices=('test', 'all'), default='test',
-                        help="""Rows of dfanalyze.csv, the file the command reads (default test: rows the trained model has not seen).
-all: every split. df-analyze's own holdout then includes rows the model trained on, so its scores read too high.
+    parser.add_argument('--dfanalyze_rows', choices=('test', 'all'), default=None,
+                        help="""Rows of dfanalyze.csv, the file the command reads.
+Default for a trained model: test, the rows it has not seen. Default for --use_case pretrained: all, as it has seen none.
+all on a trained model: df-analyze's own holdout then includes rows the model trained on, so its scores read too high.
 dfanalyze_train.csv, dfanalyze_val.csv and dfanalyze_test.csv are written either way.""")
     if embed_run:
         parser.add_argument('--dfanalyze_train_df', type=Path, default=None,

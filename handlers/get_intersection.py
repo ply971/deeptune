@@ -6,7 +6,8 @@ The rows shared by a DeepTune embeddings Parquet file and a CSV file, usually th
 Works for every modality, and imports no torch. A CSV cannot hold a column's type, so numbers are compared as float32 (as
 written by DeepTune) and column names as text, since a frame of embeddings may name its columns with the integers 0, 1, ...
 The output keeps the Parquet file's values and row order, with column names as text, plus any columns only the CSV has. A
-row of the Parquet file that matches several identical CSV rows appears once.
+row of the Parquet file that matches several identical CSV rows appears once. At least one shared column must be a feature:
+sharing only the target or an id would match every row with that value.
 """
 from argparse import ArgumentParser
 from datetime import datetime
@@ -14,6 +15,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+
+NON_FEATURE_COLUMNS = {'label', 'labels', 'target', 'split', 'group', 'video_id', 'row_id'}
 
 
 def _comparable(column: pd.Series) -> pd.Series:
@@ -34,6 +38,9 @@ def intersect(df_parquet: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
     common = [c for c in left.columns if c in right.columns]
     if not common:
         raise ValueError(f'The two files share no column. Parquet: {list(left.columns)[:8]}...; CSV: {list(right.columns)[:8]}...')
+    if not set(common) - NON_FEATURE_COLUMNS:
+        raise ValueError(f'The two files share only {common}, which are no features, so every row with the same label would match. '
+                         'Do the two files have the same feature columns? Compare them after the same export.')
     keys_left = pd.DataFrame({c: _comparable(left[c]) for c in common})
     keys_right = pd.DataFrame({c: _comparable(right[c]) for c in common})
     only_csv = [c for c in right.columns if c not in common]

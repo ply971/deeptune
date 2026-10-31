@@ -23,8 +23,8 @@ def _parts(**kw):
     return {'train': _part(20, 0, 'tr', **kw), 'val': _part(6, 1, 'va', **kw), 'test': _part(10, 2, 'te', **kw)}
 
 
-def test_default_csv_holds_features_and_target_only(tmp_path):
-    manifest = dx.write_dfanalyze_export(_parts(), tmp_path, 'cls')
+def test_without_groups_the_csv_holds_features_and_target_only(tmp_path):
+    manifest = dx.write_dfanalyze_export(_parts(groups=False), tmp_path, 'cls')
     table = pd.read_csv(tmp_path / 'dfanalyze.csv')
     assert table.columns.tolist() == [f'emb_{i}' for i in range(6)] + ['target']
     assert len(table) == 10  # the test rows, which the model did not see
@@ -32,7 +32,36 @@ def test_default_csv_holds_features_and_target_only(tmp_path):
     for split, n in (('train', 20), ('val', 6), ('test', 10)):
         assert len(pd.read_csv(tmp_path / f'dfanalyze_{split}.csv')) == n
     assert '--grouper' not in manifest['command'] and '--target target' in manifest['command'] and '--mode=classify' in manifest['command']
-    assert any('--grouper' in w for w in manifest['warnings'])  # groups exist, and df-analyze was not told
+
+
+def test_groups_are_included_and_passed_to_grouper_by_default(tmp_path):
+    parts = _parts()
+    manifest = dx.write_dfanalyze_export(parts, tmp_path, 'cls')
+    table = pd.read_csv(tmp_path / 'dfanalyze.csv')
+    assert table.columns.tolist() == [f'emb_{i}' for i in range(6)] + ['target', 'group']
+    assert table['group'].tolist() == parts['test'].groups
+    assert '--grouper group' in manifest['command'] and '--drops' not in manifest['command']
+    assert manifest['ids_in_csv'] == ['group']
+
+
+def test_the_export_says_these_rows_are_exploratory(tmp_path):
+    manifest = dx.write_dfanalyze_export(_parts(), tmp_path, 'cls')
+    assert 'exploratory, not a second sealed test' in manifest['status_of_these_rows']
+    other = dx.write_dfanalyze_export({'embed': _part(5, 0, 'e')}, tmp_path / 'e', 'cls', rows=['embed'])
+    assert 'exploratory' not in other['status_of_these_rows']
+
+
+def test_few_rows_for_the_features_warn(tmp_path):
+    few = dx.write_dfanalyze_export(_parts(), tmp_path / 'a', 'cls')  # 10 rows, 6 features
+    assert any('rows per feature' in w for w in few['warnings'])
+    enough = dx.write_dfanalyze_export({'test': _part(60, 0, 't')}, tmp_path / 'b', 'cls')
+    assert not any('rows per feature' in w for w in enough['warnings'])
+
+
+def test_pca_rows_inside_the_csv_are_called_out(tmp_path):
+    manifest = dx.write_dfanalyze_export(_parts(), tmp_path, 'cls', dims=2, rows=['train', 'val', 'test'], model_saw_fit_split=False)
+    assert any('PCA was fitted on' in w for w in manifest['warnings'])
+    assert not any('PCA was fitted on' in w for w in dx.write_dfanalyze_export(_parts(), tmp_path / 't', 'cls', dims=2)['warnings'])
 
 
 def test_ids_file_lines_up_with_the_split_files(tmp_path):
@@ -52,13 +81,13 @@ def test_ids_only_when_asked_and_the_command_keeps_them_out_of_the_features(tmp_
     table = pd.read_csv(tmp_path / 'dfanalyze.csv')
     assert {'split', 'video_id', 'group'} <= set(table.columns)
     assert '--grouper group --drops split,video_id' in manifest['command']
-    assert not any('--grouper' in w for w in manifest['warnings'])
 
 
 def test_regression_command(tmp_path):
     parts = {'test': dx.SplitBlocks(np.linspace(0, 1, 5), list('abcde'), np.eye(5, dtype=np.float32))}
     manifest = dx.write_dfanalyze_export(parts, tmp_path, 'reg', extras=['ids'])
-    assert '--mode=regress' in manifest['command'] and '--drops split,video_id,group' in manifest['command']
+    assert '--mode=regress' in manifest['command'] and '--drops split,video_id' in manifest['command'] and '--grouper' not in manifest['command']
+    assert 'group' not in pd.read_csv(tmp_path / 'dfanalyze.csv').columns
 
 
 def test_pca_matches_sklearn_fitted_on_train_alone(tmp_path):
@@ -67,7 +96,7 @@ def test_pca_matches_sklearn_fitted_on_train_alone(tmp_path):
     reference = PCA(n_components=3, svd_solver='full').fit(np.asarray(parts['train'].embedding, dtype=np.float64))
     for name in ('train', 'val', 'test'):
         table = pd.read_csv(tmp_path / f'dfanalyze_{name}.csv')
-        assert table.columns.tolist() == ['pca_0', 'pca_1', 'pca_2', 'target']
+        assert table.columns.tolist() == ['pca_0', 'pca_1', 'pca_2', 'target', 'group']
         np.testing.assert_allclose(table[['pca_0', 'pca_1', 'pca_2']].to_numpy(), reference.transform(parts[name].embedding), rtol=1e-4, atol=1e-5)
     assert manifest['pca']['fit_split'] == 'train' and manifest['pca']['n_fit_rows'] == 20 and manifest['pca']['used'] == 3
     saved = np.load(tmp_path / 'dfanalyze_pca.npz')
@@ -100,14 +129,14 @@ def test_tta_and_motion_columns(tmp_path):
     dx.write_dfanalyze_export(_parts(std=True, motion=True), tmp_path, 'cls', extras=['tta', 'motion'])
     columns = pd.read_csv(tmp_path / 'dfanalyze.csv').columns.tolist()
     assert 'emb_5' in columns and 'emb_std_5' in columns and 'motion_p90' in columns
-    assert columns[-1] == 'target'
+    assert columns[-2:] == ['target', 'group']
 
 
 def test_pca_with_tta_reduces_each_block_from_training_rows(tmp_path):
     parts = _parts(std=True, motion=True)
     dx.write_dfanalyze_export(parts, tmp_path, 'cls', dims=2, extras=['tta', 'motion'])
     table = pd.read_csv(tmp_path / 'dfanalyze_test.csv')
-    assert table.columns.tolist() == ['pca_0', 'pca_1', 'pca_std_0', 'pca_std_1', *dx.MOTION_STATISTICS, 'target']
+    assert table.columns.tolist() == ['pca_0', 'pca_1', 'pca_std_0', 'pca_std_1', *dx.MOTION_STATISTICS, 'target', 'group']
     reference = PCA(n_components=2, svd_solver='full').fit(np.asarray(parts['train'].embedding_std, dtype=np.float64))
     np.testing.assert_allclose(table[['pca_std_0', 'pca_std_1']].to_numpy(), reference.transform(parts['test'].embedding_std), rtol=1e-4, atol=1e-5)
 

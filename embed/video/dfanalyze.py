@@ -80,8 +80,10 @@ def export_from_args(args, splits: dict, model_weights, use_case: str, model_ver
     if mode is None:  # an embedding run may not name it: --mode is only needed to rebuild a head
         mode = 'reg' if np.issubdtype(next(iter(parts.values())).target.dtype, np.floating) else 'cls'
     export_dir = Path(out) / f'dfanalyze_export_{model_str}_{UNIQUE_ID}'
+    # A pretrained model saw no row, so every row is fair for df-analyze. A trained one saw some: only rows it did not see by default.
+    args.dfanalyze_rows = args.dfanalyze_rows or ('all' if use_case == 'pretrained' else 'test')
     rows = list(parts) if args.dfanalyze_rows == 'all' else [main_split]
-    provenance = {'embedding_source': getattr(args, 'embedding_source', None), 'clips_per_video': int(clips), 'crops_per_clip': int(options.test_crops),
+    provenance = {'embedding_source': getattr(args, 'embedding_source', None), 'weights_licence': getattr(args, 'weights_licence', None), 'clips_per_video': int(clips), 'crops_per_clip': int(options.test_crops),
                   'sampling': 'deterministic test-time sampling on every split, no augmentation',
                   'motion_method': 'framediff' if 'motion' in extras else None, 'source_files': {name: str(path) for name, path in splits.items()}}
     write_dfanalyze_export(parts, export_dir, mode, args.dfanalyze_dims, extras, rows, 'train', use_case != 'pretrained', provenance)

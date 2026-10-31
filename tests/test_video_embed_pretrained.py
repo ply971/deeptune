@@ -81,6 +81,7 @@ def test_the_record_says_where_embeddings_came_from(tmp_path, no_download):
     args = _Args()
     embed_mod.load_embedding_model(None, 'pretrained', 'resnet18', 2, 16, 2, args, 'cls', 'attention')
     assert args.embedding_source.startswith('bare backbone resnet18')
+    assert args.weights_licence == SnippetBackbone('resnet18', pretrained=False).weights_licence
 
 
 def test_finetuned_still_loads_its_checkpoint_and_uses_the_head(tmp_path):

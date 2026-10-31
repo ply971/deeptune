@@ -82,6 +82,7 @@ def load_embedding_model(model_weights, use_case, model_version, added_layers, e
             print(f'--pooling {pooling} does not apply to pretrained embeddings: bare backbone features are averaged over time and space.')
         backbone = SnippetBackbone(model_version, pretrained=True)
         args.embedding_source = f'bare backbone {model_version}, weights {backbone.weights_name}, averaged over time and space'
+        args.weights_licence = backbone.weights_licence  # some DEFAULT weights are non-commercial, e.g. vit_h_14's
         return backbone
 
     use_peft = use_case == "peft"

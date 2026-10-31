@@ -51,6 +51,15 @@ def test_keeps_text_columns_and_columns_only_the_csv_has():
     assert out['row'].tolist() == [0, 2] and out['pred'].tolist() == [8, 7] and out['a'].tolist() == [.1, .3]
 
 
+@pytest.mark.parametrize('shared', [['target'], ['label', 'video_id'], ['group', 'split', 'row_id']])
+def test_sharing_only_non_features_is_refused(shared):
+    """A merge on the target alone once returned all 10 Parquet rows from a 2-row CSV."""
+    left = pd.DataFrame({'emb_0': np.arange(10.), **{c: [0, 1] * 5 for c in shared}})
+    right = pd.DataFrame({'f0': [0., 1.], **{c: [0, 1] for c in shared}})
+    with pytest.raises(ValueError, match='no features'):
+        gi.intersect(left, right)
+
+
 def test_identical_csv_rows_do_not_multiply_a_row():
     left = pd.DataFrame({'a': [.5], 'b': [1]})
     assert len(gi.intersect(left, pd.concat([left, left]))) == 1

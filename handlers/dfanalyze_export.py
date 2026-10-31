@@ -2,11 +2,14 @@
 
 The rules that keep this free of leakage:
 - The only fitted step is PCA, fitted on the rows of `fit_split` and applied unchanged to all the others.
-- Group ids, split names and video ids are not features. They stay in `dfanalyze_ids.csv` (and `dfanalyze.parquet`, whose
-  use is to find the rows of a df-analyze holdout again) unless `ids` is asked for. Then the command drops them.
+- Group ids, split names and video ids are not features. All are in `dfanalyze_ids.csv` (and `dfanalyze.parquet`, whose use is
+  to find the rows of a df-analyze holdout again). When groups exist the CSV has a `group` column, and the command passes it to
+  df-analyze's --grouper, which keeps groups whole and removes the column from X (upstream
+  src/df_analyze/preprocessing/prepare.py). `split` and `video_id` join the CSV only with `ids`, and the command drops them.
 - A group or video in two splits is refused.
-- `dfanalyze.csv` defaults to rows the trained model did not see, since df-analyze makes its own 60/40 split of whatever it
-  is given. A holdout holding rows the model trained on would read too high. PCA's training rows are not in it then.
+- `dfanalyze.csv` defaults to rows a trained model did not see, since df-analyze makes its own 60/40 split of whatever it is
+  given. A holdout holding rows the model trained on would read too high. PCA's training rows are not in it then. A pretrained
+  model saw no rows, so the caller defaults to all of them, and the export warns if `--dfanalyze_dims` then puts PCA's rows in.
 """
 from __future__ import annotations
 
@@ -20,7 +23,9 @@ import numpy as np
 import pandas as pd
 
 TARGET_COLUMN = 'target'
-ID_COLUMNS = ('split', 'video_id', 'group')
+ID_COLUMNS = ('split', 'video_id')
+ROWS_PER_FEATURE_WANTED = 10
+EXPLORATORY_NOTE = "These rows already fed DeepTune's report, so this is exploratory, not a second sealed test."
 MOTION_STATISTICS = ('motion_mean', 'motion_std', 'motion_max', 'motion_p90')
 MANIFEST_FILENAME = 'dfanalyze_export.json'
 
@@ -96,8 +101,10 @@ def command_for(csv_path, mode: str, with_ids: bool, has_groups: bool, outdir: s
     else:
         task = '--mode=regress --regressors knn lgbm elastic sgd mlp dummy'
     command = f'python df-analyze.py --df "{csv_path}" --target {TARGET_COLUMN} {task} --embed-select none linear lgbm --outdir {outdir}'
+    if has_groups:
+        command += ' --grouper group'
     if with_ids:
-        command += (' --grouper group --drops split,video_id' if has_groups else ' --drops split,video_id,group')
+        command += ' --drops ' + ','.join(ID_COLUMNS)
     return command
 
 
@@ -141,15 +148,18 @@ def write_dfanalyze_export(parts: dict[str, SplitBlocks], out_dir, mode: str, di
     with_ids = 'ids' in extras
     feature_columns = [c for c in next(iter(tables.values()))[0].columns if c != TARGET_COLUMN]
     for name, (features, identity) in tables.items():
-        _csv_frame(features, identity, with_ids).to_csv(out_dir / f'dfanalyze_{name}.csv', index=False)
-    main_csv = pd.concat([_csv_frame(*tables[name], with_ids) for name in rows], ignore_index=True)
+        _csv_frame(features, identity, with_ids, has_groups).to_csv(out_dir / f'dfanalyze_{name}.csv', index=False)
+    main_csv = pd.concat([_csv_frame(*tables[name], with_ids, has_groups) for name in rows], ignore_index=True)
     main_csv.to_csv(out_dir / 'dfanalyze.csv', index=False)
     pd.concat([pd.concat(list(tables[name]), axis=1) for name in rows], ignore_index=True).to_parquet(out_dir / 'dfanalyze.parquet', index=False)
 
     warnings = []
-    if has_groups and not with_ids:
-        warnings.append("This data has groups, but dfanalyze.csv does not name them, so df-analyze's own split can put clips "
-                        'of one group on both sides. Export with --dfanalyze_extras ids and use the --grouper in the command.')
+    if len(main_csv) < ROWS_PER_FEATURE_WANTED * len(feature_columns):
+        warnings.append(f'dfanalyze.csv has {len(main_csv)} rows for {len(feature_columns)} features, under {ROWS_PER_FEATURE_WANTED} rows per feature, '
+                        'and df-analyze holds out 40% of them. Expect unstable selection and scores. Consider a smaller --dfanalyze_dims or more data.')
+    if dims is not None and fit_split in rows:
+        warnings.append(f'dfanalyze.csv includes the {fit_split} rows PCA was fitted on, so some of df-analyze\'s holdout took part in that fit. '
+                        'PCA does not see the labels, but read the holdout scores with this in mind.')
     if model_saw_fit_split and fit_split in rows:
         warnings.append(f'dfanalyze.csv includes the {fit_split} rows the model trained on. Embeddings of those rows fit better than '
                         "new rows do, so df-analyze's holdout scores read too high. Use --dfanalyze_rows test for an honest estimate.")
@@ -162,7 +172,8 @@ def write_dfanalyze_export(parts: dict[str, SplitBlocks], out_dir, mode: str, di
                 'target': TARGET_COLUMN, 'mode': mode, 'rows_in_dfanalyze_csv': list(rows), 'extras': list(extras),
                 'n_rows': {name: int(len(part.target)) for name, part in parts.items()}, 'n_features': len(feature_columns),
                 'feature_columns_first_last': [feature_columns[0], feature_columns[-1]],
-                'ids_in_csv': list(ID_COLUMNS) if with_ids else [], 'ids_file': 'dfanalyze_ids.csv',
+                'ids_in_csv': [*(ID_COLUMNS if with_ids else ()), *(('group',) if has_groups else ())], 'ids_file': 'dfanalyze_ids.csv',
+                'status_of_these_rows': EXPLORATORY_NOTE if 'test' in rows else 'These rows did not feed a DeepTune test report.',
                 'pca': None, 'warnings': warnings, **(provenance or {})}
     if pca is not None:
         arrays = {'mean': pca.mean, 'components': pca.components, 'explained_variance_ratio': pca.explained}
@@ -179,7 +190,6 @@ def write_dfanalyze_export(parts: dict[str, SplitBlocks], out_dir, mode: str, di
     return manifest
 
 
-def _csv_frame(features: pd.DataFrame, identity: pd.DataFrame, with_ids: bool) -> pd.DataFrame:
-    if not with_ids:
-        return features
-    return pd.concat([features, identity[list(ID_COLUMNS)]], axis=1)
+def _csv_frame(features: pd.DataFrame, identity: pd.DataFrame, with_ids: bool, has_groups: bool) -> pd.DataFrame:
+    columns = [*(ID_COLUMNS if with_ids else ()), *(('group',) if has_groups else ())]
+    return pd.concat([features, identity[columns]], axis=1) if columns else features

@@ -170,12 +170,22 @@ def _embed_cli(tmp_path, monkeypatch, *extra):
 
 
 def test_export_from_the_embedding_script_with_pretrained_features(tmp_path, small_pipeline, monkeypatch):
-    folder = _embed_cli(tmp_path, monkeypatch, '--dfanalyze_train_df', str(tmp_path / 'train.parquet'), '--dfanalyze_dims', '2', '--dfanalyze_rows', 'all')
+    folder = _embed_cli(tmp_path, monkeypatch, '--dfanalyze_train_df', str(tmp_path / 'train.parquet'), '--dfanalyze_dims', '2')  # all rows, by default
     manifest = json.loads((folder / 'dfanalyze_export.json').read_text())
     assert manifest['rows_in_dfanalyze_csv'] == ['train', 'embed'] and manifest['pca']['n_fit_rows'] == 4 and manifest['mode'] == 'cls'
     assert manifest['embedding_source'].startswith('bare backbone dummy_video3d')
     assert not any('read too high' in w for w in manifest['warnings'])  # a pretrained model never trained on them
+    assert any('PCA was fitted on' in w for w in manifest['warnings'])
     assert len(pd.read_csv(folder / 'dfanalyze.csv')) == 8
+    assert '--grouper group' in manifest['command'] and manifest['weights_licence'].startswith('none')
+    assert json.loads((folder / 'cli_arguments.json').read_text())['dfanalyze_rows'] == 'all'
+
+
+def test_export_of_a_trained_model_defaults_to_rows_it_did_not_see(tmp_path, small_pipeline):
+    run = _run(tmp_path, tmp_path / 'out', '--export_dfanalyze', '--report_boot', '0')
+    folder = next(run.glob('dfanalyze_export_*'))
+    manifest = json.loads((folder / 'dfanalyze_export.json').read_text())
+    assert manifest['rows_in_dfanalyze_csv'] == ['test'] and json.loads((folder / 'cli_arguments.json').read_text())['dfanalyze_rows'] == 'test'
 
 
 def test_the_embedding_script_needs_training_rows_for_pca(tmp_path, small_pipeline, monkeypatch, capsys):
