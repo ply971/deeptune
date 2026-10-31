@@ -1,0 +1,265 @@
+"""Localisation mAP against the ActivityNet reference as used by CtxPL, and hand-worked examples.
+
+`_ref_*` below are copied from github.com/moayadeldin/CtxPL (MIT), eval/eval_detection.py and eval/utils_eval.py, read on
+2026-10-31, with only the imports adapted. They are the oracle: the production code is a separate implementation.
+"""
+import numpy as np
+import pandas as pd
+import pytest
+
+from evaluators.video import localization_report as lr
+
+THRESHOLDS = np.round(np.arange(0.1, 1.0, 0.1), 1)
+
+
+def _ref_interpolated_prec_rec(prec, rec):
+    mprec = np.hstack([[0], prec, [0]])
+    mrec = np.hstack([[0], rec, [1]])
+    for i in range(len(mprec) - 1)[::-1]:
+        mprec[i] = max(mprec[i], mprec[i + 1])
+    idx = np.where(mrec[1::] != mrec[0:-1])[0] + 1
+    ap = np.sum((mrec[idx] - mrec[idx - 1]) * mprec[idx])
+    return ap
+
+
+def _ref_segment_iou(target_segment, candidate_segments):
+    tt1 = np.maximum(target_segment[0], candidate_segments[:, 0])
+    tt2 = np.minimum(target_segment[1], candidate_segments[:, 1])
+    segments_intersection = (tt2 - tt1).clip(0)
+    segments_union = (candidate_segments[:, 1] - candidate_segments[:, 0]) \
+        + (target_segment[1] - target_segment[0]) - segments_intersection
+    tIoU = segments_intersection.astype(float) / segments_union
+    return tIoU
+
+
+def _ref_ap(ground_truth, prediction, tiou_thresholds):
+    ap = np.zeros(len(tiou_thresholds))
+    if prediction.empty:
+        return ap
+    npos = float(len(ground_truth))
+    lock_gt = np.ones((len(tiou_thresholds), len(ground_truth))) * -1
+    sort_idx = prediction["score"].values.argsort()[::-1]
+    prediction = prediction.loc[sort_idx].reset_index(drop=True)
+    tp = np.zeros((len(tiou_thresholds), len(prediction)))
+    fp = np.zeros((len(tiou_thresholds), len(prediction)))
+    ground_truth_gbvn = ground_truth.groupby("video-id")
+    for idx, this_pred in prediction.iterrows():
+        try:
+            ground_truth_videoid = ground_truth_gbvn.get_group(this_pred["video-id"])
+        except Exception:
+            fp[:, idx] = 1
+            continue
+        this_gt = ground_truth_videoid.reset_index()
+        tiou_arr = _ref_segment_iou(this_pred[["t-start", "t-end"]].values.astype(float), this_gt[["t-start", "t-end"]].values.astype(float))
+        tiou_sorted_idx = tiou_arr.argsort()[::-1]
+        for tidx, tiou_thr in enumerate(tiou_thresholds):
+            for jdx in tiou_sorted_idx:
+                if tiou_arr[jdx] < tiou_thr:
+                    fp[tidx, idx] = 1
+                    break
+                if lock_gt[tidx, this_gt.loc[jdx]["index"]] >= 0:
+                    continue
+                tp[tidx, idx] = 1
+                lock_gt[tidx, this_gt.loc[jdx]["index"]] = idx
+                break
+            if fp[tidx, idx] == 0 and tp[tidx, idx] == 0:
+                fp[tidx, idx] = 1
+    tp_cumsum = np.cumsum(tp, axis=1).astype(float)
+    fp_cumsum = np.cumsum(fp, axis=1).astype(float)
+    recall_cumsum = tp_cumsum / npos
+    precision_cumsum = tp_cumsum / (tp_cumsum + fp_cumsum)
+    for tidx in range(len(tiou_thresholds)):
+        ap[tidx] = _ref_interpolated_prec_rec(precision_cumsum[tidx, :], recall_cumsum[tidx, :])
+    return ap
+
+
+def _ref_get_ap(conf, labels):
+    sortind = np.argsort(-conf)
+    tp = labels[sortind] == 1
+    fp = labels[sortind] != 1
+    npos = np.sum(labels)
+    fp = np.cumsum(fp).astype('float32')
+    tp = np.cumsum(tp).astype('float32')
+    prec = tp / (fp + tp)
+    tmp = (labels[sortind] == 1).astype('float32')
+    return np.sum(tmp * prec) / npos
+
+
+def gt(rows):
+    return pd.DataFrame(rows, columns=['video-id', 't-start', 't-end', 'label'])
+
+
+def pred(rows):
+    return pd.DataFrame(rows, columns=['video-id', 't-start', 't-end', 'label', 'score'])
+
+
+def _ap(truth, prediction, thresholds=THRESHOLDS):
+    return lr.class_average_precision(truth, prediction, thresholds)
+
+
+def test_one_perfect_detection_has_ap_one():
+    assert _ap(gt([('v', 1, 3, 0)]), pred([('v', 1, 3, 0, .9)])).tolist() == [1.0] * 9
+
+
+def test_worked_example_by_hand():
+    """Two truths. Ranked: hit, false positive, hit: precision 1, 1/2, 2/3 at recall 1/2, 1/2, 1.
+    Envelope: 1 up to recall 1/2, then 2/3. AP = 1/2 * 1 + 1/2 * 2/3 = 5/6."""
+    truth = gt([('a', 0, 10, 0), ('b', 0, 10, 0)])
+    prediction = pred([('a', 0, 10, 0, .9), ('c', 0, 10, 0, .8), ('b', 0, 10, 0, .7)])
+    assert _ap(truth, prediction, [0.5]) == pytest.approx([5 / 6])
+
+
+def test_duplicate_detections_score_one_true_positive():
+    """Second copy is a false positive: AP stays 1 when the duplicate ranks last, and drops when it ranks before a hit."""
+    truth = gt([('a', 0, 10, 0), ('b', 0, 10, 0)])
+    assert _ap(truth, pred([('a', 0, 10, 0, .9), ('b', 0, 10, 0, .8), ('a', 0, 10, 0, .7)]), [0.5]) == pytest.approx([1.0])
+    assert _ap(truth, pred([('a', 0, 10, 0, .9), ('a', 0, 10, 0, .8), ('b', 0, 10, 0, .7)]), [0.5]) == pytest.approx([5 / 6])
+
+
+def test_a_lower_scored_prediction_takes_the_next_free_truth():
+    truth = gt([('a', 0, 10, 0), ('a', 0, 8, 0)])
+    # The top prediction claims (0, 10); the second overlaps it best, finds it taken, and claims (0, 8).
+    assert _ap(truth, pred([('a', 0, 10, 0, .9), ('a', 0, 9.9, 0, .8)]), [0.5]) == pytest.approx([1.0])
+
+
+def test_prediction_in_a_video_without_truth_is_a_false_positive():
+    truth = gt([('a', 0, 10, 0)])
+    assert _ap(truth, pred([('z', 0, 10, 0, .9), ('a', 0, 10, 0, .8)]), [0.5]) == pytest.approx([0.5])
+
+
+def test_empty_predictions_score_zero():
+    report = lr.detection_map(gt([('a', 0, 1, 0)]), pred([]))
+    assert set(report['map_per_threshold'].values()) == {0.0} and report['averages']['avg_0.1_0.5'] == 0.0
+
+
+def test_touching_segments_do_not_overlap():
+    assert lr.segment_iou(np.array([0., 5.]), np.array([[5., 10.]])).tolist() == [0.0]
+    assert _ap(gt([('a', 5, 10, 0)]), pred([('a', 0, 5, 0, .9)]), [0.1]).tolist() == [0.0]
+
+
+def test_iou_exactly_at_threshold_counts():
+    truth = gt([('a', 0, 10, 0)])
+    assert _ap(truth, pred([('a', 0, 5, 0, .9)]), [0.5]) == pytest.approx([1.0])
+
+
+def test_zero_length_segments_do_not_divide_by_zero():
+    assert lr.segment_iou(np.array([2., 2.]), np.array([[2., 2.]])).tolist() == [0.0]
+
+
+def test_map_ignores_classes_without_truth_and_averages_ranges():
+    truth = gt([('a', 0, 10, 0), ('a', 20, 30, 1)])
+    prediction = pred([('a', 0, 10, 0, .9), ('a', 0, 10, 7, .9)])  # class 1 missed, class 7 has no truth
+    report = lr.detection_map(truth, prediction)
+    assert report['map_per_threshold']['0.5'] == pytest.approx(0.5)
+    assert report['ignored_prediction_labels'] == ['7']
+    assert report['averages'] == {'avg_0.1_0.5': pytest.approx(.5), 'avg_0.1_0.7': pytest.approx(.5), 'avg_0.1_0.9': pytest.approx(.5)}
+    assert report['per_class_ap']['1']['0.5'] == 0.0
+
+
+def test_averages_use_the_stated_threshold_ranges():
+    truth = gt([('a', 0, 10, 0)])
+    report = lr.detection_map(truth, pred([('a', 0, 6, 0, .9)]))  # tIoU .6: found up to .6, missed from .7
+    assert report['averages']['avg_0.1_0.5'] == pytest.approx(1.0)
+    assert report['averages']['avg_0.1_0.7'] == pytest.approx(6 / 7)
+    assert report['averages']['avg_0.1_0.9'] == pytest.approx(6 / 9)
+
+
+def _random_tables(seed):
+    rng = np.random.default_rng(seed)
+    truths, predictions = [], []
+    for v in range(rng.integers(3, 8)):
+        for _ in range(rng.integers(1, 5)):
+            start = rng.uniform(0, 80)
+            truths.append((f'v{v}', start, start + rng.uniform(1, 20), 0))
+    for _ in range(rng.integers(1, 40)):
+        video = f'v{rng.integers(0, 10)}'  # some videos have no truth
+        start = rng.uniform(0, 80)
+        predictions.append((video, start, start + rng.uniform(0.5, 20), 0, rng.random()))
+    for t in truths[:len(truths) // 2]:  # near copies, and exact duplicates
+        predictions.append((t[0], t[1] + rng.normal(0, 1), t[2] + rng.normal(0, 1), 0, rng.random()))
+        predictions.append((t[0], t[1], t[2], 0, rng.random()))
+    return gt(truths), pred(predictions)
+
+
+@pytest.mark.parametrize('seed', range(25))
+def test_matches_the_reference_on_random_tables(seed):
+    truth, prediction = _random_tables(seed)
+    assert _ap(truth, prediction) == pytest.approx(_ref_ap(truth, prediction, THRESHOLDS), abs=1e-12)
+
+
+def test_matches_the_reference_when_scores_tie():
+    truth = gt([('a', 0, 10, 0), ('b', 0, 10, 0)])
+    prediction = pred([('a', 0, 10, 0, .5), ('x', 0, 10, 0, .5), ('b', 0, 10, 0, .5), ('a', 1, 10, 0, .5)])
+    assert _ap(truth, prediction) == pytest.approx(_ref_ap(truth, prediction, THRESHOLDS))
+
+
+def test_interpolated_ap_matches_the_reference():
+    rng = np.random.default_rng(1)
+    for _ in range(20):
+        recall = np.sort(rng.random(12))
+        precision = rng.random(12)
+        assert lr.interpolated_ap(precision, recall) == pytest.approx(_ref_interpolated_prec_rec(precision, recall))
+
+
+def test_classification_map_matches_the_reference_and_a_hand_value():
+    labels = np.array([[1, 0], [0, 1], [1, 1], [0, 0]])
+    scores = np.array([[.9, .1], [.8, .7], [.3, .6], [.1, .2]])
+    got = lr.classification_map(scores, labels)
+    # class 0: ranked 1,0,1,0 -> (1 + 2/3) / 2 = 5/6. class 1: ranked 1,1,0,0 -> 1.
+    assert got['per_class_ap'] == pytest.approx([5 / 6, 1.0])
+    assert got['map'] == pytest.approx((5 / 6 + 1) / 2)
+    for k in range(2):
+        assert got['per_class_ap'][k] == pytest.approx(_ref_get_ap(scores[:, k], labels[:, k]))
+
+
+def test_classification_map_leaves_out_a_class_without_positives():
+    got = lr.classification_map(np.array([[.9, .1], [.2, .8]]), np.array([[1, 0], [1, 0]]))
+    assert got['per_class_ap'][1] is None and got['map'] == 1.0
+
+
+def test_boundary_error_by_hand():
+    truth = gt([('a', 10, 20, 0)])
+    got = lr.boundary_error(truth, pred([('a', 11, 22, 0, .9), ('b', 0, 1, 0, .8)]))
+    assert got == {'tiou': .5, 'n_matched': 1, 'start_seconds': 1.0, 'end_seconds': 2.0, 'mean_seconds': 1.5}
+    assert lr.boundary_error(truth, pred([('b', 0, 1, 0, .8)]))['start_seconds'] is None
+
+
+def test_false_positive_flags_follow_the_prediction_rows():
+    truth = gt([('a', 0, 10, 0)])
+    prediction = pred([('a', 0, 10, 0, .1), ('a', 0, 10, 0, .9), ('z', 0, 10, 0, .5)])
+    assert lr.segment_false_positives(truth, prediction).tolist() == [1, 0, 1]  # the higher score wins the match
+
+
+def _simulated_uncertainty(seed, stated_from_truth):
+    rng = np.random.default_rng(seed)
+    truth = rng.random(4000)
+    wrong = (rng.random(4000) < truth).astype(float)
+    return stated_from_truth(truth, rng), wrong
+
+
+def test_calibrated_uncertainty_passes():
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
+    got = lr.validate_uncertainty(stated, wrong)
+    assert got['calibrated'] and got['ranks_errors'] and got['auroc_error_detection'] > .7
+    assert len(got['table']['bins']) == 10
+
+
+def test_rank_only_uncertainty_is_reported_as_not_calibrated():
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t ** 4)  # same order, wrong size
+    got = lr.validate_uncertainty(stated, wrong)
+    assert not got['calibrated'] and got['ranks_errors']
+    table = pd.DataFrame({'t-start': np.zeros(len(stated))})
+    assert 'expected_error' not in lr.attach_expected_error(table, stated, got).columns
+
+
+def test_unrelated_uncertainty_ranks_nothing():
+    stated, wrong = _simulated_uncertainty(1, lambda t, rng: rng.random(len(t)))
+    got = lr.validate_uncertainty(stated, wrong)
+    assert not got['calibrated'] and abs(got['auroc_error_detection'] - .5) < .05
+
+
+def test_expected_error_is_attached_when_calibrated():
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
+    table = pd.DataFrame({'t-start': np.zeros(len(stated))})
+    out = lr.attach_expected_error(table, stated, lr.validate_uncertainty(stated, wrong))
+    assert out['expected_error'].tolist() == stated.tolist()
