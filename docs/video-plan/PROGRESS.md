@@ -11,9 +11,9 @@ Keep entries short and factual. This is the handoff between sessions.
 | 2 Motion / untrimmed / scene-bias benchmarks | merged (A3); fine-tuned single_frame and lossless checks done on the GPU (one seed) | full suite 506 passed, 3 skipped (CPU) | `5bf2588` |
 | + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
 | + Training basics (T1), Analyse Video (V1a) | merged with review fixes; GPU and real-video gate open | full suite 1191 passed, 5 skipped (CPU) | `8314d32`, `94c5ecd` |
-| 3 Temporal models | merged (B2); target reworded by the user; GPU and real-video gate open | full suite not yet passed after the merge | `569790b` |
+| 3 Temporal models | merged (B2); target reworded by the user; GPU and real-video gate open | full suite 1656 passed, 5 skipped (CPU) | `569790b` |
 | 4 Timeline + CtxPL localisation + unsupervised | not started | | |
-| 5 Evaluation | merged (B3); 5-fold assurance report, `check.ps1`, GPU and real-video gate open | full suite not yet passed after the merge | `cb5d761` |
+| 5 Evaluation | merged (B3); 5-fold assurance report, `check.ps1`, GPU and real-video gate open | full suite 1656 passed, 5 skipped (CPU) | `cb5d761` |
 | 6 Explainability & background reliance | not started | | |
 | 7 GUI | not started | | |
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
@@ -22,7 +22,7 @@ Keep entries short and factual. This is the handoff between sessions.
 
 ### 2026-10-31 — B2 and B3 reviews; Phase 3 target changed
 - **Merged, later the same day:** B2 (569790b), B3 (cb5d761), and the pretrained + `two_stream` fix (b42c308: pretrained embeddings use RGB, and the new test fails without the fix). B2's last fix round (464d71b..c564763) and b42c308 were checked by the coordinator, with no fresh ml-critic.
-- **Full suite after these merges: NOT PASSED YET.** The run was stopped by Claude Code because the system was critically low on memory, and it says nothing about the code. Re-run it with memory free; `check.ps1` is also still due.
+- **Full suite (CPU, `CUDA_VISIBLE_DEVICES=-1`, at 12493ed):** `1656 passed, 5 skipped, 92 warnings in 1225.02s (0:20:25)`. An earlier run was stopped by Claude Code for low system memory, with no results. `check.ps1` on the GPU is still due.
 - **B3:** ready at `793d59d` after reviews V-048, V-049, V-050. Targeted CPU tests: `474 passed, 51 warnings` at `f68175c`, then `64 passed` for `tests/test_localization_report.py` on the last wording fix (coordinator's, no fresh review).
 - **B2:** review V-051 says merge after small fixes and found no training bug. The last fix round is done: `tests/models/test_temporal_oracle.py` gave `19 passed, 3 deselected in 308.90s` with `-m "not seed_study"` and `3 passed, 19 deselected in 310.70s` with `-m seed_study`. The marker, the check-script change and the `CLAUDE.md` command are all in.
 - **Measured, CPU, tiny backbone, direction task:** `cnn_rnn` 800 clips 9/10, 240 clips 2/10; `temporal_transformer` 1500 clips 5/10; `late_fusion` half speed 7/10, default speed 0/10. The two-frame limit at default speed is 0.66347; V-046's 0.548 was an error.
@@ -31,7 +31,7 @@ Keep entries short and factual. This is the handoff between sessions.
 - **Open for later:**
   - P-105: pre-cut clips such as UCF101's get no shared-source warning.
   - Phase 4: a group-aware check before any per-segment uncertainty claim.
-- **Next:** re-run the full suite, then R1, R2, P-105, P-106, P-108.
+- **Next:** R1 and R2 are running; then P-105, P-106, P-108, R3, then the Wave 2 GPU gates with the user present.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**
