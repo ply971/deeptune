@@ -67,7 +67,9 @@ def parse_args(argv=None):
                    help="Validation split used by the Trainer (scene_bias: the biased held-out split).")
     p.add_argument("--size", type=int, default=64, help="Generated frame size.")
     p.add_argument("--num_frames", type=int, default=None, help="Generated clip length (default 12; periodic 16).")
-    p.add_argument("--seed", type=int, default=0, help="Data and model seed.")
+    p.add_argument("--seed", type=int, default=0, help="Data seed, and the model seed unless --model_seed is given.")
+    p.add_argument("--model_seed", type=int, default=None,
+                   help="Seed for model initialisation and training. Default: --seed. Change it to repeat a run on the same data.")
     p.add_argument("--codec", default="auto")
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--batch_size", type=int, default=8)
@@ -79,7 +81,10 @@ def parse_args(argv=None):
     p.add_argument("--resize", type=int, default=112, help="Frame side fed to 2D backbones.")
     p.add_argument("--hflip", action="store_true", help="Random clip-level horizontal flip (refused on direction tasks).")
     p.add_argument("--threads", type=int, default=4, help="torch CPU threads (keep low on a laptop).")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.model_seed is None:
+        args.model_seed = args.seed
+    return args
 
 
 def generate_or_load(args):
@@ -200,7 +205,7 @@ def make_loaders(ds, kind, version, num_frames, args):
         dataset = ParquetVideoDataset(frame[["videos", "labels"]], transform=frame_transform,
                                       num_frames=num_frames, clip_transform=clip_transform, options=options)
         if split == "train" and args.hflip:
-            dataset = ClipHFlip(dataset, seed=args.seed)
+            dataset = ClipHFlip(dataset, seed=args.model_seed)
         loaders[split] = DataLoader(dataset, batch_size=args.batch_size, shuffle=split == "train",
                                     collate_fn=collate_video_samples, num_workers=0)
     return loaders
@@ -268,7 +273,7 @@ def run_model(ds, kind, version, args, run_dir):
 
     meta = ds.load_metadata()
     num_frames = next(iter(meta["videos"].values()))["num_frames"]
-    torch.manual_seed(args.seed)
+    torch.manual_seed(args.model_seed)
     mode = task_mode(args.task)
     model = build_model(kind, version, 1 if mode == "reg" else len(meta["classes"]), args, mode=mode, num_frames=num_frames)
     loaders = make_loaders(ds, kind, version, num_frames, args)

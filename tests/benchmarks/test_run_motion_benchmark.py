@@ -67,6 +67,26 @@ def test_hflip_is_refused_on_direction(tmp_path):
         bench.main(["--task", "direction", "--out", str(tmp_path), "--models", "flow_logreg", "--hflip", *TINY])
 
 
+def test_model_seed_defaults_to_seed_and_changes_only_the_model(tmp_path):
+    assert bench.parse_args(["--task", "direction", "--models", "flow_logreg", "--seed", "7"]).model_seed == 7
+    data = bench.generate_or_load(bench.parse_args(["--task", "direction", "--models", "flow_logreg", "--out", str(tmp_path),
+                                                    *TINY])).root
+
+    def config_and_loss(name, *seeds):
+        out = bench.main(["--task", "direction", "--data", str(data), "--out", str(tmp_path / name),
+                          "--models", "single_frame:dummy", *TINY, *seeds])
+        report = json.loads((out / "results.json").read_text())
+        return report["config"], pd.read_csv(out / "single_frame_dummy" / "training_log.csv")["epoch_loss"].tolist()
+
+    config, default = config_and_loss("default")
+    assert config["seed"] == config["model_seed"] == 0
+    _, same = config_and_loss("same", "--model_seed", "0")
+    other_config, other = config_and_loss("other", "--model_seed", "1")
+    assert other_config["seed"] == 0 and other_config["model_seed"] == 1 and other_config["dataset"] == config["dataset"]
+    assert default == same
+    assert default != other
+
+
 def test_bad_specs_are_rejected():
     with pytest.raises(SystemExit):
         bench.parse_spec("max:resnet18")
