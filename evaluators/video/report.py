@@ -351,6 +351,7 @@ def load_eval_scores(eval_dir, mode: Optional[str] = None) -> tuple[str, np.ndar
 
 def split_units(split_path, grouper: Optional[str] = None) -> tuple[Optional[list], Optional[list]]:
     """(group values, source paths) of a split, row by row. Bytes storage has no source path."""
+    import pyarrow as pa
     import pyarrow.parquet as pq
     if split_path is None:
         return None, None
@@ -360,8 +361,11 @@ def split_units(split_path, grouper: Optional[str] = None) -> tuple[Optional[lis
         names = list(frame.columns)
         read = lambda column: frame[column]  # noqa: E731
     else:
-        names = pq.read_schema(split_path).names
+        schema = pq.read_schema(split_path)
+        names = schema.names
         read = lambda column: pd.read_parquet(split_path, columns=[column])[column]  # noqa: E731
+        if 'videos' in names and not (pa.types.is_string(schema.field('videos').type) or pa.types.is_large_string(schema.field('videos').type)):
+            names = [name for name in names if name != 'videos']  # clip bytes are no source path, and may be large
     column = grouper or ('group' if 'group' in names else None)
     groups = read(column).tolist() if column and column in names else None
     sources = None

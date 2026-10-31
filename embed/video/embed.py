@@ -129,6 +129,9 @@ def main():
     NUM_FRAMES = args.num_frames
     POOLING = args.pooling
 
+    if args.export_dfanalyze and args.dfanalyze_dims is not None and args.dfanalyze_train_df is None:
+        args.parser.error('--dfanalyze_dims fits PCA on the training rows: give them with --dfanalyze_train_df.')
+
     embed(
         df_path=DF_PATH,
         num_classes=NUM_CLASSES,
@@ -146,6 +149,13 @@ def main():
         num_frames=NUM_FRAMES,
         pooling=POOLING,
     )
+
+    if args.export_dfanalyze:
+        from embed.video.dfanalyze import export_from_args
+        splits = {name: path for name, path in (('train', args.dfanalyze_train_df), ('val', args.dfanalyze_val_df)) if path is not None}
+        splits['embed'] = DF_PATH
+        export_from_args(args, splits, MODEL_WEIGHTS, USE_CASE, MODEL_VERSION, ADDED_LAYERS, EMBED_SIZE, NUM_CLASSES, MODE, OUT, MODEL_STR,
+                         BATCH_SIZE, NUM_FRAMES, POOLING, GROUPER, main_split='embed')
 
 
 class VideoEmbeddingModel:

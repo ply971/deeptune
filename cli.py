@@ -6,6 +6,8 @@ from utils import UseCase, RunType, get_model_architecture, is_native_video_arch
 from trainers.param_count import parse_param_count
 from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
 from handlers.training_args import TRAINING_BASICS_ARG_NAMES, add_training_basics_arguments, apply_config_defaults
+from handlers.evaluation_args import (DFANALYZE_ARG_NAMES, DFANALYZE_EMBED_ARG_NAMES, EVALUATION_ARG_NAMES, add_dfanalyze_arguments,
+                                      add_evaluation_arguments)
 import json
 import os, shutil
 
@@ -58,6 +60,12 @@ class DeepTuneVisionOptions:
             for name in TRAINING_BASICS_ARG_NAMES:
                 setattr(self, name, getattr(parsed_args, name))
         # --- end training basics ---
+        # --- evaluation suite and df-analyze export (B3) ---
+        evaluation_names = {RunType.ONECALL: EVALUATION_ARG_NAMES + DFANALYZE_ARG_NAMES,
+                            RunType.EMBED: DFANALYZE_ARG_NAMES + DFANALYZE_EMBED_ARG_NAMES}.get(run_type, ())
+        for name in evaluation_names:
+            setattr(self, name, getattr(parsed_args, name))
+        # --- end B3 ---
         # self.input_dir: Optional[Path] = parsed_args.input_dir.resolve() if parsed_args.input_dir else None
         self.out: Optional[Path] = parsed_args.out.resolve() if parsed_args.out else None
         self.batch_size: Optional[int] = parsed_args.batch_size
@@ -324,6 +332,8 @@ Other PEFT models ignore this flag and use --embed_size as their rank.""")
         p.add_argument('--time_idx_column', type=str, default='labels', help='integer typed column denoting the time index within data.')
         self._add_trainable_params_arg()
         add_training_basics_arguments(p)  # T1
+        add_evaluation_arguments(p)  # B3
+        add_dfanalyze_arguments(p)  # B3
 
     def _add_trainable_params_arg(self):
         self.parser.add_argument(
@@ -394,6 +404,8 @@ to parameter_summary.json next to the model weights.""")
 
             """
         )
+        if self.mode == RunType.EMBED:
+            add_dfanalyze_arguments(p, embed_run=True)  # B3
 
     def _add_gandalf_args(self):
 
