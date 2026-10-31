@@ -35,6 +35,8 @@ DEFAULT_TIOU_THRESHOLDS = tuple(np.round(np.arange(0.1, 1.0, 0.1), 1).tolist())
 AVERAGE_RANGES = {'avg_0.1_0.5': (0.1, 0.5), 'avg_0.1_0.7': (0.1, 0.7), 'avg_0.1_0.9': (0.1, 0.9)}
 SEGMENT_COLUMNS = ('video-id', 't-start', 't-end')
 _UNCERTAINTY_MAX_GAP = 0.05  # largest count-weighted |stated - observed| still called calibrated
+_UNCERTAINTY_MIN_ROWS = 100  # below this a decile holds under 10 rows, and a pass means little
+_UNCERTAINTY_MAX_BIN_GAP = 0.10  # a decile further off than this must at least have the stated value inside its joint interval
 
 
 def segment_iou(segment, candidates) -> np.ndarray:
@@ -184,10 +186,24 @@ def localization_report(ground_truth: pd.DataFrame, prediction: pd.DataFrame, vi
 
 
 # -- task 7: is evidential uncertainty an error estimate? ------------------------------------------------------------
-def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap: float = _UNCERTAINTY_MAX_GAP) -> dict:
+def _outside_joint_interval(rows: dict, n_bins: int) -> bool:
+    """Is the stated mean outside this decile's Wilson interval, Bonferroni-corrected so that all deciles hold together at about 95%?"""
+    from scipy.stats import norm
+    z = norm.ppf(1 - 0.05 / (2 * n_bins))
+    n, rate = rows['n'], rows['observed_mean']
+    bottom = 1 + z ** 2 / n
+    centre = (rate + z ** 2 / (2 * n)) / bottom
+    half = z * np.sqrt(rate * (1 - rate) / n + z ** 2 / (4 * n ** 2)) / bottom
+    return not centre - half <= rows['stated_mean'] <= centre + half
+
+
+def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap: float = _UNCERTAINTY_MAX_GAP, unit: Optional[str] = None,
+                         split: Optional[str] = None, min_rows: int = _UNCERTAINTY_MIN_ROWS, max_bin_gap: float = _UNCERTAINTY_MAX_BIN_GAP) -> dict:
     """Stated uncertainty (in [0, 1]) against observed errors (1 wrong, 0 right) per decile, on held-out rows.
 
-    `calibrated` needs the count-weighted gap to be at most `max_gap`. `ranks_errors` is the weaker property, that more
+    `calibrated` needs all of: at least `min_rows` rows; a count-weighted gap of at most `max_gap`; and in every decile a gap
+    of at most `max_bin_gap`, or the stated value inside the decile's interval (Wilson, Bonferroni-corrected so that the deciles
+    hold jointly at about 95%), so that a small decile is not failed for its noise alone. `calibration_failures` says which failed. `ranks_errors` is the weaker property, that more
     uncertain rows go wrong more often (AUROC above 0.5 and a positive Spearman correlation). A rank-only signal may still
     be mapped to an error rate by fitting an `ErrorModel` on held-out rows; it must not be stated as a probability as is."""
     from scipy.stats import spearmanr
@@ -197,15 +213,25 @@ def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap:
         raise ValueError('Expected one observed error per stated uncertainty, and at least one row.')
     if not np.isin(observed, (0.0, 1.0)).all():
         raise ValueError('Observed errors must be 0 or 1.')
+    if not np.isfinite(stated).all():
+        raise ValueError('Uncertainty must be finite: rows without a value cannot be checked, and would still count in n.')
     if ((stated < 0) | (stated > 1)).any():
         raise ValueError('Uncertainty must lie in [0, 1].')
     table = calibration_table(stated, observed, n_bins=n_bins, mode='cls')
     gap = table['summary']['calibration_error']
+    failures = []
+    if len(stated) < min_rows:
+        failures.append(f'{len(stated)} rows, under the minimum of {min_rows}')
+    if gap > max_gap:
+        failures.append(f'weighted gap {gap:.3f} is above {max_gap:g}')
+    off = [b for b in table['bins'] if abs(b['gap']) > max_bin_gap and _outside_joint_interval(b, len(table['bins']))]
+    if off:
+        failures.append(f"{len(off)} decile(s) off by more than {max_bin_gap:g} with the stated value outside their joint 95% interval, worst {max(abs(b['gap']) for b in off):.3f}")
     both = len(set(observed.tolist())) == 2
     correlation = float(spearmanr(stated, observed).statistic) if both and np.ptp(stated) > 0 else None
     auroc = _auroc(stated, observed.astype(bool))
-    return {'n': int(len(stated)), 'calibration_error': gap, 'max_gap_allowed': max_gap, 'calibrated': bool(gap <= max_gap),
-            'spearman': correlation, 'auroc_error_detection': auroc,
+    return {'n': int(len(stated)), 'unit': unit, 'split': split, 'calibration_error': gap, 'max_gap_allowed': max_gap, 'min_rows': min_rows,
+            'max_bin_gap_allowed': max_bin_gap, 'calibrated': not failures, 'calibration_failures': failures, 'spearman': correlation, 'auroc_error_detection': auroc,
             'ranks_errors': bool(auroc is not None and auroc > 0.5 and correlation is not None and correlation > 0),
             'table': table}
 
@@ -217,8 +243,8 @@ def segment_false_positives(ground_truth: pd.DataFrame, prediction: pd.DataFrame
 
 def validate_segment_uncertainty(ground_truth: pd.DataFrame, prediction: pd.DataFrame, uncertainty, tiou: float = 0.5, split: str = 'validation') -> dict:
     """Per segment: does stated uncertainty follow the rate of false positives at `tiou`, on held-out rows named `split`?"""
-    result = validate_uncertainty(uncertainty, segment_false_positives(ground_truth, prediction, tiou))
-    return {**result, 'unit': 'segment', 'error': f'false positive at tIoU {tiou:g}', 'split': split}
+    result = validate_uncertainty(uncertainty, segment_false_positives(ground_truth, prediction, tiou), unit='segment', split=split)
+    return {**result, 'error': f'false positive at tIoU {tiou:g}'}
 
 
 def video_label_errors(scores, labels) -> np.ndarray:
@@ -231,19 +257,27 @@ def video_label_errors(scores, labels) -> np.ndarray:
 
 def validate_video_uncertainty(uncertainty, scores, labels, split: str = 'validation') -> dict:
     """Per video: does stated uncertainty follow the rate of video-level label errors, on held-out rows named `split`?"""
-    return {**validate_uncertainty(uncertainty, video_label_errors(scores, labels)), 'unit': 'video', 'error': 'top class not among the labels', 'split': split}
+    return {**validate_uncertainty(uncertainty, video_label_errors(scores, labels), unit='video', split=split), 'error': 'top class not among the labels'}
 
 
-def attach_expected_error(segments: pd.DataFrame, uncertainty, validation: dict, applied_to: Optional[str] = None) -> pd.DataFrame:
+def attach_expected_error(table: pd.DataFrame, uncertainty, validation: dict, *, applied_to: str, unit: str = 'segment') -> pd.DataFrame:
     """Adds `expected_error` from the uncertainty only if `validation` found it calibrated; otherwise the table is unchanged.
 
-    `applied_to` names the split of `segments`. A check on the rows it is then applied to says nothing about new rows, so
-    that is refused when both are named."""
-    if applied_to is not None and validation.get('split') == applied_to:
+    `applied_to` names the split of `table`, and `unit` what its rows are ('segment' or 'video'). `validation` must be a check
+    of that same unit on another split: a check on the rows it is applied to says nothing about new rows, and a video-level
+    check says nothing about segments."""
+    if validation.get('unit') != unit:
+        raise ValueError(f"The uncertainty was validated per {validation.get('unit')}; it cannot state an error per {unit}.")
+    if not validation.get('split'):
+        raise ValueError('The check does not name the rows it was made on, so it cannot be told apart from these rows.')
+    if validation['split'] == applied_to:
         raise ValueError(f'The uncertainty was validated on the {applied_to} rows themselves; validate it on other held-out rows.')
-    out = segments.copy()
+    values = np.asarray(uncertainty, dtype=np.float64).reshape(-1)
+    if len(values) != len(table) or not np.isfinite(values).all():
+        raise ValueError('Expected one finite uncertainty per row.')
+    out = table.copy()
     if validation.get('calibrated'):
-        out['expected_error'] = np.asarray(uncertainty, dtype=np.float64)
+        out['expected_error'] = values
     return out
 
 

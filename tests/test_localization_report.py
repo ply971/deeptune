@@ -251,7 +251,8 @@ def test_rank_only_uncertainty_is_reported_as_not_calibrated():
     got = lr.validate_uncertainty(stated, wrong)
     assert not got['calibrated'] and got['ranks_errors']
     table = pd.DataFrame({'t-start': np.zeros(len(stated))})
-    assert 'expected_error' not in lr.attach_expected_error(table, stated, got).columns
+    got = {**got, 'unit': 'segment', 'split': 'validation'}
+    assert 'expected_error' not in lr.attach_expected_error(table, stated, got, applied_to='test').columns
 
 
 def test_unrelated_uncertainty_ranks_nothing():
@@ -263,13 +264,13 @@ def test_unrelated_uncertainty_ranks_nothing():
 def test_expected_error_is_attached_when_calibrated():
     stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
     table = pd.DataFrame({'t-start': np.zeros(len(stated))})
-    out = lr.attach_expected_error(table, stated, lr.validate_uncertainty(stated, wrong))
+    out = lr.attach_expected_error(table, stated, lr.validate_uncertainty(stated, wrong, unit='segment', split='validation'), applied_to='test')
     assert out['expected_error'].tolist() == stated.tolist()
 
 
 def test_applying_uncertainty_to_the_rows_it_was_checked_on_is_refused():
     stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
-    validation = {**lr.validate_uncertainty(stated, wrong), 'split': 'test'}
+    validation = lr.validate_uncertainty(stated, wrong, unit='segment', split='test')
     table = pd.DataFrame({'t-start': np.zeros(len(stated))})
     with pytest.raises(ValueError, match='validated on the test rows'):
         lr.attach_expected_error(table, stated, validation, applied_to='test')
@@ -311,3 +312,65 @@ def test_report_cli(tmp_path):
     assert 'avg_0.1_0.7' in report['detection']['averages'] and report['uncertainty']['unit'] == 'segment'
     assert report['detection']['map_per_threshold']['0.5'] == pytest.approx(_ap(truth, prediction, [0.5])[0])
     assert pd.read_csv(tmp_path / 'r' / 'per_class_ap.csv')['0.5'].iloc[0] == pytest.approx(_ap(truth, prediction, [0.5])[0])
+
+
+def test_applied_to_is_required():
+    with pytest.raises(TypeError, match='applied_to'):
+        lr.attach_expected_error(pd.DataFrame({'a': [0]}), [.1], {'calibrated': True, 'unit': 'segment', 'split': 'validation'})
+
+
+def test_a_check_with_no_named_split_cannot_attach():
+    with pytest.raises(ValueError, match='does not name'):
+        lr.attach_expected_error(pd.DataFrame({'a': [0]}), [.1], {'calibrated': True, 'unit': 'segment'}, applied_to='test')
+
+
+def test_a_video_level_check_cannot_attach_to_segments():
+    stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
+    video = lr.validate_uncertainty(stated, wrong, unit='video', split='validation')
+    assert video['calibrated']
+    table = pd.DataFrame({'t-start': np.zeros(len(stated))})
+    with pytest.raises(ValueError, match='per video'):
+        lr.attach_expected_error(table, stated, video, applied_to='test', unit='segment')
+    assert 'expected_error' in lr.attach_expected_error(table, stated, video, applied_to='test', unit='video').columns
+
+
+@pytest.mark.parametrize('stated,wrong', [([.0], [0.]), ([.02] * 5, [0.] * 5), ([.3] * 99, [0., 0., 1.] * 33)])
+def test_too_few_rows_are_never_called_calibrated(stated, wrong):
+    got = lr.validate_uncertainty(np.array(stated), np.array(wrong))
+    assert not got['calibrated'] and any('under the minimum' in reason for reason in got['calibration_failures'])
+
+
+def test_one_terrible_decile_fails_even_with_a_small_weighted_gap():
+    """900 rows stated .2, right about that; 100 rows stated .05, half of them wrong: weighted gap .045, decile gap .45."""
+    stated = np.r_[np.full(900, .2), np.full(100, .05)]
+    wrong = np.r_[(np.arange(900) % 5 == 0) * 1., (np.arange(100) % 2 == 0) * 1.]
+    got = lr.validate_uncertainty(stated, wrong)
+    assert got['calibration_error'] <= .05
+    assert not got['calibrated'] and any('decile' in reason for reason in got['calibration_failures'])
+
+
+def test_honest_small_samples_rarely_fail_the_decile_rule():
+    """Truly calibrated data at n = 150, with the weighted-gap rule set aside: the joint interval should fail about 5% of the time."""
+    failed = 0
+    for seed in range(200):
+        rng = np.random.default_rng(seed)
+        stated = rng.random(150)
+        wrong = (rng.random(150) < stated) * 1.
+        failed += not lr.validate_uncertainty(stated, wrong, max_gap=1.0)['calibrated']
+    assert failed / 200 <= .10
+
+
+def test_a_terrible_decile_fails_at_the_minimum_size_too():
+    stated = np.r_[np.full(90, .2), np.full(10, .05)]  # the lowest decile: stated .05, half wrong, 10 rows
+    wrong = np.r_[(np.arange(90) % 5 == 0) * 1., (np.arange(10) % 2 == 0) * 1.]
+    got = lr.validate_uncertainty(stated, wrong)
+    assert got['n'] == 100 and not got['calibrated'] and any('decile' in reason for reason in got['calibration_failures'])
+
+
+def test_nan_uncertainty_is_rejected():
+    with pytest.raises(ValueError, match='finite'):
+        lr.validate_uncertainty(np.array([.1, np.nan, .2]), np.array([0., 1., 1.]))
+    validation = {'calibrated': True, 'unit': 'segment', 'split': 'validation'}
+    with pytest.raises(ValueError, match='finite'):
+        lr.attach_expected_error(pd.DataFrame({'a': [0, 1]}), [.1, np.nan], validation, applied_to='test')
+
