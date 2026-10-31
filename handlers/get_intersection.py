@@ -7,7 +7,8 @@ Works for every modality, and imports no torch. A CSV cannot hold a column's typ
 written by DeepTune) and column names as text, since a frame of embeddings may name its columns with the integers 0, 1, ...
 The output keeps the Parquet file's values and row order, with column names as text, plus any columns only the CSV has. A
 row of the Parquet file that matches several identical CSV rows appears once. At least one shared column must be a feature:
-sharing only the target or an id would match every row with that value.
+sharing only the target or an id would match every row with that value. Names cannot show that for a custom target, so the
+shared columns must also tell at least half of the Parquet rows apart.
 """
 from argparse import ArgumentParser
 from datetime import datetime
@@ -42,6 +43,10 @@ def intersect(df_parquet: pd.DataFrame, df_csv: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f'The two files share only {common}, which are no features, so every row with the same label would match. '
                          'Do the two files have the same feature columns? Compare them after the same export.')
     keys_left = pd.DataFrame({c: _comparable(left[c]) for c in common})
+    distinct = len(keys_left.drop_duplicates())
+    if distinct * 2 < len(left):  # any name: a target called 'diagnosis' is no feature either
+        raise ValueError(f'The shared columns {common[:8]} tell only {distinct} of {len(left)} Parquet rows apart, so they look like a target or an id, '
+                         'not features. Compare the two files after the same export.')
     keys_right = pd.DataFrame({c: _comparable(right[c]) for c in common})
     only_csv = [c for c in right.columns if c not in common]
     keys_right = pd.concat([keys_right, right[only_csv]], axis=1).drop_duplicates(subset=common)

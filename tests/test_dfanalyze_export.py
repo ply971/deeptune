@@ -48,7 +48,20 @@ def test_the_export_says_these_rows_are_exploratory(tmp_path):
     manifest = dx.write_dfanalyze_export(_parts(), tmp_path, 'cls')
     assert 'exploratory, not a second sealed test' in manifest['status_of_these_rows']
     other = dx.write_dfanalyze_export({'embed': _part(5, 0, 'e')}, tmp_path / 'e', 'cls', rows=['embed'])
-    assert 'exploratory' not in other['status_of_these_rows']
+    assert other['status_of_these_rows'] == dx.UNKNOWN_ROWS_NOTE
+    assert other['status_of_these_rows'].startswith('Unknown whether') and 'Check that' in other['status_of_these_rows']
+
+
+@pytest.mark.parametrize('missing', [None, float('nan')])
+def test_rows_with_no_group_warn_when_the_command_passes_grouper(tmp_path, missing):
+    parts = _parts()
+    parts['test'].groups[0] = missing
+    manifest = dx.write_dfanalyze_export(parts, tmp_path, 'cls')
+    assert '--grouper group' in manifest['command'] and any('1 of 10 rows have no group' in w for w in manifest['warnings'])
+
+
+def test_complete_groups_do_not_warn(tmp_path):
+    assert not any('have no group' in w for w in dx.write_dfanalyze_export(_parts(), tmp_path, 'cls')['warnings'])
 
 
 def test_few_rows_for_the_features_warn(tmp_path):

@@ -26,6 +26,8 @@ TARGET_COLUMN = 'target'
 ID_COLUMNS = ('split', 'video_id')
 ROWS_PER_FEATURE_WANTED = 10
 EXPLORATORY_NOTE = "These rows already fed DeepTune's report, so this is exploratory, not a second sealed test."
+UNKNOWN_ROWS_NOTE = ('Unknown whether these rows fed a DeepTune report: this export was not given that record. '
+                     'Check that before treating df-analyze results on them as a sealed test.')
 MOTION_STATISTICS = ('motion_mean', 'motion_std', 'motion_max', 'motion_p90')
 MANIFEST_FILENAME = 'dfanalyze_export.json'
 
@@ -154,6 +156,9 @@ def write_dfanalyze_export(parts: dict[str, SplitBlocks], out_dir, mode: str, di
     pd.concat([pd.concat(list(tables[name]), axis=1) for name in rows], ignore_index=True).to_parquet(out_dir / 'dfanalyze.parquet', index=False)
 
     warnings = []
+    if has_groups and main_csv['group'].isna().any():
+        warnings.append(f"{int(main_csv['group'].isna().sum())} of {len(main_csv)} rows have no group, but the command passes --grouper group. "
+                        'Rows with no group have no unit to keep together, and df-analyze may treat them unpredictably. Fill in the group column.')
     if len(main_csv) < ROWS_PER_FEATURE_WANTED * len(feature_columns):
         warnings.append(f'dfanalyze.csv has {len(main_csv)} rows for {len(feature_columns)} features, under {ROWS_PER_FEATURE_WANTED} rows per feature, '
                         'and df-analyze holds out 40% of them. Expect unstable selection and scores. Consider a smaller --dfanalyze_dims or more data.')
@@ -173,7 +178,7 @@ def write_dfanalyze_export(parts: dict[str, SplitBlocks], out_dir, mode: str, di
                 'n_rows': {name: int(len(part.target)) for name, part in parts.items()}, 'n_features': len(feature_columns),
                 'feature_columns_first_last': [feature_columns[0], feature_columns[-1]],
                 'ids_in_csv': [*(ID_COLUMNS if with_ids else ()), *(('group',) if has_groups else ())], 'ids_file': 'dfanalyze_ids.csv',
-                'status_of_these_rows': EXPLORATORY_NOTE if 'test' in rows else 'These rows did not feed a DeepTune test report.',
+                'status_of_these_rows': EXPLORATORY_NOTE if 'test' in rows else UNKNOWN_ROWS_NOTE,
                 'pca': None, 'warnings': warnings, **(provenance or {})}
     if pca is not None:
         arrays = {'mean': pca.mean, 'components': pca.components, 'explained_variance_ratio': pca.explained}

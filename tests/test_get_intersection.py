@@ -60,6 +60,18 @@ def test_sharing_only_non_features_is_refused(shared):
         gi.intersect(left, right)
 
 
+def test_a_custom_target_name_is_refused_too():
+    left = pd.DataFrame({'emb_0': np.arange(10.), 'diagnosis': [0, 1] * 5})
+    right = pd.DataFrame({'f0': [0., 1.], 'diagnosis': [0, 1]})
+    with pytest.raises(ValueError, match='tell only 2 of 10'):
+        gi.intersect(left, right)
+
+
+def test_a_few_duplicate_embeddings_are_still_allowed():
+    left = pd.DataFrame({'emb_0': [1., 1., 2., 3.], 'row': range(4)})
+    assert gi.intersect(left, pd.DataFrame({'emb_0': [1.]}))['row'].tolist() == [0, 1]
+
+
 def test_identical_csv_rows_do_not_multiply_a_row():
     left = pd.DataFrame({'a': [.5], 'b': [1]})
     assert len(gi.intersect(left, pd.concat([left, left]))) == 1
