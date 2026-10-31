@@ -328,6 +328,21 @@ P-001…P-012 (an id clash, see P-113).
   - R2 and the run card state the realised-coverage interval from the effective number of groups (P-118).
   - V1c uses `facebook/sam2.1-hiera-small` with per-frame pruning (F-014). V1d uses `Qwen/Qwen3.5-2B` with `Qwen/Qwen3.5-0.8B` as fallback, if a test on this GPU peaks under 5.5 GB at 16 or more frames (F-012, F-013). Download approved by the user.
 
+### Moved to a later extension (user, 2026-10-31)
+P-105 (leakage and near-duplicate audit), P-106 (run card), P-107 (label-issue
+finder), P-108 (data-efficiency curve), P-109 ("label these next") and R3 (auto
+model selection, smart and exhaustive) stay in the project, but now come after
+the core work as an extension, not in Wave 2. This overrides their placement
+above. R3 stays protected from cuts.
+
+Until P-105 lands, every real-data manifest needs a correct `group` column by
+hand: pre-cut clips such as UCF101's get no shared-source warning.
+
+The order is now: V1a's check on a real clip and desktop page 07, then R1 and R2,
+then Wave 3. The user also stopped the remaining GPU checks, which stay open under
+rule 1 below: B2's `scene_bias` (seeds 1, 2), `periodic` and UCF101 pipeline runs,
+and B3's 5-fold report. So B2 and B3 do not yet count as done.
+
 ### Professional-quality rules (agreed 2026-10-30)
 1. **Real-data gate.** A feature is not "done" until the coordinator has run it
    once on a real dataset on the GPU, with the number recorded in PROGRESS.md
