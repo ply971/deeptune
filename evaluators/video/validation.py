@@ -32,6 +32,15 @@ ASSIGNMENTS_FILENAME = 'assignments.csv'
 FOLD_METRICS_FILENAME = 'fold_metrics.csv'
 INNER_VALIDATION_FRACTION = 0.1
 SCHEMES = ('holdout', 'kfold', 'bootstrap632')
+# The README repeats these words; a test holds the two together.
+KFOLD_CAVEATS = ('Each fold model trains on fewer rows than the final model, with 10% of its rows held out for checkpoint selection, so these estimates lean pessimistic for the final model.',)
+BOOTSTRAP_CAVEATS = ("Group resampling is an approximation: the .632 weight is derived for independent units, and groups of unequal size make it rougher.",
+                     'Resample models train on about 57% distinct units (0.632 x 0.9), with held-out checkpoint selection.',
+                     'The apparent model trains on 100% of the rows and selects on its own training rows, so err and Err1 come from differently trained models.')
+ENSEMBLE_NOTE = ('Probabilities averaged over the resamples that did not see each row, about 37% of them. This describes an ensemble, which '
+                 'usually scores above any one model. It is not the estimate: use out_of_fold and bootstrap632.')
+ERROR_MODEL_BOOTSTRAP_NOTE = ('Not fitted in bootstrap mode: the averaged out-of-bag probabilities describe an ensemble, not one model. '
+                              'Use --validation kfold, or the error model of the final run, fitted on validation.')
 
 
 # -- splitting -------------------------------------------------------------------------------------------------------
@@ -87,12 +96,18 @@ def inner_validation_split(labels, positions, groups=None, mode: str = 'cls', se
     if len(np.unique(units)) < 2:
         raise ValueError('Too few distinct rows or groups to set validation rows aside. Add data, or lower --k.')
     parts = max(2, min(int(round(1 / fraction)), len(np.unique(units))))
+    kept = None
     if mode == 'cls':
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='The least populated class', category=UserWarning)
-            # A class may have too few members for every part: the split then leaves it out of some, which is only a logging cost.
-            kept = next(StratifiedGroupKFold(n_splits=parts, shuffle=True, random_state=seed).split(positions, labels[positions], groups=units))
-    else:
+        # The stratified splitter refuses more parts than the largest class has rows, so a small dataset sets more aside.
+        largest = int(np.unique(labels[positions], return_counts=True)[1].max())
+        if largest >= 2:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', message='The least populated class', category=UserWarning)
+                # A class may have too few members for every part: the split then leaves it out of some, which is only a logging cost.
+                kept = next(StratifiedGroupKFold(n_splits=min(parts, largest), shuffle=True, random_state=seed).split(positions, labels[positions], groups=units))
+            if not len(kept[0]) or not len(kept[1]):
+                kept = None
+    if kept is None:  # regression, or one row per class: nothing to stratify on
         kept = next(GroupShuffleSplit(n_splits=1, test_size=1 / parts, random_state=seed).split(positions, groups=units))
     return positions[kept[0]], positions[kept[1]]
 
@@ -140,17 +155,19 @@ def no_information_error(truth, predictions, mode: str = 'cls') -> float:
 
 
 def efron_632_plus(apparent_error: float, oob_error: float, no_information: float) -> dict:
-    """Eqs. 27-32 of Efron & Tibshirani, JASA 1997. `oob_error` is the leave-one-out bootstrap error Err^(1).
+    """Eq. 32 of Efron & Tibshirani, JASA 1997. `oob_error` is the leave-one-out bootstrap error Err^(1).
     Err1' = min(Err1, gamma); R' = (Err1' - err) / (gamma - err) when Err1 > err and gamma > err, else 0;
-    w = .632 / (1 - .368 R'); Err.632+ = (1 - w) err + w Err1'."""
+    Err.632 = .368 err + .632 Err1, with the unclipped Err1;
+    Err.632+ = Err.632 + (Err1' - err) * (.368 * .632 * R') / (1 - .368 * R')."""
     err, err1, gamma = float(apparent_error), float(oob_error), float(no_information)
     clipped = min(err1, gamma)
     rate = (clipped - err) / (gamma - err) if err1 > err and gamma > err else 0.0
     rate = float(np.clip(rate, 0, 1))
     weight = 0.632 / (1 - 0.368 * rate)
-    estimate = (1 - weight) * err + weight * clipped
+    error_632 = 0.368 * err + 0.632 * err1
+    estimate = error_632 + (clipped - err) * (0.368 * 0.632 * rate) / (1 - 0.368 * rate)
     return {'apparent_error': err, 'oob_error': err1, 'no_information_error': gamma, 'relative_overfitting': rate, 'weight': weight,
-            'error_632': 0.368 * err + 0.632 * err1, 'error_632_plus': float(estimate)}
+            'error_632': error_632, 'error_632_plus': float(estimate)}
 
 
 # -- the runner ------------------------------------------------------------------------------------------------------
@@ -219,7 +236,37 @@ def _oof_calibration(truth, scores, folds) -> dict:
             'temperature_all_folds': fit_temperature(scores, truth),
             'before': {'ece': expected_calibration_error(scores, truth), 'brier': brier_score(scores, truth), 'nll': negative_log_likelihood(scores, truth)},
             'after': {'ece': expected_calibration_error(after, truth), 'brier': brier_score(after, truth), 'nll': negative_log_likelihood(after, truth)},
-            'caveat': 'pools probabilities of several fold models, which were not trained on all the rows'}
+            'caveat': 'pools probabilities of several fold models, which were not trained on all the rows',
+            'applied_at_inference': False}
+
+
+def _per_resample_scores(long: pd.DataFrame, mode: str, fold_table: pd.DataFrame, names, groups, sources, n_boot, seed) -> dict:
+    """The bootstrap's headline: each metric scored on each resample's own out-of-bag rows, then averaged, as Err^(1) is.
+
+    The intervals resample units over each row's mean loss across the models that did not see it, so accuracy's interval is
+    about 1 - Err^(1). Metrics that do not decompose per row (F1, AUC) have no interval here: their spread is in across_folds."""
+    means = {name: fold_summary(fold_table[name].tolist())['mean'] for name in names}
+    grouped = long.groupby('row_id', sort=True)
+    truth = grouped['target'].first().to_numpy()
+    if mode == 'cls':
+        hit = grouped['correct'].mean().to_numpy(dtype=np.float64)
+
+        def balanced(idx):
+            return float(np.mean([hit[idx][truth[idx] == c].mean() for c in np.unique(truth[idx])]))
+        metrics = {'accuracy': lambda idx: float(hit[idx].mean()), 'balanced_accuracy': balanced}
+    else:
+        difference = long['prediction'] - long['target']
+        absolute = difference.abs().groupby(long['row_id'], sort=True).mean().to_numpy()
+        squared = (difference ** 2).groupby(long['row_id'], sort=True).mean().to_numpy()
+
+        def r2(idx):
+            total = ((truth[idx] - truth[idx].mean()) ** 2).sum()
+            return float('nan') if total == 0 else float(1 - squared[idx].sum() / total)
+        metrics = {'mae': lambda idx: float(absolute[idx].mean()), 'rmse': lambda idx: float(np.sqrt(squared[idx].mean())), 'r2': r2}
+    intervals = {name: bootstrap_ci(metric, len(truth), groups, sources, n_boot, seed=seed) for name, metric in metrics.items()}
+    for interval in intervals.values():
+        interval['covers'] = 'which units were drawn, over each row\'s mean loss across the resample models; not training variability'
+    return {'metrics': means, 'intervals': intervals, 'scored': 'per resample, on its own out-of-bag rows, then averaged, matching oob_error'}
 
 
 def _oof_intervals(mode, truth, scores, groups, sources, n_boot, seed) -> dict:
@@ -264,7 +311,8 @@ def fit_oof_error_model(oof: pd.DataFrame, mode: str, out_dir, seed: int = 42) -
 
 def run_validation(scheme: str, labels, fit_predict: FitPredict, out_dir, mode: str = 'cls', ids: Optional[Sequence] = None, groups=None,
                    sources=None, k: int = 5, n_boot: int = 50, seed: int = 42, ci_boot: int = DEFAULT_BOOTSTRAPS,
-                   row_ids: Optional[Sequence] = None, apparent_fit_predict: Optional[FitPredict] = None) -> dict:
+                   row_ids: Optional[Sequence] = None, apparent_fit_predict: Optional[FitPredict] = None,
+                   group_source: Optional[str] = None) -> dict:
     """Runs the scheme on these rows and writes cv_summary.json, fold_metrics.csv, assignments.csv and oof_predictions.csv."""
     if scheme not in ('kfold', 'bootstrap632'):
         raise ValueError(f'Unknown validation scheme {scheme!r}.')
@@ -304,16 +352,23 @@ def run_validation(scheme: str, labels, fit_predict: FitPredict, out_dir, mode: 
     oof_groups = None if groups is None else np.asarray(list(groups), dtype=object)[positions].tolist()
     oof_sources = None if sources is None else np.asarray(list(sources), dtype=object)[positions].tolist()
     summary = {'schema_version': OOF_SCHEMA_VERSION, 'scheme': scheme, 'mode': mode, 'seed': int(seed), 'n_rows': int(n), 'n_scored_rows': int(len(oof)),
-               'grouped': groups is not None, 'k': int(k) if scheme == 'kfold' else None, 'n_boot': int(n_boot) if scheme != 'kfold' else None,
+               'grouped': groups is not None, 'group_source': (group_source or 'column') if groups is not None else None,
+               'k': int(k) if scheme == 'kfold' else None, 'n_boot': int(n_boot) if scheme != 'kfold' else None,
+               'caveats': list(KFOLD_CAVEATS if scheme == 'kfold' else BOOTSTRAP_CAVEATS),
                'rows_used': 'train + validation rows; the sealed test rows are not given to this scheme',
                'per_fold': fold_rows, 'across_folds': {name: fold_summary(fold_table[name].tolist()) for name in names},
-               'out_of_fold': {'metrics': _metrics(mode, oof_truth, oof_scores),
-                               'intervals': _oof_intervals(mode, oof_truth, oof_scores, oof_groups, oof_sources, ci_boot, seed)},
                'how_to_read': ('out_of_fold.intervals: uncertainty from which units were drawn, for models of this kind. across_folds: '
                                'spread between models; its t interval is too narrow, as folds share data.')}
+    if scheme == 'kfold':
+        summary['out_of_fold'] = {'metrics': _metrics(mode, oof_truth, oof_scores), 'scored': 'all out-of-fold rows pooled',
+                                  'intervals': _oof_intervals(mode, oof_truth, oof_scores, oof_groups, oof_sources, ci_boot, seed)}
+        summary['error_model'] = fit_oof_error_model(oof, mode, out_dir, seed)
+    else:
+        summary['out_of_fold'] = _per_resample_scores(long, mode, fold_table, names, oof_groups, oof_sources, ci_boot, seed)
+        summary['oob_ensemble'] = {'metrics': _metrics(mode, oof_truth, oof_scores), 'note': ENSEMBLE_NOTE}
+        summary['error_model'] = {'method': None, 'note': ERROR_MODEL_BOOTSTRAP_NOTE}
     if mode == 'cls':
         summary['calibration'] = _oof_calibration(oof_truth, oof_scores, oof['fold'].to_numpy()) if scheme == 'kfold' else None
-    summary['error_model'] = fit_oof_error_model(oof, mode, out_dir, seed)
     if scheme == 'bootstrap632':
         summary['bootstrap632'] = _bootstrap_summary(labels, truth, long, mode, n, groups, seed, apparent_fit_predict, oof)
     (out_dir / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2, default=_json_default), encoding='utf-8')
@@ -327,7 +382,8 @@ def _json_default(value):
 
 
 def _mean_over_resamples(long: pd.DataFrame, mode: str) -> pd.DataFrame:
-    """One row per pool row: the average of the models that did not see it, so P-107 and P-109 can read one format."""
+    """One row per pool row: the average of the models that did not see it, so P-107 and P-109 can read one format.
+    These are ensemble probabilities (see ENSEMBLE_NOTE), not one model's; `n_models` says how many were averaged."""
     probability_columns = sorted((c for c in long.columns if c.startswith('prob_')), key=lambda c: int(c.split('_')[1]))
     numeric = probability_columns if mode == 'cls' else ['prediction']
     keep = ['row_id', 'video_id', 'target', 'group']
@@ -361,7 +417,7 @@ def _bootstrap_summary(labels, truth, long, mode, n, groups, seed, apparent_fit_
         out['note'] = 'no model on all the rows was given, so .632+ was not computed'
         return out
     every = np.arange(n)
-    train_rows, val_rows = every, every  # the apparent error is on the rows trained on, by definition
+    train_rows, val_rows = every, every  # the apparent error is on the rows trained on, by definition; see BOOTSTRAP_CAVEATS
     result = apparent_fit_predict(train_rows, val_rows, every, 'apparent')
     scores = _check_scores(result, n, mode, 'apparent')
     apparent = float(_errors(mode, truth, scores).mean())

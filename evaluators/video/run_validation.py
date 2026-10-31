@@ -93,8 +93,13 @@ def run_video_validation(args, train_path, val_path, out, train_fn, evaluate_fn,
         return fit_predict(train_rows, val_rows, eval_rows, name, error_model=False)  # its validation rows are its training rows
 
     videos = _column(pool, 'videos') if _holds_paths(pool) else None
+    groups, group_source = _column(pool, grouper), 'column'
+    if groups is None and videos is not None and len(set(videos)) < len(videos):
+        # Clips of one source would straddle folds, while the intervals already treat the source as the unit.
+        groups, group_source = videos, 'source_video'
+        print(f'--validation {scheme}: no group column, but {pool.num_rows} rows come from {len(set(videos))} source videos. Using the source video as the group.')
     summary = run_validation(scheme, np.asarray(_column(pool, 'labels')), fit_predict, root, mode=mode, ids=_video_ids(pool),
-                             groups=_column(pool, grouper), sources=videos, k=args.k, n_boot=args.n_boot,
+                             groups=groups, group_source=group_source, sources=videos, k=args.k, n_boot=args.n_boot,
                              seed=_validation_seed(args), ci_boot=args.report_boot or DEFAULT_BOOTSTRAPS,
                              apparent_fit_predict=apparent if scheme == 'bootstrap632' else None)
     args.save_args(root)
