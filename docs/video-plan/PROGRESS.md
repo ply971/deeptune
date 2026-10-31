@@ -31,7 +31,12 @@ Keep entries short and factual. This is the handoff between sessions.
 - **Open for later:**
   - P-105: pre-cut clips such as UCF101's get no shared-source warning.
   - Phase 4: a group-aware check before any per-segment uncertainty claim.
-- **Next:** R1 and R2 are running; then P-105, P-106, P-108, R3, then the Wave 2 GPU gates with the user present.
+- **R1 and R2 stopped at the user's request, so the GPU checks come first.** Their uncommitted files stay in `.claude/wt/R1` and `.claude/wt/R2`.
+- **`check.ps1` on the GPU (at cbd57bb): `CHECK FAIL`.** `pytest: 4 failed, 1650 passed, 4 skipped, 3 deselected, 96 warnings in 941.91s`; pip check and all three smoke runs ok. It ran in its own window, because Claude Code's memory safeguard stopped it from the session.
+  - **Fixed, real bug:** `run_motion_benchmark.py` didn't set cuDNN determinism, so one seed gave 0.991, 0.942, 0.989 on the GPU. With it set, all three runs matched exactly.
+  - **Fixed, real bug:** non-video loaders spawned 8 workers on Windows, and each loads torch's CUDA DLLs. That ran out of page file (WinError 1455) in 2 of 7 runs of one test. `options.NUM_WORKERS` now follows the Windows cap of 4: 4 of 4 passes, so this is improved, not proven gone. `CLAUDE.md`'s `NUM_WORKERS = min(8, cpu/2)` is now out of date.
+  - **Open, test assumptions, pass on CPU:** `test_features_equal_a_direct_backbone_forward` compares a GPU result with a CPU one and differs by up to 6e-5. `test_validation_loss_is_computed_in_float32` feeds CPU tensors to a model on the GPU. Waiting on the user, per CLAUDE.md rule 3.
+- **Next:** the two test decisions, `check.ps1` again, then the remaining GPU checks (B1, T1, B2, B3's 5-fold report, V1a), then R1, R2, P-105, P-106, P-108, R3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**

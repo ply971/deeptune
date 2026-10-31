@@ -274,6 +274,9 @@ def run_model(ds, kind, version, args, run_dir):
     meta = ds.load_metadata()
     num_frames = next(iter(meta["videos"].values()))["num_frames"]
     torch.manual_seed(args.model_seed)
+    # Without these, one seed gives different losses on the GPU, and seeds can't be compared.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     mode = task_mode(args.task)
     model = build_model(kind, version, 1 if mode == "reg" else len(meta["classes"]), args, mode=mode, num_frames=num_frames)
     loaders = make_loaders(ds, kind, version, num_frames, args)

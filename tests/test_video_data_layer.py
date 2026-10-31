@@ -230,6 +230,14 @@ def test_worker_defaults():
         resolve_num_workers(-1)
 
 
+def test_other_loaders_share_the_worker_cap():
+    """Eight spawned workers ran the laptop out of page file during image training (WinError 1455)."""
+    import options
+    assert options.NUM_WORKERS == options.resolve_num_workers()
+    assert options.PERSIST_WORK == (options.NUM_WORKERS > 0)
+    assert options.resolve_num_workers(device='cuda', platform='win32', cpu=16) == 4
+
+
 def test_loader_kwargs_pin_memory_only_on_cuda_and_prepare_workers(clip_files):
     _, paths = clip_files
     df = pd.DataFrame({'videos': [p.read_bytes() for p in paths]})

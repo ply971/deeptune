@@ -23,8 +23,6 @@ def get_device() -> torch.device:
 DEVICE = get_device()
 
 CPU_COUNT: int = cpu_count()
-NUM_WORKERS: int = min(8, CPU_COUNT // 2) if DEVICE.type != "cpu" else 0
-PERSIST_WORK: bool = NUM_WORKERS > 0
 PIN_MEM: bool = DEVICE.type == "cuda"
 
 # --- video DataLoader workers (--num_workers, G15) ---
@@ -58,6 +56,12 @@ def resolve_num_workers(requested="auto", n_items=None, device=None, platform=No
             return 0
         return max(0, min(WINDOWS_AUTO_MAX_WORKERS, cpu // 2))
     return max(0, min(8, cpu // 2))
+
+
+# Image, text and other non-video loaders. Each spawned worker loads torch's CUDA DLLs: on this laptop 8 of them
+# ran out of page file (WinError 1455, "DataLoader worker exited unexpectedly"), so they share the Windows cap.
+NUM_WORKERS: int = resolve_num_workers()
+PERSIST_WORK: bool = NUM_WORKERS > 0
 
 # The paths of the Parquet splits of the dataset we are saving/loading from
 TRAIN_DATASET_PATH = Path(__file__).parent / f'deeptune_results/train_split_{UNIQUE_ID}.parquet'
