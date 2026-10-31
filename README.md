@@ -430,11 +430,11 @@ in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py
   features, not its class logits, so embeddings saved by earlier runs have a different shape. Weights and
   predictions are unchanged. The images embedder still refuses `added_layers` below 2 on DenseNet.
 - **What the benchmark shows** (`tests/models/test_temporal_oracle.py`, untrained tiny backbone, CPU,
-  held-out scenes): on one seed, `early_fusion`, `tsm` and `two_stream` learn the direction of motion from
-  240 clips, as does `slow_fusion` (on an untrained r3d_18, not the default r2plus1d_18), and `single_frame`,
-  `mean`, `attention` and `tsm` with its shift turned off stay at chance. Three models were also run over
-  several seeds, counting a run as passed at 85 % held-out accuracy or more, with the reversal and frame-order
-  checks. `cnn_rnn` passed 2 of 10 runs from 240 clips and 9 of 10 from 800. `temporal_transformer` passed 5 of 10
+  held-out scenes): `single_frame`, `mean`, `attention` and `tsm` with its shift turned off stay at chance in
+  all 20 runs over five model seeds. A motion model's run counts as passed at 85 % held-out accuracy or more, with
+  its reversal and frame-order checks. From 240 clips and five model seeds, `two_stream` passed 5 of 5 with either
+  motion source, as did `slow_fusion` (on an untrained r3d_18, not the default r2plus1d_18); `tsm` passed 4 of 5
+  and `early_fusion` 3 of 5. `cnn_rnn` passed 2 of 10 runs from 240 clips and 9 of 10 from 800. `temporal_transformer` passed 5 of 10
   from 1500 clips (`tt_dim=64`, learning rate 3e-4); the other runs stayed at 0.50-0.625, so the benchmark does not
   show that it reliably learns direction. `late_fusion` passed 7 of 10 from 800 clips, on a task at half the default
   speed only. At the default speed it passed 0 of 10 (best 0.585), and it cannot pass: on the benchmark's wrap-around

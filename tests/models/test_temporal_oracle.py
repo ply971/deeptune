@@ -153,6 +153,16 @@ def test_appearance_models_stay_at_chance(task, fitted, pooling):
     assert accuracy <= CHANCE_MAX
 
 
+@pytest.mark.parametrize('pooling', ['single_frame', 'mean', 'attention', 'tsm:tsm_fold_div=1000'])
+def test_appearance_controls_stay_at_chance_across_model_seeds(task, pooling):
+    """Seed 0 is covered above, or by the TSM control below. Each of these fits takes about 2 s."""
+    x_train, y_train = task.split('train')
+    x, y = task.split('test')
+    scores = [_accuracy(_fit(pooling, x_train, y_train, seed=seed), x, y) for seed in PASS_RATE_SEEDS[1:]]
+    print(f'{pooling}: held-out {np.round(scores, 3)}')
+    assert max(scores) <= CHANCE_MAX
+
+
 @pytest.mark.parametrize('pooling', ['early_fusion:num_frames=8', 'tsm', 'cnn_rnn'])
 def test_rgb_motion_models_beat_chance_and_depend_on_frame_order(task, fitted, pooling):
     model = fitted(pooling)
