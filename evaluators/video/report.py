@@ -204,8 +204,18 @@ def build_report(mode: str, y, scores, groups=None, sources=None, fit_scores=Non
     any_interval = next(iter(report['intervals'].values()))
     report['resampling_unit'] = any_interval['unit']
     report['n_units'] = any_interval['n_units']
-    report['warnings'] = sorted({v['warning'] for v in report['intervals'].values() if v.get('warning')})
+    report['warnings'] = sorted({v['warning'] for v in report['intervals'].values() if v.get('warning')}
+                                | set(report['calibration'].get('warnings', [])))
     return report
+
+
+def plotting_available() -> bool:
+    try:
+        import matplotlib.backends.backend_agg  # noqa: F401
+        import matplotlib.figure  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _new_axes(width=5.0, height=4.0):
@@ -282,7 +292,10 @@ def plot_reliability(calibration: dict, path: Path) -> None:
                   marker='o', markersize=5, label=label)
     axes.set_xlim(0, 1)
     axes.set_ylim(0, 1.02)
-    _finish(figure, axes, f"Reliability on {calibration['eval_split']}", 'Mean confidence', 'Accuracy', path, legend=True)
+    title = f"Reliability on {calibration['eval_split']}"
+    if calibration.get('after'):
+        title += ' (temperature reported only, not applied at inference)'
+    _finish(figure, axes, title, 'Mean confidence', 'Accuracy', path, legend=True)
 
 
 def plot_residuals(y, prediction, path: Path) -> None:
@@ -305,6 +318,10 @@ def write_report(report: dict, out_dir, y=None, scores=None) -> Path:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / REPORT_FILENAME
+    plots = plotting_available()  # a missing plotting library must not end a run after its training
+    report['plots'] = 'written' if plots else 'skipped: matplotlib could not be imported'
+    if not plots:
+        print('Warning: matplotlib could not be imported, so the report has no PNG plots. Its numbers and CSV tables are complete.')
     path.write_text(json.dumps(report, indent=2), encoding='utf-8')
     pd.DataFrame([{'metric': name, **{k: v[k] for k in ('point', 'low', 'high', 'level', 'unit', 'n_units', 'n_boot')}}
                   for name, v in report['intervals'].items()]).to_csv(out_dir / 'metric_intervals.csv', index=False)
@@ -314,17 +331,20 @@ def write_report(report: dict, out_dir, y=None, scores=None) -> Path:
         pd.DataFrame(table).to_csv(out_dir / 'per_class_metrics.csv', index=False)
         pd.DataFrame(report['confusion_matrix'], index=names, columns=names).to_csv(out_dir / 'confusion_matrix.csv')
         _reliability_rows(report['calibration']).to_csv(out_dir / 'reliability.csv', index=False)
-        plot_confusion(report['confusion_matrix'], names, out_dir / 'confusion_matrix.png')
-        plot_reliability(report['calibration'], out_dir / 'reliability_diagram.png')
+        if plots:
+            plot_confusion(report['confusion_matrix'], names, out_dir / 'confusion_matrix.png')
+            plot_reliability(report['calibration'], out_dir / 'reliability_diagram.png')
         if scores is not None:
             points = roc_points(np.asarray(y).reshape(-1).astype(np.int64), np.asarray(scores))
             points.to_csv(out_dir / 'roc_curves.csv', index=False)
-            plot_roc(points, table, out_dir / 'roc_curves.png')
+            if plots:
+                plot_roc(points, table, out_dir / 'roc_curves.png')
     elif scores is not None:
         y = np.asarray(y, dtype=np.float64).reshape(-1)
         prediction = np.asarray(scores, dtype=np.float64).reshape(-1)
         pd.DataFrame({'truth': y, 'prediction': prediction, 'residual': prediction - y}).to_csv(out_dir / 'residuals.csv', index=False)
-        plot_residuals(y, prediction, out_dir / 'residuals.png')
+        if plots:
+            plot_residuals(y, prediction, out_dir / 'residuals.png')
     return path
 
 

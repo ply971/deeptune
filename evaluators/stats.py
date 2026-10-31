@@ -66,6 +66,8 @@ def _interval(values: np.ndarray, point: float, level: float, n_units: int, unit
         warnings.append(ROW_UNIT_WARNING)
     if n_units < FEW_UNITS:
         warnings.append(f'only {n_units} {unit} units: this interval is unstable')
+    if low == high:
+        warnings.append(f'zero width: every resample gave {low:.4g}. This does not mean certainty: a bootstrap cannot show errors the {n_units} units did not contain')
     if warnings:
         out['warning'] = '; '.join(warnings)
     return out

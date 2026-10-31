@@ -298,3 +298,58 @@ def test_feature_probe_outputs_can_be_compared(tmp_path):
     with pytest.raises(ValueError, match='video ids differ'):
         rp.compare_eval_dirs(tmp_path / 'a', tmp_path / 'c', n_boot=5)
 
+
+def test_report_and_json_say_the_temperature_is_not_applied(tmp_path):
+    report = rp.build_report('cls', Y, P, fit_scores=P, fit_labels=Y, fit_split='validation', n_boot=10)
+    assert report['calibration']['applied_at_inference'] is False
+    path = rp.write_report(report, tmp_path, Y, P)
+    assert json.loads(path.read_text())['calibration']['applied_at_inference'] is False
+    assert cal.calibration_report(P, Y)['applied_at_inference'] is False
+
+
+def test_plot_title_says_the_temperature_is_not_applied(tmp_path, monkeypatch):
+    titles = []
+    original = rp._finish
+    monkeypatch.setattr(rp, '_finish', lambda figure, axes, title, *a, **k: (titles.append(title), original(figure, axes, title, *a, **k)))
+    rp.plot_reliability(cal.calibration_report(P, Y, P, Y, 'validation'), tmp_path / 'r.png')
+    assert 'not applied at inference' in titles[0]
+
+
+@pytest.mark.parametrize('mode', ['cls', 'reg'])
+def test_a_missing_plotting_library_skips_the_pngs_with_a_warning(tmp_path, monkeypatch, capsys, mode):
+    for name in ('matplotlib', 'matplotlib.figure', 'matplotlib.backends', 'matplotlib.backends.backend_agg'):
+        monkeypatch.setitem(__import__('sys').modules, name, None)
+    y, scores = (Y, P) if mode == 'cls' else (Y.astype(float), Y + .1)
+    report = rp.build_report(mode, y, scores, n_boot=10)
+    path = rp.write_report(report, tmp_path, y, scores)
+    assert 'matplotlib' in capsys.readouterr().out and not list(tmp_path.glob('*.png'))
+    assert json.loads(path.read_text())['plots'].startswith('skipped')
+    assert (tmp_path / 'metric_intervals.csv').is_file()
+
+
+def test_requirements_declare_matplotlib():
+    from pathlib import Path
+    assert 'matplotlib==' in (Path(__file__).resolve().parents[1] / 'requirements.txt').read_text()
+
+
+def test_a_fit_with_no_errors_warns_and_reaches_the_report():
+    """All-correct validation pushes T to its low bound, which ruined test ECE in the critic's repro."""
+    p_fit = np.array([[.9, .1], [.8, .2], [.7, .3], [.95, .05]] * 2)
+    y_fit = np.zeros(8, dtype=int)
+    p_test = np.tile([[.7, .3], [.6, .4]], (50, 1))
+    y_test = (np.arange(100) % 3 == 0) * 1
+    got = cal.calibration_report(p_test, y_test, p_fit, y_fit, 'validation')
+    assert any('hold no errors' in w for w in got['warnings']) and any('near the search bounds' in w for w in got['warnings'])
+    report = rp.build_report('cls', y_test, p_test, fit_scores=p_fit, fit_labels=y_fit, fit_split='validation', n_boot=10)
+    assert any('hold no errors' in w for w in report['warnings'])
+
+
+def test_an_ordinary_fit_does_not_warn():
+    assert cal.calibration_report(P, Y, P, Y, 'validation')['warnings'] == []
+
+
+def test_a_zero_width_interval_warns():
+    y = np.r_[np.zeros(50, int), np.ones(50, int)]
+    got = stats.bootstrap_ci(lambda idx: float((y[idx] == y[idx]).mean()), 100, groups=[i // 2 for i in range(100)], n_boot=30)
+    assert got['low'] == got['high'] == 1.0 and 'zero width' in got['warning']
+

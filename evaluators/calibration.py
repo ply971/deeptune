@@ -9,6 +9,7 @@ import numpy as np
 
 DEFAULT_ECE_BINS = 15
 TEMPERATURE_BOUNDS = (0.01, 100.0)
+SUSPECT_TEMPERATURE = (0.05, 20.0)  # outside this the fit is close enough to its bounds to distrust
 _EPS = 1e-12
 
 
@@ -83,6 +84,17 @@ def fit_temperature(probabilities, labels) -> float:
     return float(np.exp(result.x))
 
 
+def temperature_warnings(temperature: float, fit_probabilities, fit_labels) -> list[str]:
+    """Why this temperature may do harm. With no errors in the fit rows, the likelihood keeps improving as T falls to its bound."""
+    p, y = _checked(fit_probabilities, fit_labels)
+    found = []
+    if (p.argmax(axis=1) == y).all():
+        found.append(f'the {len(y)} fit rows hold no errors, so they cannot say how confident to be: T={temperature:.3g} is likely too low; ignore the after scores')
+    if not SUSPECT_TEMPERATURE[0] <= temperature <= SUSPECT_TEMPERATURE[1]:
+        found.append(f'T={temperature:.3g} is near the search bounds {TEMPERATURE_BOUNDS}; do not trust this fit')
+    return found
+
+
 def _scores(p, y, n_bins) -> dict:
     return {'ece': expected_calibration_error(p, y, n_bins), 'brier': brier_score(p, y), 'nll': negative_log_likelihood(p, y),
             'reliability': reliability_bins(p, y, n_bins)}
@@ -93,9 +105,9 @@ def calibration_report(eval_probabilities, eval_labels, fit_probabilities=None, 
     """Before/after scores on the evaluation rows. Temperature scaling leaves the argmax unchanged, so accuracy does not move.
 
     Without a fit set the report says so and gives only the 'before' scores. A temperature is never fitted on the rows it
-    is reported on."""
+    is reported on. It is only reported: inference does not apply it (`applied_at_inference`)."""
     p, y = _checked(eval_probabilities, eval_labels)
-    report = {'eval_split': eval_split, 'n_eval': int(len(y)), 'n_bins': int(n_bins), 'before': _scores(p, y, n_bins)}
+    report = {'eval_split': eval_split, 'n_eval': int(len(y)), 'n_bins': int(n_bins), 'applied_at_inference': False, 'before': _scores(p, y, n_bins)}
     if fit_probabilities is None:
         return {**report, 'temperature': None, 'fit_split': None, 'after': None,
                 'note': 'not fitted: no validation or out-of-fold probabilities were available'}
@@ -104,4 +116,5 @@ def calibration_report(eval_probabilities, eval_labels, fit_probabilities=None, 
     temperature = fit_temperature(fit_probabilities, fit_labels)
     return {**report, 'temperature': temperature, 'fit_split': fit_split, 'n_fit': int(len(fit_labels)),
             'fit_split_used_for_model_selection': selection_used_fit_split,
+            'warnings': temperature_warnings(temperature, fit_probabilities, fit_labels),
             'after': _scores(apply_temperature(p, temperature), y, n_bins)}
