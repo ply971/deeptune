@@ -60,3 +60,18 @@ def error_calibration_report(predictions: pd.DataFrame, mode: str) -> Optional[d
     if observed is None or not np.isfinite(observed).any():
         return None
     return calibration_table(predictions['expected_error'].to_numpy(dtype=float), observed, mode=mode)
+
+
+# --- abstention (R2) ---
+def attach_abstention(result: pd.DataFrame, checkpoint_path, num_classes: int, state_dict, pipeline: dict, warn=print) -> Optional[dict]:
+    """Adds `answered` and `decision` ("not sure" or the predicted label) when the run has an abstention.json for these weights, and
+    returns the summary for abstention_summary.json. Old runs: no columns, no error. Torch-free."""
+    from evaluators.abstention import apply_rule, load_rule_near
+    from evaluators.error_model import weights_fingerprint
+    rule = load_rule_near(checkpoint_path, num_classes, None if state_dict is None else weights_fingerprint(state_dict), warn=warn)
+    if rule is None:
+        return None
+    summary = apply_rule(rule, result, pipeline, warn=warn)
+    if summary is not None:
+        warn(f"Abstention: {summary['answered']} of {summary['n_clips']} clips answered, {summary['not_sure']} \"not sure\". {summary['headline']}")
+    return summary

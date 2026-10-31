@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from datasets.video_datasets import (VideoDataOptions, native_video_transform, open_video_dataset, video_loader_kwargs)
 from helpers import transformations
-from inference.common import attach_expected_error
+from inference.common import attach_abstention, attach_expected_error
 from options import DEVICE, PIN_MEM
 from src.video.multi_clip import clip_disagreement, error_model_clips_mismatch, multi_clip_scores
 from src.video.multi_crop import wrap_for_test_crops
@@ -39,6 +39,7 @@ def predict_video(
     label_mapping: Optional[dict] = None,
     video_options: Optional[VideoDataOptions] = None,
     lora_rank: Optional[int] = None,
+    abstain: bool = True,
 ) -> pd.DataFrame:
     """Runs `checkpoint_path`'s model over every row of `df` (a 'videos'
     column of file paths or clip bytes, detected automatically, + optional
@@ -51,7 +52,10 @@ def predict_video(
     them, and a ``clip_disagreement`` column is added (0 = all clips agree).
 
     `lora_rank` is the run's recorded rank for a native PEFT model; None means
-    it equals `embed_size`, as in runs recorded before --lora_rank existed."""
+    it equals `embed_size`, as in runs recorded before --lora_rank existed.
+
+    With `abstain` (default) and an abstention.json for these weights, adds `answered` and
+    `decision`, and puts the summary in `result.attrs['abstention']`."""
     video_options = video_options or VideoDataOptions()
     error_model_clips_mismatch(checkpoint_path, video_options.test_clips, test_crops=video_options.test_crops)
     model = build_video_model(
@@ -120,4 +124,9 @@ def predict_video(
     # Hash the file's weights, not the model's: loading may have upgraded old LoRA layouts.
     if scores:
         attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), state_dict)
+    if abstain and mode == 'cls':  # after expected_error, which a rule can use as its score
+        from evaluators.abstention import pipeline_record
+        summary = attach_abstention(result, checkpoint_path, num_classes, state_dict, pipeline_record(video_options, num_frames, pooling))
+        if summary is not None:
+            result.attrs['abstention'] = summary
     return result
