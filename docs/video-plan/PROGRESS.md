@@ -71,7 +71,7 @@ Keep entries short and factual. This is the handoff between sessions.
   | `flow_probe` | 0.993 | 0.993 | 0.993 |
 
   84 min in total. Single dataset, so the seeds vary only the model and training order. `temporal_transformer` stayed near 50% on training as well as validation on all three seeds, so it did not memorise, unlike its tiny-backbone failures. This run is 5 epochs with the runner's default settings, not B2's `tt_dim=64`, lr 3e-4 oracle settings, and the cause is not investigated: possibly a settings problem or a bug. Phase 3's reworded target says each architecture can learn direction, and on real ResNets `temporal_transformer` has not shown that here. `late_fusion` has not either, as expected at this speed. Results: `.artifacts/gate/b2/direction/`. `scene_bias` and `periodic` are running.
-- **Next:** finish B2 (`direction` seed 2, `scene_bias`, `periodic`, UCF101 through the pipeline and `infer.py`), then B3's 5-fold report, then V1a (its desktop steps need the user or screen control), then R1, R2. The user cut P-105 to P-109 and R3 from the plan (PLAN.md 4b).
+- **Next:** finish B2 (`direction` seed 2, `scene_bias`, `periodic`, UCF101 through the pipeline and `infer.py`), then B3's 5-fold report, then V1a (its desktop steps need the user or screen control), then R1, R2, P-105, P-106, P-108, R3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**
