@@ -404,12 +404,12 @@ in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py
 | `frame_pool` (default) | Pools per-frame embeddings, then classifies the pooled embedding. | `--pooling mean\|attention` |
 | `single_frame` | Middle frame only. A baseline: it cannot see motion. | |
 | `late_fusion` | First and last frames, embeddings merged by FC layers. | |
-| `early_fusion` | All frames stacked on an inflated first convolution. ResNet family; the frame count is fixed at build time. | |
+| `early_fusion` | All frames stacked on an inflated first convolution. ResNet family; the frame count is fixed at build time. With `--freeze_backbone` that convolution stays trainable: its inflated weights cannot tell frame order until trained. | |
 | `slow_fusion` | A native 3D CNN: `--model_version` if it names one, otherwise `r2plus1d_18`. | |
 | `tsm` | Temporal Shift Module in each residual block. ResNet family, no extra parameters. | `--tsm_fold_div` |
 | `cnn_rnn` | Per-frame embeddings into an LSTM or GRU. | `--rnn_type --rnn_hidden --rnn_layers --bidirectional` |
 | `temporal_transformer` | Per-frame embeddings into a small transformer with a CLS token. Passed about half its benchmark runs, see below. | `--tt_layers --tt_heads --tt_dim` |
-| `two_stream` | RGB middle frame + stacked motion fields, fused late. ResNet family. | `--motion_source farneback\|mv --fusion avg\|fc --motion_length --motion_cache DIR` |
+| `two_stream` | RGB middle frame + stacked motion fields, fused late. ResNet family. With `--freeze_backbone` the motion stream's inflated first convolution stays trainable: frozen, it cannot separate dx from dy. | `--motion_source farneback\|mv --fusion avg\|fc --motion_length --motion_cache DIR` |
 
 ```powershell
 .venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version resnet18 --video_arch tsm
@@ -438,7 +438,7 @@ in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py
   from 1500 clips (`tt_dim=64`, learning rate 3e-4); the other runs stayed at 0.50-0.625, so the benchmark does not
   show that it reliably learns direction. `late_fusion` passed 7 of 10 from 800 clips, on a task at half the default
   speed only. At the default speed it passed 0 of 10 (best 0.585), and it cannot pass: on the benchmark's wrap-around
-  world, no rule that sees only two frames can exceed about 0.66. This is evidence that the models are wired
+  world, no rule that sees only two frames can exceed about 0.663. This is evidence that the models are wired
   correctly, not a ranking of them or a statement of how much data they need. Real ResNets are not yet measured
   on these models.
 
