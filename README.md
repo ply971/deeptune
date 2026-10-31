@@ -498,8 +498,9 @@ so read the table as a whole rather than one bin at a time.
 
 Every video run through `deeptune.py` now writes `evaluation_report.json` next to `predictions.csv` in `eval_output_*/`: confusion matrix, accuracy, balanced accuracy, macro and weighted F1, per-class sensitivity, specificity, PPV and NPV, one-vs-rest ROC and PR AUC, or MAE, RMSE and R² for regression, with CSV tables and PNG plots. Undefined values are null, never 0.
 
+- **Plots** need matplotlib. Without it the report still has its numbers and CSVs, and says the PNGs were skipped.
 - **Intervals** are percentile bootstraps over whole groups when a `group` column exists, else over source videos, else over rows, which the report warns about. `n_units` is printed beside each one. They cover which test units were drawn, for this one fitted model. They do not cover training variability, and a wide interval on few groups is the honest result. `--report_boot N` sets the resamples (default 2000); `0` skips the report.
-- **Calibration:** ECE, Brier score, NLL and a reliability diagram, before and after temperature scaling. For this the validation split is scored once more, and only those rows fit the temperature. A temperature is never fitted on test rows. `fit_split_used_for_model_selection` says when validation also chose the weights, which makes it a less clean fit. The temperature is reported, and is not yet applied at inference.
+- **Calibration:** ECE, Brier score, NLL and a reliability diagram, before and after temperature scaling. For this the validation split is scored once more, and only those rows fit the temperature. A temperature is never fitted on test rows. `fit_split_used_for_model_selection` says when validation also chose the weights, which makes it a less clean fit. The temperature is only reported (`applied_at_inference: false`). The report warns when validation holds no errors or the temperature is near its bounds; ignore the "after" scores then.
 - **Comparing two models** on one test set: `python -m evaluators.video.report compare --a RUN_A/eval_output_x --b RUN_B/eval_output_y --test_df test_split.parquet` gives an interval on the paired difference, resampled together. It is not a p-value and has no correction for many comparisons.
 
 ```powershell
@@ -516,17 +517,26 @@ python deeptune.py --modality video --df clips.csv --raw-data --model_version re
 
 Training time is multiplied by the number of models, so try a few epochs first. Each model sets aside 10% of its rows, whole groups, for validation. The test split is not given to any of them and is scored once, at the end, by the usual final model.
 
-`validation_<scheme>/` holds `cv_summary.json`, `fold_metrics.csv`, `assignments.csv` (each row's role in each fold), `oof_predictions.csv` and an error model fitted on out-of-fold rows and checked on rows it did not see. A fold model trains on fewer rows than the final model, so these estimates lean pessimistic for it. The t interval in `across_folds` is known to be too narrow because folds share data; read it as a description of the spread. `--keep_fold_models` keeps each fold's weights and data subsets.
+`validation_<scheme>/` holds `cv_summary.json`, `fold_metrics.csv`, `assignments.csv` (each row's role in each fold) and `oof_predictions.csv`. `kfold` also fits an error model on out-of-fold rows and checks it on rows it did not see. The t interval in `across_folds` is known to be too narrow because folds share data; read it as a description of the spread. `--keep_fold_models` keeps each fold's weights and data subsets. With no group column, rows repeating a source video use that video as their group, and the run prints that it did.
 
-**Localisation:** `python -m evaluators.video.localization_report --ground_truth gt_segments.csv --predictions segments.csv --out DIR` gives ActivityNet-style mAP at tIoU 0.1 to 0.9 with the averages over 0.1-0.5, 0.1-0.7 and all, per-class AP and mean boundary error. The metric follows the ActivityNet code as used by CtxPL (Hussain & Gondra, CRV 2026, MIT), and tests compare it with that code. `--uncertainty_column` also checks per-segment uncertainty against false positives per decile on held-out rows. An uncertainty becomes `expected_error` only if that check finds it calibrated.
+`cv_summary.json` carries these under `caveats`:
+
+- `kfold`: Each fold model trains on fewer rows than the final model, with 10% of its rows held out for checkpoint selection, so these estimates lean pessimistic for the final model.
+- `bootstrap632`: Group resampling is an approximation: the .632 weight is derived for independent units, and groups of unequal size make it rougher.
+- `bootstrap632`: Resample models train on about 57% distinct units (0.632 x 0.9), with held-out checkpoint selection.
+- `bootstrap632`: The apparent model trains on 100% of the rows and selects on its own training rows, so err and Err1 come from differently trained models.
+
+In `bootstrap632`, `out_of_fold` scores each resample's model on its own out-of-bag rows, matching `oob_error`. Metrics that do not split per row, such as F1 and AUC, have a mean there and no interval. `oob_ensemble`, and the probabilities in `oof_predictions.csv`, average the resamples that did not see each row, which describes an ensemble that usually scores higher than any one model. No error model is fitted on them.
+
+**Localisation:** `python -m evaluators.video.localization_report --ground_truth gt_segments.csv --predictions segments.csv --out DIR` gives ActivityNet-style mAP at tIoU 0.1 to 0.9 with the averages over 0.1-0.5, 0.1-0.7 and all, per-class AP and mean boundary error. The metric follows the ActivityNet code as used by CtxPL (Hussain & Gondra, CRV 2026, MIT), and tests compare it with that code. `--uncertainty_column` also checks per-segment uncertainty against false positives per decile on held-out rows. An uncertainty becomes `expected_error` only if that check, on other rows and for the same unit, finds it calibrated: at least 100 rows, a weighted gap of at most 0.05, and in each decile a gap of at most 0.10 or the stated value inside the decile's interval, corrected so that the deciles hold jointly at about 95%. Scores are not comparable with CtxPL's THUMOS'14 tables: it filters predictions that overlap Ambiguous segments and scores in snippet units, and this report does not.
 
 ### Export to df-analyze
 
 [df-analyze](https://github.com/stfxecutables/df-analyze) runs feature selection, classical models and stacking on tables. `--export_dfanalyze` writes the clip embeddings for it in `dfanalyze_export_*/`:
 
 ```powershell
-python deeptune.py --modality video --df clips.csv --raw-data --model_version resnet18 --out results --export_dfanalyze --dfanalyze_extras tta motion ids --dfanalyze_dims 32
-python df-analyze.py --df "results/deeptune-.../dfanalyze_export_.../dfanalyze.csv" --target target --mode=classify --classifiers lgbm rf lr sgd knn mlp dummy --embed-select none linear lgbm --outdir ./dfanalyze_results --grouper group --drops split,video_id
+python deeptune.py --modality video --df clips.csv --raw-data --model_version resnet18 --out results --export_dfanalyze --dfanalyze_extras tta motion --dfanalyze_dims 32
+python df-analyze.py --df "results/deeptune-.../dfanalyze_export_.../dfanalyze.csv" --target target --mode=classify --classifiers lgbm rf lr sgd knn mlp dummy --embed-select none linear lgbm --outdir ./dfanalyze_results --grouper group
 ```
 
 The exact command for each export is in its `dfanalyze_export.json`. It was written from df-analyze's `docs/arguments.md` and has not been run here, as df-analyze is not a DeepTune dependency.
@@ -535,19 +545,21 @@ The exact command for each export is in its `dfanalyze_export.json`. It was writ
 |---|---|---|
 | `--dfanalyze_extras tta` | off | Mean and standard deviation of the embedding over `--dfanalyze_clips` clips (default 5). |
 | `--dfanalyze_extras motion` | off | `motion_mean`, `motion_std`, `motion_max`, `motion_p90`, from a frame-difference curve. |
-| `--dfanalyze_extras ids` | off | `group`, `split` and `video_id` columns, for df-analyze's `--grouper` and `--drops`. |
+| `--dfanalyze_extras ids` | off | `split` and `video_id` columns, which the command passes to df-analyze's `--drops`. |
 | `--dfanalyze_dims N` | all dimensions | PCA to N components, fitted on the training rows only. df-analyze advises under about 100 features. |
-| `--dfanalyze_rows` | `test` | Rows of `dfanalyze.csv`: `test`, or `all`. |
+| `--dfanalyze_rows` | `test` for a trained model, `all` for `--use_case pretrained` | Rows of `dfanalyze.csv`: `test`, or `all`. |
 
 What keeps the numbers honest:
 
-- `dfanalyze.csv` holds test rows by default. df-analyze makes its own split of whatever it reads (40% holdout by default), and embeddings of rows the model trained on fit better than new rows, so `all` makes its holdout scores read too high. These test rows were used for DeepTune's own report too, so results on them are a further analysis of the same rows.
-- Group ids, split names and video ids are not features. They are in `dfanalyze_ids.csv`, and in the CSV only if you ask for `ids`. If your data has groups, ask for it: otherwise df-analyze's split can put clips of one group on both sides, and the export warns you. Check in df-analyze's output that the group column was not used as a feature, as its documentation does not say.
+- For a trained model, `dfanalyze.csv` holds test rows by default. df-analyze makes its own split of whatever it reads (40% holdout by default), and embeddings of rows the model trained on fit better than new rows, so `all` makes its holdout scores read too high. A pretrained model saw no row, so its default is `all`; with `--dfanalyze_dims` the export then warns that PCA's training rows are in the file.
+- These rows already fed DeepTune's report, so this is exploratory, not a second sealed test. `dfanalyze_export.json` says so too. df-analyze's documentation offers no flags for a predefined train and test split; `--test-val-size` only sets the size of its own holdout.
+- Group ids, split names and video ids are not features. When the data has groups, the CSV has a `group` column and the command passes it to `--grouper`, which keeps groups whole and removes the column from the features (upstream `src/df_analyze/preprocessing/prepare.py`). All ids are in `dfanalyze_ids.csv`.
+- The export warns below 10 rows per feature, since df-analyze holds out 40% of the rows.
 - Every split is sampled the same way, as at test time, with no augmentation. A video or group in two splits is refused.
 
-`dfanalyze_train.csv`, `dfanalyze_val.csv` and `dfanalyze_test.csv` are always written, for fitting on one and scoring on another. To find the rows of a df-analyze holdout again: `python -m handlers.get_intersection --df_parquet_path dfanalyze.parquet --df_csv_path holdout.csv --out DIR`; the result carries their ids.
+`dfanalyze_train.csv`, `dfanalyze_val.csv` and `dfanalyze_test.csv` are always written, for fitting on one and scoring on another. To find the rows of a df-analyze holdout again: `python -m handlers.get_intersection --df_parquet_path dfanalyze.parquet --df_csv_path holdout.csv --out DIR`; the result carries their ids. The two files must share a feature column; sharing only the target or an id is refused.
 
-Embedding script: add `--export_dfanalyze` to `python -m embed.video.embed`, with `--dfanalyze_train_df` (needed for `--dfanalyze_dims`) and `--dfanalyze_val_df`. With `--use_case pretrained`, embeddings now come from the bare backbone at its own width, ignoring `--added_layers` and `--embed_size`. Before, they could be the output of a randomly initialised head, so re-extract any you made that way.
+Embedding script: add `--export_dfanalyze` to `python -m embed.video.embed`, with `--dfanalyze_train_df` (needed for `--dfanalyze_dims`) and `--dfanalyze_val_df`. With `--use_case pretrained`, embeddings now come from the bare backbone at its own width, ignoring `--added_layers` and `--embed_size`. Before, they could be the output of a randomly initialised head, so re-extract any you made that way. `weights_licence` in the records states the terms of those weights: some `DEFAULT` weights are non-commercial, such as `vit_h_14`'s.
 
 ## Detect and track objects in video (zero-shot)
 

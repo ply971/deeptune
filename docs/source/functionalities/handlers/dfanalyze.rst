@@ -26,6 +26,6 @@ For video, add ``--export_dfanalyze`` to a one-call run. It writes ``dfanalyze.c
 
 .. code-block:: console
 
-    $ python deeptune.py --modality video --df clips.csv --raw-data --model_version resnet18 --out results --export_dfanalyze --dfanalyze_extras ids --dfanalyze_dims 32
-    $ python df-analyze.py --df "results/deeptune-.../dfanalyze_export_.../dfanalyze.csv" --target target --mode=classify --classifiers lgbm rf lr sgd knn mlp dummy --embed-select none linear lgbm --outdir ./dfanalyze_results --grouper group --drops split,video_id
+    $ python deeptune.py --modality video --df clips.csv --raw-data --model_version resnet18 --out results --export_dfanalyze --dfanalyze_dims 32
+    $ python df-analyze.py --df "results/deeptune-.../dfanalyze_export_.../dfanalyze.csv" --target target --mode=classify --classifiers lgbm rf lr sgd knn mlp dummy --embed-select none linear lgbm --outdir ./dfanalyze_results --grouper group
 
