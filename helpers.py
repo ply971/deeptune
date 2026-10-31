@@ -409,6 +409,11 @@ def print_metrics_table(metrics_dict, embed_shape, modality, mapping_path=None):
     
 
 
+def _percent_or_dash(value) -> str:
+    """Regression runs log the text 'Regression: No Accuracy' in the accuracy columns."""
+    return f"{value:.2f} %" if isinstance(value, (int, float)) else "-"
+
+
 def print_training_log_table(csv_path):
     """
     Loads training_log.csv and prints it in GitHub tabulate format.
@@ -438,9 +443,9 @@ def print_training_log_table(csv_path):
         table.append([
             int(row["epoch"]),
             f"{row['epoch_loss']:.3f}",
-            f"{row['epoch_accuracy']:.2f} %",
+            _percent_or_dash(row['epoch_accuracy']),
             f"{row['val_loss']:.3f}",
-            f"{row['val_accuracy']:.2f} %"
+            _percent_or_dash(row['val_accuracy'])
         ])
 
     print("\n" + "="*60)
