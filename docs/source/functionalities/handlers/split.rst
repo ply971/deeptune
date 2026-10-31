@@ -124,4 +124,4 @@ In order to achieve this, we use the following command:
    * - ``--out <str>``
      - Path to the directory where you want to save the results.
 
-The output will be stored in the directory specified with the ``--out`` argument, using the following naming format: ``intersection_<yyyymmdd_hhmm>.parquet``.
+The output will be stored in the directory specified with the ``--out`` argument, using the following naming format: ``intersection_<yyyymmdd_hhmm>.parquet``. Numbers are compared as float32 and column names as text. The result keeps the Parquet file's values and row order, plus any columns only the CSV has.

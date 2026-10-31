@@ -18,3 +18,14 @@ If you ran df-analyze for regression task on images, you may change the command 
 .. note::
 
     Do not forget to change the ``--df`` switch value according to the path of the embeddings file. More information can be found on the `df-analyze <https://github.com/stfxecutables/df-analyze>`_ repository page.
+
+Video embeddings
+----------------
+
+For video, add ``--export_dfanalyze`` to a one-call run. It writes ``dfanalyze.csv`` and the exact command in ``dfanalyze_export.json``, and can add multi-clip mean and standard deviation, motion statistics, group and split ids, and PCA fitted on the training rows only (``--dfanalyze_extras``, ``--dfanalyze_clips``, ``--dfanalyze_dims``, ``--dfanalyze_rows``). See "Export to df-analyze" in the README for how to read the results without leakage.
+
+.. code-block:: console
+
+    $ python deeptune.py --modality video --df clips.csv --raw-data --model_version resnet18 --out results --export_dfanalyze --dfanalyze_extras ids --dfanalyze_dims 32
+    $ python df-analyze.py --df "results/deeptune-.../dfanalyze_export_.../dfanalyze.csv" --target target --mode=classify --classifiers lgbm rf lr sgd knn mlp dummy --embed-select none linear lgbm --outdir ./dfanalyze_results --grouper group --drops split,video_id
+
