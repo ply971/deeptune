@@ -36,7 +36,37 @@ Keep entries short and factual. This is the handoff between sessions.
   - **Fixed, real bug:** `run_motion_benchmark.py` didn't set cuDNN determinism, so one seed gave 0.991, 0.942, 0.989 on the GPU. With it set, all three runs matched exactly.
   - **Fixed, real bug:** non-video loaders spawned 8 workers on Windows, and each loads torch's CUDA DLLs. That ran out of page file (WinError 1455) in 2 of 7 runs of one test. `options.NUM_WORKERS` now follows the Windows cap of 4: 4 of 4 passes, so this is improved, not proven gone. `CLAUDE.md`'s `NUM_WORKERS = min(8, cpu/2)` is now out of date.
   - **Open, test assumptions, pass on CPU:** `test_features_equal_a_direct_backbone_forward` compares a GPU result with a CPU one and differs by up to 6e-5. `test_validation_loss_is_computed_in_float32` feeds CPU tensors to a model on the GPU. Waiting on the user, per CLAUDE.md rule 3.
-- **Next:** the two test decisions, `check.ps1` again, then the remaining GPU checks (B1, T1, B2, B3's 5-fold report, V1a), then R1, R2, P-105, P-106, P-108, R3.
+- **The user chose to skip the two test fixes and move on, so `check.ps1` stays `CHECK FAIL`.** It has not been re-run since `5bae1be`. GPU jobs run in their own windows with logs in `.artifacts/gate/` (not committed). Claude Code's memory safeguard stopped only one watcher during these.
+- **B1 gate, GPU (generated clips, not real video; timing only):** `bench_video_io.py --clips 200 --feature_clips 100 --feature_model r3d_18 --feature_pretrained --feature_gpu`, 1.8 min. One epoch of a frozen r3d_18 + head at 112 px, batch 4: from pixels 2.67 s; `--frame_cache` 2nd epoch 2.79 s (1st 2.83 s, no gain); cached features 0.78 s (`linear_probe`), 1.08-1.18 s (`attentive_probe`). Extraction 80-82 ms/video.
+- **T1 gate, GPU, real video (UCF101 10-class subset, `group` column, 66 grouped test clips, r3d_18, 16 frames, seed 42, one seed):** all 11 runs exit 0, 15.7 min in total. Single-frame-separable classes, so this shows transfer, not motion. No published baseline is comparable.
+
+  | Run | Test accuracy (95% group CI) | Peak GPU reserved |
+  |---|---|---|
+  | frozen, float32 | 0.955 (0.881-1.000) | 932 MB |
+  | frozen, bf16 | 0.955 (0.881-1.000) | 650 MB |
+  | frozen, bf16, cosine, accum 2, select_best, 6 epochs | 0.970 (0.903-1.000) | 650 MB |
+  | fine-tune, batch 4, `--freeze_bn off` | 1.000 (zero-width) | 1,076 MB |
+  | fine-tune, batch 4, `--freeze_bn auto` | 0.939 (0.869-1.000) | 1,066 MB |
+  | LoRA rank 8 / 16 / 32, batch 4 | 0.970 / 1.000 / 0.955 | 1,032 / 1,054 / 1,136 MB |
+
+  - Frozen 5 epochs took about 1.5 min, against 11 min on CPU (2026-10-21, a different code version).
+  - Resume is exact on the GPU: stopping at epoch 2 and resuming to 5 gave identical weights (max diff 0.0) and identical logs. Two bf16 runs with one seed also gave the same metrics.
+  - `--freeze_bn` and the LoRA rank stay undecided: one seed and 66 clips can't separate them.
+  - Not covered here: fp16, resume with DataLoader workers (all runs used `--num_workers 0`), and early stopping actually stopping (`c` ran all 6 epochs).
+- **B2 gate, GPU, in progress** (`run_motion_benchmark.py --task direction`, 64 px, 700 train, 400 test, 5 epochs, batch 8, pretrained, single dataset, chance 0.5). Test accuracy:
+
+  | Model | Seed 0 | Seed 1 |
+  |---|---|---|
+  | `single_frame` / `mean` / `attention` | 0.498 / 0.508 / 0.510 | 0.500 / 0.500 / 0.500 |
+  | `late_fusion` (limit about 0.663) | 0.500 | 0.493 |
+  | `early_fusion`, `tsm`, `slow_fusion:r2plus1d_18` | 1.000 | 1.000 |
+  | `cnn_rnn` | 0.648 | 1.000 |
+  | `temporal_transformer` | 0.500 | 0.500 |
+  | `two_stream` farneback / mv | 0.963 / 1.000 | 1.000 / 0.998 |
+  | `flow_probe` | 0.993 | 0.993 |
+
+  Seed 0 took 24.3 min and seed 1 took 30.0 min. Seed 2 is running. Results: `.artifacts/gate/b2/direction/`.
+- **Next:** finish B2 (`direction` seed 2, `scene_bias`, `periodic`, UCF101 through the pipeline and `infer.py`), then B3's 5-fold report, then V1a (its desktop steps need the user or screen control), then R1, R2, P-105, P-106, P-108, R3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**
