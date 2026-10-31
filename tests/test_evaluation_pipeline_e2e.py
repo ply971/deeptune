@@ -110,6 +110,34 @@ def test_bootstrap632_end_to_end_draws_whole_groups(tmp_path, small_pipeline):
     assert not set(apparent['videos']) & test_videos
 
 
+def test_parquet_manifest_with_repeated_sources_warns_on_stdout_and_in_the_report(tmp_path, small_pipeline, capsys):
+    """Six clips from each of 8 sources, no group column: a split by row puts each source on both sides."""
+    import deeptune
+    rows = []
+    for source in range(8):
+        path = translating_clip(tmp_path / f'src{source}.mp4', 6, 2 if source % 2 else -2, 0, size=32, seed=source)
+        rows += [{'videos': str(path), 'labels': source % 2, 'clip': clip} for clip in range(6)]
+    manifest = tmp_path / 'clips.parquet'
+    pd.DataFrame(rows).to_parquet(manifest)
+    deeptune.main(['--modality', 'video', '--out', str(tmp_path / 'out'), '--model_version', 'dummy_video3d', '--num_epochs', '1', '--batch_size', '4',
+                   '--num_frames', '2', '--added_layers', '1', '--embed_size', '16', '--fixed-seed', '--num_workers', '0', '--df', str(manifest), '--report_boot', '20'])
+    run = next((tmp_path / 'out').glob('deeptune-*'))
+    test = set(_split(run, 'test')['videos'])
+    fit = set(_split(run, 'train')['videos']) | set(_split(run, 'val')['videos'])
+    shared = test & fit
+    assert shared
+    assert f'{len(shared)} of {len(test)} test source videos' in capsys.readouterr().out
+    report = json.loads(next(run.glob('eval_output_*/evaluation_report.json')).read_text())
+    assert any(f'{len(shared)} of {len(test)} test source videos' in warning for warning in report['warnings'])
+
+
+def test_a_grouped_split_prints_no_shared_source_warning(tmp_path, small_pipeline, capsys):
+    run = _run(tmp_path, tmp_path / 'out')
+    assert 'test source videos' not in capsys.readouterr().out
+    report = json.loads(next(run.glob('eval_output_*/evaluation_report.json')).read_text())
+    assert not any('test source videos' in warning for warning in report['warnings'])
+
+
 def test_export_with_tta_motion_pca_and_ids(tmp_path, small_pipeline):
     run = _run(tmp_path, tmp_path / 'out', '--export_dfanalyze', '--dfanalyze_extras', 'tta', 'motion', 'ids', '--dfanalyze_clips', '2',
                '--dfanalyze_dims', '3', '--report_boot', '0')

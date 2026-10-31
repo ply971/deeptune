@@ -312,7 +312,12 @@ def main(argv=None):
         from evaluators.video.evaluate import evaluate as evaluate_video
         from embed.video.embed import embed as embed_video
 
-        # --- evaluation suite (B3): before the final model, and on train + validation rows only ---
+        # --- evaluation suite (B3) ---
+        from evaluators.video.report import shared_source_warning
+        video_split_warning = shared_source_warning(test_data_path, train_data_path, val_data_path)
+        if video_split_warning:
+            print(f'Warning: {video_split_warning}')
+        # The folds run before the final model, and on train + validation rows only.
         video_eval_config = dict(mode=defaults['mode'], num_classes=args.num_classes, model_version=args.model_version, model_str=args.model_version,
                                  use_peft=args.use_peft, added_layers=defaults['added_layers'], embed_size=defaults['embed_size'],
                                  batch_size=args.batch_size, freeze_backbone=FREEZE_BACKBONE, num_frames=args.num_frames, pooling=args.pooling)
@@ -401,7 +406,8 @@ def main(argv=None):
         if args.report_boot > 0:
             from evaluators.video.run_validation import write_final_report
             write_final_report(args, Path(args.out)/parent_dir, ckpt_directory, test_data_path, val_data_path, train_data_path, MAPPING_PATH,
-                               evaluate_video, dict(video_eval_config, embed_size=defaults['embed_size']), GROUPER)
+                               evaluate_video, dict(video_eval_config, embed_size=defaults['embed_size']), GROUPER,
+                               extra_warnings=[video_split_warning] if video_split_warning else [])
         # --- end B3 ---
 
     elif args.modality == 'tabular':

@@ -112,7 +112,8 @@ def _validation_seed(args) -> int:
     return 42 if seed is None else int(seed)
 
 
-def write_final_report(args, run_dir, weights, test_path, val_path, train_path, mapping_path, evaluate_fn, eval_config: dict, grouper=None) -> Path:
+def write_final_report(args, run_dir, weights, test_path, val_path, train_path, mapping_path, evaluate_fn, eval_config: dict, grouper=None,
+                       extra_warnings=()) -> Path:
     """evaluation_report.json for the test evaluation in `run_dir`. For classification the validation rows are scored too, with
     the same test-time settings, and only they fit the temperature. No temperature is ever fitted on test rows."""
     run_dir = Path(run_dir)
@@ -124,6 +125,6 @@ def write_final_report(args, run_dir, weights, test_path, val_path, train_path, 
         evaluate_fn(eval_df=val_path, out=folder, model_weights=weights, args=fit_args, **eval_config)
         fit_dir, fit_split = next(folder.glob('eval_output_*')), 'validation'
     path = report_eval_dir(eval_dir, test_path, grouper, fit_dir, fit_split, mapping_path, train_path, n_boot=args.report_boot,
-                           selection_used_fit_split=selection_used_validation(Path(weights).parent))
+                           selection_used_fit_split=selection_used_validation(Path(weights).parent), extra_warnings=extra_warnings)
     print(f'The evaluation report is in {path}')
     return path

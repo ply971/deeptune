@@ -353,3 +353,22 @@ def test_a_zero_width_interval_warns():
     got = stats.bootstrap_ci(lambda idx: float((y[idx] == y[idx]).mean()), 100, groups=[i // 2 for i in range(100)], n_boot=30)
     assert got['low'] == got['high'] == 1.0 and 'zero width' in got['warning']
 
+
+def _split_file(path, videos):
+    pd.DataFrame({'videos': videos, 'labels': [0] * len(videos)}).to_parquet(path)
+
+
+def test_shared_sources_are_counted_between_test_and_fit_rows(tmp_path):
+    _split_file(tmp_path / 'test.parquet', ['a.mp4', 'a.mp4', 'b.mp4', 'c.mp4'])
+    _split_file(tmp_path / 'train.parquet', ['a.mp4', 'd.mp4'])
+    _split_file(tmp_path / 'val.parquet', ['b.mp4'])
+    message = rp.shared_source_warning(tmp_path / 'test.parquet', tmp_path / 'train.parquet', tmp_path / 'val.parquet')
+    assert message.startswith('2 of 3 test source videos (3 of 4 test rows)') and 'group column' in message
+    _split_file(tmp_path / 'clean.parquet', ['x.mp4'])
+    assert rp.shared_source_warning(tmp_path / 'test.parquet', tmp_path / 'clean.parquet') is None
+
+
+def test_clip_bytes_have_no_source_to_compare(tmp_path):
+    pd.DataFrame({'videos': [b'x', b'x'], 'labels': [0, 1]}).to_parquet(tmp_path / 'b.parquet')
+    assert rp.shared_source_warning(tmp_path / 'b.parquet', tmp_path / 'b.parquet') is None
+

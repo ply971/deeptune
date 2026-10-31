@@ -400,6 +400,21 @@ def split_units(split_path, grouper: Optional[str] = None) -> tuple[Optional[lis
     return groups, sources
 
 
+def shared_source_warning(test_path, *fit_paths) -> Optional[str]:
+    """A warning when test rows name a source video that training or validation rows also name, else None. Only for splits
+    holding paths: clip bytes have no source to compare. A split by row does this when one video gives several rows."""
+    def sources(path) -> list[str]:
+        return [str(Path(value)) for value in split_units(path)[1] or []]
+    test = sources(test_path)
+    fit = {value for path in fit_paths for value in sources(path)}
+    shared = set(test) & fit
+    if not shared:
+        return None
+    rows = sum(value in shared for value in test)
+    return (f'{len(shared)} of {len(set(test))} test source videos ({rows} of {len(test)} test rows) are also in the training or validation rows. '
+            'Clips of one video are on both sides of this split, so test scores read too high. Add a group column naming each row\'s source video.')
+
+
 def _class_names(mapping_path) -> Optional[list[str]]:
     """Class names by index, from split_dataset's label_mapping.json (name -> index or index -> name)."""
     if mapping_path is None or not Path(mapping_path).is_file():
@@ -415,7 +430,7 @@ def _class_names(mapping_path) -> Optional[list[str]]:
 
 
 def report_eval_dir(eval_dir, test_df=None, grouper=None, fit_dir=None, fit_split=None, mapping_path=None, train_df=None,
-                    n_boot: int = DEFAULT_BOOTSTRAPS, seed: int = 0, selection_used_fit_split=None) -> Path:
+                    n_boot: int = DEFAULT_BOOTSTRAPS, seed: int = 0, selection_used_fit_split=None, extra_warnings: Sequence[str] = ()) -> Path:
     """Writes the report of one evaluation folder into that folder."""
     mode, truth, scores, _ = load_eval_scores(eval_dir)
     groups, sources = split_units(test_df, grouper)
@@ -425,6 +440,7 @@ def report_eval_dir(eval_dir, test_df=None, grouper=None, fit_dir=None, fit_spli
     train_labels = pd.read_parquet(train_df, columns=['labels'])['labels'].to_numpy() if train_df is not None else None
     report = build_report(mode, truth, scores, groups, sources, fit_scores, fit_truth, fit_split, class_names=_class_names(mapping_path),
                           train_labels=train_labels, n_boot=n_boot, seed=seed, selection_used_fit_split=selection_used_fit_split)
+    report['warnings'] = sorted({*report['warnings'], *extra_warnings})
     return write_report(report, eval_dir, truth, scores)
 
 
