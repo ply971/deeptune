@@ -58,7 +58,9 @@ MODEL_VERSIONS_BY_MODALITY: dict[str, list[str]] = {
     "video": [*VIDEO_FRAME_MODEL_VERSIONS, *VIDEO_NATIVE_MODEL_VERSIONS],
 }
 # Accepted from the command line, not offered in the GUI: SigLIP, and the untrained tiny models for tests and smoke runs.
-VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d"]
+VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d", "siglip2_b16", "siglip2_tiny",
+                                            "vjepa2_vitl", "vjepa2_tiny", "videomae_b16", "videomae_v2_b16", "videomae_tiny",
+                                            "dinov3_vitb16", "dinov3_tiny"]
 
 MODALITIES = ["images", "text", "tabular", "timeseries", "video"]
 

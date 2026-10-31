@@ -15,6 +15,9 @@ token, so a vector from those families is the patch mean, not the class token.
 Motion input has 2 channels (dx, dy): ``in_channels=2`` feeds dx, dy and their
 magnitude to the unchanged RGB filters. This preserves direction information;
 these are appearance weights, not weights trained on optical flow.
+
+Backbones from ``transformers`` (V-JEPA 2, VideoMAE, SigLIP, DINOv3; ``handlers/video_backbones.py``) provide the same
+two calls. Their grids hold patch tokens only, and each set of weights reports its own licence.
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as tv_models
 
+from handlers.video_backbones import hub_backbone, licence_text
 from src.video.video3d import _KINETICS400_WEIGHTS, VIDEO3D_ARCHITECTURES
 
 DUMMY_VIDEO_BACKBONE = 'dummy_video3d'  # r3d_18 without weights, for tests
@@ -47,6 +51,27 @@ def weight_licence(weights) -> str:
                  "torchvision's BSD-3-Clause covers its code, not these weights")
     data = next((note for key, note in _TRAINING_DATA.items() if key in weights.name), 'see the recipe')
     return f'{weights}: {terms}; training data: {data}'
+
+
+def _frame_weights(version: str):
+    """The torchvision weights src/vision builds for this frame backbone, or None when it has none: ResNet and 2D Swin
+    pin IMAGENET1K_V1, the other families use DEFAULT."""
+    try:
+        available = tv_models.get_model_weights(version)
+    except ValueError:  # resnet_tiny and other untrained test versions
+        return None
+    return available.IMAGENET1K_V1 if version.startswith(('resnet', 'swin_')) else available.DEFAULT
+
+
+def run_weight_licences(version: str) -> dict:
+    """``{version: licence}`` for a run record: the terms of every set of weights a model of this version loads."""
+    if hub_backbone(version) is not None:
+        return {version: licence_text(version)}
+    if version in VIDEO3D_ARCHITECTURES:
+        return {version: weight_licence(_KINETICS400_WEIGHTS[version])}
+    if frame_family(version) is not None:
+        return {version: weight_licence(_frame_weights(version))}
+    return {version: weight_licence(None)}
 
 
 def _grid_resnet(model, x):
@@ -107,6 +132,9 @@ def frame_family(version: str) -> str | None:
 def fixed_input(version: str, pretrained: bool) -> tuple[int | None, int | None]:
     """(square size, snippet frames) this model accepts and nothing else; None where it is free. Read from the
     weights' metadata, so it needs no download. ViT and MViT have fixed position embeddings."""
+    hub = hub_backbone(version)
+    if hub is not None:
+        return hub.input_size, hub.fixed_frames
     if version == 'mvit_v2_s':
         meta = _KINETICS400_WEIGHTS[version].meta
         return meta['min_size'][0], meta['min_temporal_size']
@@ -130,6 +158,10 @@ class SnippetBackbone(nn.Module):
         self.in_channels = in_channels
         if in_channels not in (2, 3):
             raise ValueError('Snippet backbones accept RGB (3 channels) or motion (dx, dy; 2 channels).')
+        self.hub = hub_backbone(version)
+        if self.hub is not None:
+            self._init_hub(pretrained, seed)
+            return
         family = frame_family(version)
         native = version in VIDEO3D_ARCHITECTURES or version == DUMMY_VIDEO_BACKBONE
         if not native and family is None:
@@ -163,6 +195,21 @@ class SnippetBackbone(nn.Module):
         for parameter in self.parameters():
             parameter.requires_grad = False
 
+    def _init_hub(self, pretrained: bool, seed: int) -> None:
+        from src.video.hub_backbones import load_hub_model
+        if not pretrained and not self.hub.is_untrained:
+            raise ValueError(f'{self.version} has no random-weight mode: use its _tiny version for tests and timing.')
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.model = load_hub_model(self.version)
+        self.native = False
+        self.weights_name = self.hub.hub_id
+        self.weights_licence = licence_text(self.version)
+        self.default_input_size = self.hub.input_size
+        self.eval()
+        for parameter in self.parameters():
+            parameter.requires_grad = False
+
     def train(self, mode: bool = True):  # always frozen: BatchNorm and dropout stay in eval mode
         return super().train(False)
 
@@ -172,6 +219,9 @@ class SnippetBackbone(nn.Module):
         if self.in_channels == 2:
             magnitude = torch.linalg.vector_norm(x, dim=2, keepdim=True)
             x = torch.cat((x, magnitude), dim=2)
+        if self.hub is not None:
+            from src.video.hub_backbones import encoder_token_grid
+            return encoder_token_grid(self.model, self.version, x)
         if self.native:
             return self._grid_fn(self.model, x.permute(0, 2, 1, 3, 4))
         grid = self._grid_fn(self.model, x.reshape(B * T, *x.shape[2:]))  # [B*T, D, h, w]

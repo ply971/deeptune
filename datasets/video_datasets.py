@@ -76,6 +76,10 @@ def native_video_transform(model_version: str):
     if str(model_version).startswith('siglip'):
         from src.video.siglip_backbone import SiglipClipTransform
         return SiglipClipTransform(model_version)
+    from handlers.video_backbones import hub_backbone
+    if hub_backbone(model_version) is not None:
+        from src.video.hub_backbones import HubClipTransform
+        return HubClipTransform(model_version)
     return VideoPresetTransform(model_version) if model_version in VIDEO3D_ARCHITECTURES else None
 
 

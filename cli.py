@@ -299,6 +299,29 @@ Other PEFT models ignore this flag and use --embed_size as their rank.""")
             self.num_frames = spec_num_frames(self.pooling, self.num_frames)
         if hasattr(self, 'model_version'):
             self.model_version = resolve_model_version(self, is_native_video_architecture)
+        self._apply_hub_backbone_rules(parsed_args)
+
+    def _apply_hub_backbone_rules(self, parsed_args):
+        """V-JEPA 2, VideoMAE, SigLIP 2, DINOv3 (handlers/video_backbones.py): the licence, and the default recipe."""
+        from handlers.video_backbones import accept_weights_licences, check_frame_count, hub_backbone, require_weights_choice
+        accept_weights_licences(self.accept_weights_licence)
+        version = getattr(self, 'model_version', None)
+        info = hub_backbone(version)
+        if info is None:
+            return
+        try:
+            require_weights_choice(version)
+            check_frame_count(version, parsed_args.num_frames)
+        except ValueError as exc:
+            self.parser.error(str(exc))
+        if info.kind != 'video':
+            return
+        if parsed_args.pooling == 'mean' and self.video_arch in (None, 'frame_pool'):
+            self.pooling = pooling_from_args({'video_arch': 'attentive_probe', 'pooling': 'mean', 'probe_width': self.probe_width,
+                                              'probe_depth': self.probe_depth, 'probe_heads': self.probe_heads})
+        if hasattr(self, 'freeze_backbone') and not self.freeze_backbone and not self.unfreeze_backbone and not getattr(self, 'use_peft', False):
+            print(f'{version}: the encoder stays frozen (the default recipe). --unfreeze_backbone or --use-peft train it.')
+            self.freeze_backbone = True
 
     def _add_tabpfn_train_args(self):
         p = self.parser
