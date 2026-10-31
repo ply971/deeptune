@@ -408,7 +408,7 @@ in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py
 | `slow_fusion` | A native 3D CNN: `--model_version` if it names one, otherwise `r2plus1d_18`. | |
 | `tsm` | Temporal Shift Module in each residual block. ResNet family, no extra parameters. | `--tsm_fold_div` |
 | `cnn_rnn` | Per-frame embeddings into an LSTM or GRU. | `--rnn_type --rnn_hidden --rnn_layers --bidirectional` |
-| `temporal_transformer` | Per-frame embeddings into a small transformer with a CLS token. Needs more clips than the others, see below. | `--tt_layers --tt_heads --tt_dim` |
+| `temporal_transformer` | Per-frame embeddings into a small transformer with a CLS token. Passed about half its benchmark runs, see below. | `--tt_layers --tt_heads --tt_dim` |
 | `two_stream` | RGB middle frame + stacked motion fields, fused late. ResNet family. | `--motion_source farneback\|mv --fusion avg\|fc --motion_length --motion_cache DIR` |
 
 ```powershell
@@ -426,13 +426,21 @@ in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py
   line only. Its weights download on first use.
 - **Old checkpoints.** Frame-pooling checkpoints from before embeddings were pooled load and predict
   as before (they keep pooling logits).
+- **DenseNet embeddings.** On video, a DenseNet frame model with `--added_layers 1` now embeds to its
+  features, not its class logits, so embeddings saved by earlier runs have a different shape. Weights and
+  predictions are unchanged. The images embedder still refuses `added_layers` below 2 on DenseNet.
 - **What the benchmark shows** (`tests/models/test_temporal_oracle.py`, untrained tiny backbone, CPU,
-  held-out scenes): `early_fusion`, `tsm`, `cnn_rnn` and `two_stream` learn the direction of motion from
+  held-out scenes): on one seed, `early_fusion`, `tsm` and `two_stream` learn the direction of motion from
   240 clips, as does `slow_fusion` (on an untrained r3d_18, not the default r2plus1d_18), and `single_frame`,
-  `mean`, `attention` and `tsm` with its shift turned off stay at chance. `temporal_transformer` needs
-  1500 clips (at 800 it stayed near chance). `late_fusion` needs 800 clips and the slower variant of the
-  task: it sees two frames, and at the default speeds these cannot tell the direction on the benchmark's
-  wrap-around world. Real ResNets are not yet measured on these models.
+  `mean`, `attention` and `tsm` with its shift turned off stay at chance. Three models were also run over
+  several seeds, counting a run as passed at 85 % held-out accuracy or more, with the reversal and frame-order
+  checks. `cnn_rnn` passed 2 of 10 runs from 240 clips and 9 of 10 from 800. `temporal_transformer` passed 5 of 10
+  from 1500 clips (`tt_dim=64`, learning rate 3e-4); the other runs stayed at 0.50-0.625, so the benchmark does not
+  show that it reliably learns direction. `late_fusion` passed 7 of 10 from 800 clips, on a task at half the default
+  speed only. At the default speed it passed 0 of 10 (best 0.585), and it cannot pass: on the benchmark's wrap-around
+  world, no rule that sees only two frames can exceed about 0.66. This is evidence that the models are wired
+  correctly, not a ranking of them or a statement of how much data they need. Real ResNets are not yet measured
+  on these models.
 
 ## Video features: decode once, extract once
 

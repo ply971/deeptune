@@ -7,9 +7,10 @@ class TinyResNet(nn.Module):
     """The torchvision ResNet layout (conv1, bn1, relu, maxpool, layer1-4, avgpool, fc) with one narrow
     BasicBlock per stage and a total stride of 16.
 
-    Unlike a real ResNet the pool keeps a 2x2 grid, so the feature says where things are. Architectures that compare
-    per-frame features (late_fusion, cnn_rnn, temporal_transformer) then need fewer clips to see motion: cnn_rnn on the
-    direction benchmark reaches 1.000 from 240 clips with this grid, and needs 800 with a global pool (0.495 at 240)."""
+    Unlike a real ResNet the pool keeps a 2x2 grid, so the feature says where things are. The grid was not shown to help
+    cnn_rnn on the direction benchmark. Oracle passes over 5 model seeds on one dataset: from 240 clips 1/5 with this grid
+    and 0/5 with a global pool; from 800 clips 4/5 with this grid and 5/5 with a global pool. Five seeds cannot separate
+    these. See docs/video-plan/reports/B2.md."""
 
     GRID = 2
 
