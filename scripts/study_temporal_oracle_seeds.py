@@ -28,7 +28,7 @@ import torch  # noqa: E402
 
 from src.video.tiny_backbone import TinyResNet  # noqa: E402
 from test_temporal_oracle import (  # noqa: E402
-    MOTION_AWARE_MIN, REVERSED_MAX, SLOW_SPEEDS, TT_BUDGET, TT_POOLING, Task, _accuracy, _fit, _permutations,
+    CHANCE_MAX, MOTION_AWARE_MIN, REVERSED_MAX, SLOW_SPEEDS, TT_BUDGET, TT_POOLING, Task, _accuracy, _fit, _permutations,
     passes_motion_oracle)
 
 MODEL_SEEDS = (0, 1, 2, 3, 4)
@@ -49,7 +49,56 @@ STUDIES = {
     'temporal_transformer': lambda: list(_runs(TT_POOLING, 1500, budget=list(TT_BUDGET))),
     # The coordinator's decision on late_fusion: the half-speed task is its done-when, and the default speed is bounded.
     'late_fusion': lambda: [*_runs('late_fusion', 800, speed_range=SLOW_SPEEDS), *_runs('late_fusion', 800)],
+    # V-051 item 6: the single-seed rows of the oracle, at their own budgets, on dataset 0 at 240 clips. The controls back
+    # the claim that appearance models stay at chance across seeds. Same 240-clip tasks and sizes as the oracle tests.
+    'other_models': lambda: [
+        *_other('single_frame', 'chance'), *_other('mean', 'chance'), *_other('attention', 'chance'),
+        *_other('tsm:tsm_fold_div=1000', 'chance'),
+        *_other('early_fusion:num_frames=8', 'motion'), *_other('tsm', 'motion'),
+        *_other('two_stream:num_frames=8', 'two_stream', motion='farneback'),
+        *_other('two_stream:num_frames=8', 'two_stream', motion='mv', size=48),
+        *_other('mean', 'motion', version='dummy_video3d', budget=[8, 1e-3]),  # slow_fusion, as in its oracle test
+    ],
 }
+
+
+def _other(pooling, oracle, motion=None, size=32, version='resnet_tiny', budget=None):
+    for run in _runs(pooling, 240, dataset_seeds=(0,), budget=budget):
+        yield {**run, 'oracle': oracle, 'motion': motion, 'size': size, 'version': version}
+
+
+def _measure_other(run, tasks, scratch):
+    """The checks of the run's oracle test. Decoded clips are shared between the seeds of a task."""
+    started = time.time()
+    motion = run['motion']
+    if run['size'] not in tasks:
+        tasks[run['size']] = Task(Path(tempfile.mkdtemp(dir=scratch)), run['size'], run['n_train'], seed=run['dataset_seed'])
+    task = tasks[run['size']]
+    x_train, y_train = task.split('train', motion)
+    model = _fit(run['pooling'], x_train, y_train, seed=run['model_seed'], budget=run['budget'] and tuple(run['budget']),
+                 version=run['version'])
+    x, y = task.split('test', motion)
+    record = dict(run, train_accuracy=round(_accuracy(model, x_train, y_train), 4))
+    accuracy = record['accuracy'] = _accuracy(model, x, y)
+    if run['oracle'] == 'chance':
+        record['passes'] = accuracy <= CHANCE_MAX
+    elif run['oracle'] == 'motion':
+        record['reversed'] = _accuracy(model, x.flip(1), y)
+        record['shuffled'] = [_accuracy(model, x[:, order], y) for order in _permutations()]
+        record['passes'] = passes_motion_oracle(accuracy, record['reversed'], record['shuffled'])
+    else:  # two_stream: motion is computed from the video, so reversing means re-encoding it
+        if (run['size'], motion, 'reversed') not in tasks:
+            tasks[run['size'], motion, 'reversed'] = task.rewritten_test(motion, lambda f: f[::-1], Path(tempfile.mkdtemp(dir=scratch)))[0]
+        record['reversed'] = _accuracy(model, tasks[run['size'], motion, 'reversed'], y)
+        blind = x.clone()
+        blind[:, :, 3:] = 0
+        record['no_motion'] = _accuracy(model, blind, y)
+        record['passes'] = accuracy >= MOTION_AWARE_MIN and record['reversed'] <= REVERSED_MAX
+        if motion == 'farneback':  # the mv oracle test has no such check; its figure is recorded all the same
+            record['passes'] = record['passes'] and record['no_motion'] <= CHANCE_MAX
+    record['passes'] = bool(record['passes'])
+    record['seconds'] = round(time.time() - started, 1)
+    return record
 
 
 @contextmanager
@@ -63,8 +112,8 @@ def _grid(size):
 
 
 def _key(run):
-    return json.dumps({name: run[name] for name in ('pooling', 'n_train', 'dataset_seed', 'model_seed', 'speed_range', 'grid')},
-                      sort_keys=True)
+    return json.dumps({name: run.get(name) for name in ('pooling', 'n_train', 'dataset_seed', 'model_seed', 'speed_range', 'grid',
+                                                        'motion', 'version')}, sort_keys=True)
 
 
 def _measure(run, scratch):
@@ -90,7 +139,8 @@ def _measure(run, scratch):
 def summarise(records):
     groups = {}
     for record in records:
-        key = (record['pooling'], record['n_train'], tuple(record['speed_range']), record['grid'], record['dataset_seed'])
+        key = (record['pooling'] + ''.join(f"/{record[name]}" for name in ('version', 'motion') if record.get(name)),
+               record['n_train'], tuple(record['speed_range']), record['grid'], record['dataset_seed'])
         groups.setdefault(key, []).append(record)
     print('pooling | clips | speed | grid | dataset | held-out per model seed | mean | passed')
     for (pooling, clips, speed, grid, dataset), group in sorted(groups.items(), key=str):
@@ -110,10 +160,11 @@ def main():
     records = [json.loads(line) for line in args.out.read_text().splitlines()] if args.out.exists() else []
     finished = {_key(record) for record in records}
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as scratch:
+        tasks = {}
         for run in STUDIES[args.study]():
             if _key(run) in finished:
                 continue
-            record = _measure(run, scratch)
+            record = _measure_other(run, tasks, scratch) if 'oracle' in run else _measure(run, scratch)
             records.append(record)
             with args.out.open('a') as stream:
                 stream.write(json.dumps(record) + '\n')
