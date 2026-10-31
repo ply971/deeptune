@@ -49,8 +49,12 @@ def track_video(video_path, prompts: Sequence[str], detector: Detector, out_dir,
             dets = cross_label_suppress(dets, cross_label_nms)
             det_frames.append({'frame': fi, 'time_s': round(fi / info.fps, 4),
                                'detections': [d.to_dict() for d in dets]})
+            frame_h, frame_w = frame.shape[:2]
             for t in tracker.update(dets, frame=frame):
-                track_rows.append({'frame': fi, 'track_id': t.track_id, 'box': t.box,
+                x1, y1, x2, y2 = t.box  # the Kalman state can drift past the frame edge
+                box = (min(max(x1, 0.0), frame_w), min(max(y1, 0.0), frame_h),
+                       min(max(x2, 0.0), frame_w), min(max(y2, 0.0), frame_h))
+                track_rows.append({'frame': fi, 'track_id': t.track_id, 'box': box,
                                    'score': t.score, 'label': t.label})
         batch_idx.clear()
         batch_frames.clear()
