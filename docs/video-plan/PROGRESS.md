@@ -72,7 +72,13 @@ Keep entries short and factual. This is the handoff between sessions.
 
   84 min in total. Single dataset, so the seeds vary only the model and training order. `temporal_transformer` stayed near 50% on training as well as validation on all three seeds, so it did not memorise, unlike its tiny-backbone failures. This run is 5 epochs with the runner's default settings, not B2's `tt_dim=64`, lr 3e-4 oracle settings, and the cause is not investigated: possibly a settings problem or a bug. Phase 3's reworded target says each architecture can learn direction, and on real ResNets `temporal_transformer` has not shown that here. `late_fusion` has not either, as expected at this speed. Results: `.artifacts/gate/b2/direction/`. `scene_bias` and `periodic` are running.
 - **User decision at 21:09:** stop the GPU checks. P-105 to P-109 and R3 move to a later extension (PLAN.md 4b). B2's `scene_bias` seed 0 finished in 24.6 min and seed 1 was stopped. Still open: `scene_bias` seeds 1 and 2, `periodic`, UCF101 through the pipeline and `infer.py`, B3's 5-fold report, and the `temporal_transformer` investigation.
-- **Next:** V1a on a real clip and desktop page 07, then R1 and R2, then Wave 3.
+- **B2 `scene_bias`, seed 0, GPU (biased validation / unbiased test):** `single_frame` 0.935 / 0.505; `mean` 0.910 / 0.493; `attention` 0.940 / 0.500; `late_fusion` 0.815 / 0.483; `cnn_rnn` 0.940 / 0.500; `temporal_transformer` 0.940 / 0.495; `early_fusion`, `tsm`, `slow_fusion:r2plus1d_18` 1.000 / 1.000; `two_stream` farneback 0.990 / 0.985; `two_stream` mv 0.830 / 0.905; `flow_probe` 0.995 / 0.995.
+- **V1a gate, `smoke_track.py` on real UCF101 clips (320x240), GPU:**
+  - **Bug fixed (0879567):** written track boxes ran up to 2.3 px past the frame edge, from the Kalman state. Re-run on the baby clip: `SMOKE TRACK PASS`.
+  - **"baby" on `v_BabyCrawling_g03_c01`, one baby in the clip:** every frame: Grounding DINO 2 tracks (one lasts a single frame, so it is a false extra), OWLv2 1. Every 5th frame: 1 and 1. The main track covers the whole clip. 215 frames in about 55 s with each detector when run at every frame.
+  - **"person" on `v_BandMarching_g05_c02`, a crowd of small people:** 0 tracks from both detectors at both steps, though the frame is full of people. It is a real miss, not a crash: Grounding DINO's top score on frame 40 was 0.178 for "person.", under its 0.2 box threshold, while "people." gave 0.738 and "a person." 0.344. So a count of 0 does not mean none are there, results depend heavily on the wording, and small objects at this resolution are a weak spot. The app does not say so yet (for V1b or Phase 7).
+  - **Not done:** desktop page 07 on a real run and video. Screen control is not available in this session, so the user has to do those steps.
+- **Next:** page 07 by the user, R1 and R2 (running), then Wave 3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**
