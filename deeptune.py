@@ -78,8 +78,8 @@ def main(argv=None):
             issues.append('--target_error is only supported for the video modality.')
         elif effective_mode(cfg) != 'cls':
             issues.append('--target_error needs classification: a regression model has no error rate to bound.')
-        elif args.calib_fraction >= defaults['train_size']:
-            issues.append(f"--calib_fraction must be below the training share, {defaults['train_size']}.")
+        elif args.calib_fraction >= globals()['defaults']['train_size']:
+            issues.append(f"--calib_fraction must be below the training share, {globals()['defaults']['train_size']}.")
     # --- end R2 ---
     if issues:
         args.parser.error("\n".join(issues))
@@ -144,7 +144,7 @@ def main(argv=None):
     calibration_data_path = None
     if args.target_error is not None:
         from evaluators.video.abstention_fit import carve_calibration_split
-        calibration_seed = training_options.seed if training_options.seed is not None else 42 if defaults['fixed_seed'] else None
+        calibration_seed = 42 if defaults['fixed_seed'] else None  # like the split: --seed varies training, not which groups calibrate
         calibration_data_path = carve_calibration_split(train_data_path, args.calib_fraction, defaults['train_size'], GROUPER, calibration_seed)
     # --- end R2 ---
 

@@ -252,7 +252,7 @@ def loose_below(alpha: float, level: float = INTERVAL_LEVEL, factor: float = LOO
 
     The rule: with fewer groups, the upper end of the central `level` interval of the realised miss rate, Beta(l, n + 1 - l), is above
     `factor` x target, so one calibration draw can plausibly miss half as much again as the plain target says. Tied to the target because
-    the same n is ample at 20% and hopeless at 1%. About 15 (1 - a) / a groups at 95%: roughly 60 at 20%, 140 at 10%, 300 at 5%, 1500 at 1%.
+    the same n is ample at 20% and hopeless at 1%. At 95%, flooring included: 70 at 20%, 160 at 10%, 342 at 5%, 903 at 2%, 1810 at 1%.
     The smallest n from which the rule holds for every larger n, as flooring l makes it wiggle."""
     from scipy import stats
     limit = int(min(400_000, 40 / alpha))
@@ -374,6 +374,8 @@ def fit_abstention(score, wrong, groups=None, sources=None, *, target_error: flo
         threshold = conformal_threshold(worst, target_error)
 
     warnings = [UNIT_NOTES[unit]] if unit in UNIT_NOTES else []
+    if len(np.unique(score)) == 1:
+        warnings.append(f"Every calibration clip has the same {score_name}, so the rule answers all clips or none. With expected_error this means error_model.json is the constant fallback.")
     limit = loose_below(target_error)
     info = {'format': FORMAT, 'version': FORMAT_VERSION, 'target_error': float(target_error), 'guarantee_kind': guarantee, 'score': score_name,
             'threshold': threshold, 'split': split, 'unit': unit, 'guarantee_level': GUARANTEE_LEVELS[unit], 'assumes_independent_clips': unit == 'row',

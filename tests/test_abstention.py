@@ -13,7 +13,7 @@ from evaluators.abstention import (DEFAULT_DELTA, GRID_SIZE, NOT_SURE, UNIT_NOTE
                                    conformal_threshold, fit_abstention, group_worst_scores, groups_needed, load_rule_near, loose_below, overlapping_units, pipeline_issues,
                                    realised_coverage_interval, risk_p_values, risk_upper_bound, select_selective_threshold, selective_curve, threshold_grid, threshold_stats,
                                    write_report)
-from evaluators.abstention_sim import DEPENDENT, INDEPENDENT, STRESS, Scenario, draw, true_risks
+from evaluators.abstention_sim import DEPENDENT, INDEPENDENT, MOSTLY_WRONG, STRESS, Scenario, draw, true_risks
 
 GRID = threshold_grid(2)
 ALPHA = 0.10
@@ -170,6 +170,20 @@ def test_few_answered_groups_say_loose():
     score, wrong, groups = _easy(90, scenario=Scenario(clips_per_group=2, group_sd=0.1, offset=-6))
     info = fit_abstention(score, wrong, groups, target_error=0.1).info
     assert info['status'] == 'met' and info['loose'] and info['headline'].startswith('Guarantee is loose') and info['effective_n'] < info['loose_below_effective_n']
+
+
+def test_a_constant_score_is_called_out():
+    info = fit_abstention(np.full(40, 0.7), np.zeros(40, dtype=bool), [f'g{i}' for i in range(40)], target_error=0.3, score_name='expected_error').info
+    assert any('same expected_error' in warning for warning in info['warnings'])
+
+
+def test_group_weighted_error_can_be_far_from_clip_weighted_when_big_groups_err():
+    # Nine one-clip groups all right, one nine-clip group all wrong: 0.1 by group, 0.5 by clip. This is why the guarantee names its weighting.
+    groups = [*range(9), *[9] * 9]
+    row = threshold_stats(np.full(18, .9), np.array([False] * 9 + [True] * 9), groups, [0.0]).iloc[0]
+    assert row['unit_loss_sum'] / row['answered_units'] == pytest.approx(0.1)
+    assert row['wrong_clips'] / row['answered_clips'] == pytest.approx(0.5)
+    assert 'clip-weighted' in ' '.join(fit_abstention(np.full(18, .9), np.array([False] * 9 + [True] * 9), groups, target_error=.5).info['not_guaranteed'])
 
 
 def test_no_group_column_says_clip_level_and_independent():
@@ -364,14 +378,11 @@ def _slack(rate, seeds):
     return 3 * math.sqrt(rate * (1 - rate) / seeds)
 
 
-EASY_IID = Scenario(clips_per_group=1, group_sd=0.0, score_group_sd=0.0, score_mean=3.0)
-
-
 @pytest.fixture(scope='module')
 def populations():
     """Very large draws standing in for the truth at every grid threshold."""
     return {name: true_risks(*draw(np.random.default_rng(10_000), n, scenario), GRID)
-            for name, (scenario, n) in {'independent': (EASY_IID, 400_000), 'dependent': (DEPENDENT, 60_000), 'stress': (STRESS, 60_000)}.items()}
+            for name, (scenario, n) in {'independent': (INDEPENDENT, 400_000), 'dependent': (DEPENDENT, 60_000), 'stress': (STRESS, 60_000)}.items()}
 
 
 def _failures(scenario, truth, n_groups, seeds, per_clip=False, truth_key='group', alpha=ALPHA, delta=DELTA):
@@ -390,7 +401,8 @@ def _failures(scenario, truth, n_groups, seeds, per_clip=False, truth_key='group
 
 def test_selective_risk_holds_on_exchangeable_data(populations):
     seeds = 400
-    rate, chosen = _failures(EASY_IID, populations['independent'], 500, seeds)
+    assert populations['independent']['group'][0] > ALPHA  # answering everything would miss the target
+    rate, chosen = _failures(INDEPENDENT, populations['independent'], 1500, seeds)
     assert rate <= DELTA + _slack(DELTA, seeds)
     assert chosen > 0.9  # the check means little if it rarely answers
 
@@ -431,7 +443,8 @@ def test_clip_counting_makes_false_claims_where_group_counting_does_not(populati
 
 def test_group_rule_stays_useful_with_dependent_clips_on_a_useful_score(populations):
     seeds = 200
-    rate, chosen = _failures(DEPENDENT, populations['dependent'], 300, seeds)
+    assert populations['dependent']['group'][0] > ALPHA
+    rate, chosen = _failures(DEPENDENT, populations['dependent'], 600, seeds)
     assert rate <= DELTA + _slack(DELTA, seeds)
     assert chosen > 0.9
 
@@ -493,16 +506,17 @@ def test_silent_error_realised_coverage_follows_the_stated_beta(silent_populatio
 def test_a_beta_interval_on_clip_counts_is_too_narrow_where_group_counts_are_not():
     """P-118 at the wrong unit: the same procedure at clip level, stated with n = clips, misses its interval far more than 5% of the time."""
     alpha, n_groups, seeds = 0.1, 100, 600
-    population_score, population_wrong, _ = draw(np.random.default_rng(30_000), 100_000, DEPENDENT)
+    population_score, population_wrong, _ = draw(np.random.default_rng(30_000), 100_000, MOSTLY_WRONG)
     silent = np.sort(np.where(population_wrong, population_score, -np.inf))
-    n_clips = n_groups * DEPENDENT.clips_per_group
+    n_clips = n_groups * MOSTLY_WRONG.clips_per_group
     claimed = realised_coverage_interval(n_clips, alpha)
     realised = []
     for seed in range(seeds):
-        score, wrong, _ = draw(np.random.default_rng(seed), n_groups, DEPENDENT)
+        score, wrong, _ = draw(np.random.default_rng(seed), n_groups, MOSTLY_WRONG)
         tau = conformal_threshold(np.where(wrong, score, -np.inf), alpha)
         realised.append(np.searchsorted(silent, tau, side='left') / len(silent))
     realised = np.array(realised)
+    assert np.unique(realised).size > seeds / 2  # not stuck on a tie
     outside = ((realised < claimed['low']) | (realised > claimed['high'])).mean()
     assert outside > 0.05 + 3 * _slack(0.05, seeds)
 

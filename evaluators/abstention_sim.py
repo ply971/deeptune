@@ -23,8 +23,11 @@ class Scenario:
     informative: bool = True  # False: error ignores the score, so no threshold helps (the hardest case for a false claim)
 
 
-INDEPENDENT = Scenario(clips_per_group=1, group_sd=0.0, score_group_sd=0.0)
-DEPENDENT = Scenario(group_sd=4.0, offset=-6.0, score_mean=3.0)  # a useful score, with clips of a group erring together
+# In the first two, answering everything misses a 0.10 target (about 0.16), so the threshold has work to do.
+INDEPENDENT = Scenario(clips_per_group=1, group_sd=0.0, score_group_sd=0.0, score_mean=2.0)
+DEPENDENT = Scenario(group_sd=2.0, score_mean=3.0, score_clip_sd=1.5)  # a useful score, with clips of a group erring together
+# About half the clips are wrong, so silent-error thresholds sit in the continuous part of the scores rather than on the tie at "no wrong clip".
+MOSTLY_WRONG = Scenario(group_sd=3.0, offset=1.0, score_mean=1.0)
 # Whole groups are right or wrong, the true error (about 0.117) is just above a 0.10 target at every threshold, and the score does not help: a claim of 0.10 is always false here.
 STRESS = Scenario(clips_per_group=16, group_sd=8.0, offset=-9.8, informative=False)
 
