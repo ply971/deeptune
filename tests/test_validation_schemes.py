@@ -158,7 +158,7 @@ def test_oof_file_format_is_stable(tmp_path):
     groups = _groups()
     _run(tmp_path, groups=groups)
     table = va.load_oof_predictions(tmp_path)
-    assert list(table.columns) == ['row_id', 'fold', 'video_id', 'target', 'group', 'n_models', 'prediction', 'confidence', 'correct',
+    assert list(table.columns) == ['row_id', 'fold', 'video_id', 'target', 'group', 'n_models', 'probability_kind', 'prediction', 'confidence', 'correct',
                                    'expected_error', 'prob_0', 'prob_1', 'prob_2']
     assert table['row_id'].tolist() == list(range(60)) and table['video_id'][7] == 'clip7' and table['group'][7] == groups[7]
     assert table['target'].tolist() == _labels().tolist() and table['expected_error'].eq(.2).all()
@@ -225,7 +225,7 @@ def test_bootstrap_632_plus_end_to_end_with_a_stand_in(tmp_path):
     long = pd.read_csv(tmp_path / 'oob_predictions_all_resamples.csv')
     # Err^(1) by its definition, computed again from the long table.
     assert out['oob_error'] == pytest.approx((1 - long.groupby('row_id')['correct'].mean()).mean())
-    oof = va.load_oof_predictions(tmp_path)
+    oof = va.load_oof_predictions(tmp_path, allow_ensemble=True)
     assert oof['row_id'].is_unique and oof['n_models'].sum() == len(long)
     assert oof['prob_0'].sum() + oof['prob_1'].sum() + oof['prob_2'].sum() == pytest.approx(len(oof))
 
@@ -404,3 +404,35 @@ def test_distinct_sources_stay_ungrouped(tmp_path):
     rows.iloc[30:].to_parquet(tmp_path / 'val.parquet')
     summary, _ = _validate(tmp_path)
     assert summary['group_source'] is None and summary['grouped'] is False
+
+
+def test_the_loader_refuses_ensemble_rows_unless_asked(tmp_path):
+    _run(tmp_path / 'b', 'bootstrap632', n_boot=3)
+    with pytest.raises(ValueError, match='ensemble probabilities'):
+        va.load_oof_predictions(tmp_path / 'b')
+    assert va.load_oof_predictions(tmp_path / 'b', allow_ensemble=True)['probability_kind'].eq('ensemble').all()
+    assert pd.read_csv(tmp_path / 'b' / 'oob_predictions_all_resamples.csv')['probability_kind'].eq('single_model').all()
+    _run(tmp_path / 'k')
+    assert va.load_oof_predictions(tmp_path / 'k')['probability_kind'].eq('single_model').all()
+
+
+def test_the_summary_says_f1_and_auc_have_no_bootstrap_interval(tmp_path):
+    summary, _ = _run(tmp_path, 'bootstrap632', n_boot=3)
+    assert 'F1 and AUC' in summary['out_of_fold']['no_interval'] and set(summary['out_of_fold']['intervals']) == {'accuracy', 'balanced_accuracy'}
+    assert 'std' in summary['how_to_read'] and 'std' in summary['across_folds']['accuracy']['covers']
+
+
+def test_grouped_kfold_with_every_class_below_k_explains_itself():
+    labels = np.arange(30) % 10
+    with pytest.raises(ValueError, match='at least one class with 5 clips; the largest has 3'):
+        va.kfold_splits(labels, 5, groups=np.arange(30))
+
+
+def test_kfold_warns_about_a_fold_temperature_fitted_on_no_errors(tmp_path):
+    labels = _labels()
+    summary, _ = _run(tmp_path / 'a', recorder=Recorder(labels, accuracy=1.0))
+    warnings = summary['calibration']['warnings']
+    assert any(w.startswith('fold 0:') and 'hold no errors' in w for w in warnings) and any(w.startswith('all folds:') for w in warnings)
+    ordinary, _ = _run(tmp_path / 'b', labels=_labels(300), recorder=Recorder(_labels(300), accuracy=.6))
+    assert ordinary['calibration']['warnings'] == []
+

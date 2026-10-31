@@ -8,7 +8,8 @@ rows, so scored rows are out-of-sample also when validation selects the checkpoi
 A fold model trains on (k-1)/k of the rows, so these estimates lean pessimistic for a model trained on them all.
 
 `oof_predictions.csv` is a stable format (`OOF_SCHEMA_VERSION`, board INTERFACES), read by the label-issue finder and active
-learning; use `load_oof_predictions`.
+learning; use `load_oof_predictions`. Its `probability_kind` says whose scores a row holds: `single_model` (k-fold), or
+`ensemble` (bootstrap, averaged over resamples), which the loader refuses unless asked.
 """
 from __future__ import annotations
 
@@ -21,7 +22,8 @@ from typing import Callable, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from evaluators.calibration import apply_temperature, brier_score, expected_calibration_error, fit_temperature, negative_log_likelihood
+from evaluators.calibration import (apply_temperature, brier_score, expected_calibration_error, fit_temperature, negative_log_likelihood,
+                                    temperature_warnings)
 from evaluators.stats import DEFAULT_BOOTSTRAPS, bootstrap_ci, fold_summary, unit_labels
 from evaluators.video.report import classification_metrics, regression_metrics
 
@@ -31,12 +33,14 @@ SUMMARY_FILENAME = 'cv_summary.json'
 ASSIGNMENTS_FILENAME = 'assignments.csv'
 FOLD_METRICS_FILENAME = 'fold_metrics.csv'
 INNER_VALIDATION_FRACTION = 0.1
+SINGLE_MODEL, ENSEMBLE = 'single_model', 'ensemble'
 SCHEMES = ('holdout', 'kfold', 'bootstrap632')
 # The README repeats these words; a test holds the two together.
 KFOLD_CAVEATS = ('Each fold model trains on fewer rows than the final model, with 10% of its rows held out for checkpoint selection, so these estimates lean pessimistic for the final model.',)
 BOOTSTRAP_CAVEATS = ("Group resampling is an approximation: the .632 weight is derived for independent units, and groups of unequal size make it rougher.",
                      'Resample models train on about 57% distinct units (0.632 x 0.9), with held-out checkpoint selection.',
                      'The apparent model trains on 100% of the rows and selects on its own training rows, so err and Err1 come from differently trained models.')
+NO_INTERVAL_NOTE = 'F1 and AUC have no interval here, as they do not split per row. across_folds gives their std between resamples.'
 ENSEMBLE_NOTE = ('Probabilities averaged over the resamples that did not see each row, about 37% of them. This describes an ensemble, which '
                  'usually scores above any one model. It is not the estimate: use out_of_fold and bootstrap632.')
 ERROR_MODEL_BOOTSTRAP_NOTE = ('Not fitted in bootstrap mode: the averaged out-of-bag probabilities describe an ensemble, not one model. '
@@ -67,6 +71,9 @@ def kfold_splits(labels, k: int = 5, groups=None, mode: str = 'cls', seed: int =
         if n_groups < k:
             raise ValueError(f'{k}-fold needs at least {k} groups; found {n_groups}. Lower --k or add groups.')
         if mode == 'cls':
+            largest = int(np.unique(labels, return_counts=True)[1].max())
+            if largest < k:
+                raise ValueError(f'{k}-fold needs at least one class with {k} clips; the largest has {largest}. Lower --k or add clips.')
             splitter = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
         else:
             splitter = GroupKFold(n_splits=k, shuffle=True, random_state=seed)
@@ -207,6 +214,7 @@ def _oof_frame(base: pd.DataFrame, rows: np.ndarray, mode: str, scores: np.ndarr
     frame = base.iloc[rows].reset_index(drop=True)
     frame.insert(1, 'fold', name)
     frame['n_models'] = 1 if models is None else models
+    frame['probability_kind'] = SINGLE_MODEL
     if mode == 'cls':
         frame['target'] = frame['target'].astype(np.int64)
         frame['prediction'] = scores.argmax(axis=1)
@@ -228,12 +236,16 @@ def _oof_calibration(truth, scores, folds) -> dict:
     with a temperature fitted on itself. `temperature_all_folds` is the one to use on new data."""
     after = np.empty_like(scores)
     used = {}
+    found = []
     for fold in np.unique(folds):
         here = folds == fold
         used[str(fold)] = fit_temperature(scores[~here], truth[~here])
         after[here] = apply_temperature(scores[here], used[str(fold)])
+        found += [f'fold {fold}: {warning}' for warning in temperature_warnings(used[str(fold)], scores[~here], truth[~here])]
+    every = fit_temperature(scores, truth)
+    found += [f'all folds: {warning}' for warning in temperature_warnings(every, scores, truth)]
     return {'eval_rows': 'out-of-fold', 'fit_rows': 'the other folds, for each fold', 'temperature_per_fold': used,
-            'temperature_all_folds': fit_temperature(scores, truth),
+            'temperature_all_folds': every, 'warnings': found,
             'before': {'ece': expected_calibration_error(scores, truth), 'brier': brier_score(scores, truth), 'nll': negative_log_likelihood(scores, truth)},
             'after': {'ece': expected_calibration_error(after, truth), 'brier': brier_score(after, truth), 'nll': negative_log_likelihood(after, truth)},
             'caveat': 'pools probabilities of several fold models, which were not trained on all the rows',
@@ -244,7 +256,8 @@ def _per_resample_scores(long: pd.DataFrame, mode: str, fold_table: pd.DataFrame
     """The bootstrap's headline: each metric scored on each resample's own out-of-bag rows, then averaged, as Err^(1) is.
 
     The intervals resample units over each row's mean loss across the models that did not see it, so accuracy's interval is
-    about 1 - Err^(1). Metrics that do not decompose per row (F1, AUC) have no interval here: their spread is in across_folds."""
+    about 1 - Err^(1). Metrics that do not decompose per row (F1, AUC) have no interval here: `no_interval` says so, and the
+    `std` in across_folds gives their spread between resamples."""
     means = {name: fold_summary(fold_table[name].tolist())['mean'] for name in names}
     grouped = long.groupby('row_id', sort=True)
     truth = grouped['target'].first().to_numpy()
@@ -266,7 +279,10 @@ def _per_resample_scores(long: pd.DataFrame, mode: str, fold_table: pd.DataFrame
     intervals = {name: bootstrap_ci(metric, len(truth), groups, sources, n_boot, seed=seed) for name, metric in metrics.items()}
     for interval in intervals.values():
         interval['covers'] = 'which units were drawn, over each row\'s mean loss across the resample models; not training variability'
-    return {'metrics': means, 'intervals': intervals, 'scored': 'per resample, on its own out-of-bag rows, then averaged, matching oob_error'}
+    out = {'metrics': means, 'intervals': intervals, 'scored': 'per resample, on its own out-of-bag rows, then averaged, matching oob_error'}
+    if mode == 'cls':
+        out['no_interval'] = NO_INTERVAL_NOTE
+    return out
 
 
 def _oof_intervals(mode, truth, scores, groups, sources, n_boot, seed) -> dict:
@@ -358,7 +374,7 @@ def run_validation(scheme: str, labels, fit_predict: FitPredict, out_dir, mode: 
                'rows_used': 'train + validation rows; the sealed test rows are not given to this scheme',
                'per_fold': fold_rows, 'across_folds': {name: fold_summary(fold_table[name].tolist()) for name in names},
                'how_to_read': ('out_of_fold.intervals: uncertainty from which units were drawn, for models of this kind. across_folds: '
-                               'spread between models; its t interval is too narrow, as folds share data.')}
+                               'std is the spread between models; the t interval (fold_t_low, fold_t_high) is too narrow, as folds share data.')}
     if scheme == 'kfold':
         summary['out_of_fold'] = {'metrics': _metrics(mode, oof_truth, oof_scores), 'scored': 'all out-of-fold rows pooled',
                                   'intervals': _oof_intervals(mode, oof_truth, oof_scores, oof_groups, oof_sources, ci_boot, seed)}
@@ -383,7 +399,8 @@ def _json_default(value):
 
 def _mean_over_resamples(long: pd.DataFrame, mode: str) -> pd.DataFrame:
     """One row per pool row: the average of the models that did not see it, so P-107 and P-109 can read one format.
-    These are ensemble probabilities (see ENSEMBLE_NOTE), not one model's; `n_models` says how many were averaged."""
+    These are ensemble probabilities (see ENSEMBLE_NOTE), not one model's; `n_models` says how many were averaged, and
+    `probability_kind` marks them, so that `load_oof_predictions` can refuse them."""
     probability_columns = sorted((c for c in long.columns if c.startswith('prob_')), key=lambda c: int(c.split('_')[1]))
     numeric = probability_columns if mode == 'cls' else ['prediction']
     keep = ['row_id', 'video_id', 'target', 'group']
@@ -391,6 +408,7 @@ def _mean_over_resamples(long: pd.DataFrame, mode: str) -> pd.DataFrame:
     frame = grouped[keep[1:]].first().reset_index()
     frame.insert(1, 'fold', -1)
     frame['n_models'] = grouped.size().to_numpy()
+    frame['probability_kind'] = ENSEMBLE
     means = grouped[numeric].mean().reset_index(drop=True)
     if mode == 'cls':
         scores = means.to_numpy()
@@ -426,8 +444,11 @@ def _bootstrap_summary(labels, truth, long, mode, n, groups, seed, apparent_fit_
     return out
 
 
-def load_oof_predictions(path, require_schema: int = OOF_SCHEMA_VERSION) -> pd.DataFrame:
-    """Reads and checks an `oof_predictions.csv`. `path`: the file or its folder. Every row is out of sample by construction."""
+def load_oof_predictions(path, require_schema: int = OOF_SCHEMA_VERSION, allow_ensemble: bool = False) -> pd.DataFrame:
+    """Reads and checks an `oof_predictions.csv`. `path`: the file or its folder. Every row is out of sample by construction.
+
+    Bootstrap output holds an ensemble's probabilities, which are not what one model would have said, so it needs
+    `allow_ensemble=True`."""
     path = Path(path)
     if path.is_dir():
         path = path / OOF_FILENAME
@@ -437,9 +458,12 @@ def load_oof_predictions(path, require_schema: int = OOF_SCHEMA_VERSION) -> pd.D
         if version != require_schema:
             raise ValueError(f'{path}: schema version {version}, this code reads {require_schema}.')
     table = pd.read_csv(path)
-    missing = [c for c in ('row_id', 'fold', 'video_id', 'group', 'target', 'prediction', 'n_models', 'expected_error') if c not in table.columns]
+    missing = [c for c in ('row_id', 'fold', 'video_id', 'group', 'target', 'prediction', 'n_models', 'probability_kind', 'expected_error') if c not in table.columns]
     if missing:
         raise ValueError(f'{path} is not an out-of-fold table: it lacks {missing}.')
+    if not allow_ensemble and table['probability_kind'].eq(ENSEMBLE).any():
+        raise ValueError(f'{path} holds ensemble probabilities averaged over bootstrap resamples, not one model\'s. '
+                         'Use --validation kfold output, or pass allow_ensemble=True if an ensemble is what you want.')
     if table['row_id'].duplicated().any():
         raise ValueError(f'{path} has more than one row for some row_id.')
     return table

@@ -109,14 +109,14 @@ def fold_summary(values: Sequence[float], level: float = DEFAULT_LEVEL) -> dict:
     """Mean, sample std and a Student-t interval over folds or resamples.
 
     Folds share training data, so this interval is known to be too narrow (no unbiased variance estimator
-    exists: Bengio & Grandvalet, JMLR 2004). Report it as a description of the spread, not as a guarantee."""
+    exists: Bengio & Grandvalet, JMLR 2004). `std` describes the spread between folds. The interval is not a guarantee."""
     from scipy import stats
     array = np.asarray([v for v in values if v is not None], dtype=np.float64)
     array = array[np.isfinite(array)]
     n = len(array)
     out = {'n': n, 'mean': float(array.mean()) if n else None, 'std': float(array.std(ddof=1)) if n > 1 else None,
            'fold_t_low': None, 'fold_t_high': None, 'level': level,
-           'covers': 'spread between folds, with folds treated as independent; they are not, so this is too narrow'}
+           'covers': 'std: the spread between folds. fold_t_low and fold_t_high treat folds as independent; they are not, so that interval is too narrow'}
     if n > 1:
         half = stats.t.ppf(0.5 + level / 2, n - 1) * out['std'] / np.sqrt(n)
         out.update(fold_t_low=float(out['mean'] - half), fold_t_high=float(out['mean'] + half))
