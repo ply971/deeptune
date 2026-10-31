@@ -152,7 +152,9 @@ motion-aware model beats chance by a wide margin on the direction task while
 single-frame does not. It can't be met as written: two frames cap `late_fusion`
 at about 0.663 at default speed, below the 0.85 threshold, and
 `temporal_transformer` passed 5 of 10 runs at 1500 clips (95% interval
-0.19–0.81). See `docs/video-plan/reports/B2.md`.
+0.19–0.81). So for `late_fusion`, "can learn direction" holds only on the
+half-speed task, where it passed 7 of 10 runs. See
+`docs/video-plan/reports/B2.md`.
 
 ### Phase 4 — Long-video analysis, CtxPL action localisation, unsupervised
 **A.** Sliding-window timeline with smoothing → event segments (baseline),

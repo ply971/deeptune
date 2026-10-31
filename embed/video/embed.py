@@ -1,4 +1,5 @@
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +39,10 @@ def embed(df_path, out, model_weights, batch_size, use_case, model_version, adde
 
     start_time = time.time()
 
+    options = video_options_from_args(args)
+    if use_case == 'pretrained':  # a bare backbone takes RGB, whatever --video_arch says
+        options = replace(options, clip_motion=None)
+
     embedding_model = VideoEmbeddingModel(
         model,
         model_version=model_version,
@@ -45,7 +50,7 @@ def embed(df_path, out, model_weights, batch_size, use_case, model_version, adde
         embed_size=embed_size,
         num_frames=num_frames,
         device=DEVICE,
-        options=video_options_from_args(args),
+        options=options,
     )
 
     # The dataset is opened lazily from the parquet file (paths or bytes), so

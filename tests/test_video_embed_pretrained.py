@@ -77,6 +77,16 @@ def test_features_equal_a_direct_backbone_forward(clips, tmp_path, no_download):
     np.testing.assert_allclose(table.drop(columns='label').to_numpy(dtype=np.float32)[1], direct, rtol=1e-5, atol=1e-5)
 
 
+def test_a_two_stream_spec_still_gives_rgb_features(clips, tmp_path, no_download):
+    """Two-stream clips carry motion channels, which a bare RGB backbone cannot take (V-048)."""
+    from handlers.video_arch import clip_motion_source
+    assert clip_motion_source('two_stream:resnet18', 'farneback') is not None
+    args = _Args(pooling='two_stream:resnet18', motion_source='farneback')
+    embed_mod.embed(clips, tmp_path / 'a', None, 2, 'pretrained', 'resnet18', 2, 16, 2, args, 'cls', None, 'test', num_frames=2, pooling='two_stream:resnet18')
+    _embed(clips, tmp_path / 'b')
+    np.testing.assert_array_equal(_table(tmp_path / 'a').to_numpy(), _table(tmp_path / 'b').to_numpy())
+
+
 def test_the_record_says_where_embeddings_came_from(tmp_path, no_download):
     args = _Args()
     embed_mod.load_embedding_model(None, 'pretrained', 'resnet18', 2, 16, 2, args, 'cls', 'attention')
