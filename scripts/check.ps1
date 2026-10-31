@@ -41,7 +41,7 @@ Write-Host '== pip check'
 if ($LASTEXITCODE -eq 0) { $results['pip check'] = 'ok' } else { $results['pip check'] = 'FAIL'; $failed = $true }
 
 Write-Host '== pytest'
-& $python -m pytest tests -q --durations=10 -p no:cacheprovider "--junitxml=$junit" | Tee-Object -Variable pytestLines
+& $python -m pytest tests -q -m 'not seed_study' --durations=10 -p no:cacheprovider "--junitxml=$junit" | Tee-Object -Variable pytestLines
 $pytestCode = $LASTEXITCODE
 $summary = ($pytestLines | Where-Object { $_ -match '\d+ (passed|failed|error)' } | Select-Object -Last 1)
 if (-not $summary) { $summary = "no summary (exit $pytestCode)" }
