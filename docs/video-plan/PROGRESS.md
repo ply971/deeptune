@@ -76,9 +76,15 @@ Keep entries short and factual. This is the handoff between sessions.
 - **V1a gate, `smoke_track.py` on real UCF101 clips (320x240), GPU:**
   - **Bug fixed (0879567):** written track boxes ran up to 2.3 px past the frame edge, from the Kalman state. Re-run on the baby clip: `SMOKE TRACK PASS`.
   - **"baby" on `v_BabyCrawling_g03_c01`, one baby in the clip:** every frame: Grounding DINO 2 tracks (one lasts a single frame, so it is a false extra), OWLv2 1. Every 5th frame: 1 and 1. The main track covers the whole clip. 215 frames in about 55 s with each detector when run at every frame.
-  - **"person" on `v_BandMarching_g05_c02`, a crowd of small people:** 0 tracks from both detectors at both steps, though the frame is full of people. It is a real miss, not a crash: Grounding DINO's top score on frame 40 was 0.178 for "person.", under its 0.2 box threshold, while "people." gave 0.738 and "a person." 0.344. So a count of 0 does not mean none are there, results depend heavily on the wording, and small objects at this resolution are a weak spot. The app does not say so yet (for V1b or Phase 7).
-  - **Not done:** desktop page 07 on a real run and video. Screen control is not available in this session, so the user has to do those steps.
-- **Next:** page 07 by the user, R1 and R2 (running), then Wave 3.
+  - **"person" on `v_BandMarching_g05_c02`, a crowd of small people:** 0 tracks from both detectors at both steps, though the frame is full of people. It is a real miss, not a crash: Grounding DINO's top score on frame 40 was 0.178 for "person.", under its 0.2 box threshold, while "people." gave 0.738 and "a person." 0.344. So a count of 0 does not mean none are there, results depend heavily on the wording, and small objects at this resolution are a weak spot.
+- **V1a gate, page 07's own code on a real run and real clips, GPU (no clicks; screen control is not available here):** the same functions its Predict, Track and Stop buttons call, in a torch-free process. 6.4 min in total.
+  - **Predict:** `h_finetune_bn_off` gave BabyCrawling 98.6% and BandMarching 94.9%, both correct, with "3 of 33 validation clips were wrong, an estimate of 11.4% after smoothing", stated as the run-wide rate. The October demo run has no `error_model.json`: "not available", no number.
+  - **Track "baby":** step 1: Grounding DINO 2 (the false one-frame extra), OWLv2 1. Step 5: 1 and 1. The overlay frame checked by eye boxes the baby correctly.
+  - **Track on the band clip, Grounding DINO:** "person" gave 0 with a message giving the best score (0.31), the 0.45 needed to start a track, and what to try. "people" gave 1 track, the whole crowd as one object, which is a wrong count for a crowd.
+  - **Stop:** cancelled in 0.9 s, and GPU memory fell back from 7,501 MB to 1,456 MB.
+  - **Memory:** tracking with Grounding DINO peaked at 7,501 of 8,151 MB in use on the GPU, including about 1,500 MB already in use. This is a total from `nvidia-smi`, and may include cached memory. It leaves little room for another GPU job.
+  - **Still not checked:** the buttons by hand, and how the page displays these results. Not a pass of the V1a step until someone clicks through it.
+- **Next:** R1 and R2 reviews (running), then Wave 3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**
