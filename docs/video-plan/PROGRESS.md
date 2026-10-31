@@ -11,14 +11,26 @@ Keep entries short and factual. This is the handoff between sessions.
 | 2 Motion / untrimmed / scene-bias benchmarks | merged (A3); fine-tuned single_frame and lossless checks done on the GPU (one seed) | full suite 506 passed, 3 skipped (CPU) | `5bf2588` |
 | + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
 | + Training basics (T1), Analyse Video (V1a) | merged with review fixes; GPU and real-video gate open | full suite 1191 passed, 5 skipped (CPU) | `8314d32`, `94c5ecd` |
-| 3 Temporal models | built (B2), fix round for V-046 running, not merged | | |
+| 3 Temporal models | built (B2), last fix round (V-051) open, not merged; target reworded by the user | | |
 | 4 Timeline + CtxPL localisation + unsupervised | not started | | |
-| 5 Evaluation | B3 in progress | | |
+| 5 Evaluation | built (B3), ready at `793d59d`, merges after B2; 5-fold assurance report and `check.ps1` not run | | |
 | 6 Explainability & background reliance | not started | | |
 | 7 GUI | not started | | |
 | 8 GPU experiments, CtxPL reproduction, report | not started | | |
 
 ## Session log
+
+### 2026-10-31 — B2 and B3 reviews; Phase 3 target changed
+- **Merged:** nothing. `video-analysis` code is unchanged since 94c5ecd, and the full suite has not been re-run.
+- **B3:** ready at `793d59d` after reviews V-048, V-049, V-050. Targeted CPU tests: `474 passed, 51 warnings` at `f68175c`, then `64 passed` for `tests/test_localization_report.py` on the last wording fix (coordinator's, no fresh review).
+- **B2:** review V-051 says merge after small fixes and found no training bug. `tests/models/test_temporal_oracle.py`: `18 passed in 967.82s`. The last fix round did not change anything before the spend limit stopped it. `seed_study` is in `CLAUDE.md` on the B2 branch (`3464347`), but the marker and the check-script change are still to do.
+- **Measured, CPU, tiny backbone, direction task:** `cnn_rnn` 800 clips 9/10, 240 clips 2/10; `temporal_transformer` 1500 clips 5/10; `late_fusion` half speed 7/10, default speed 0/10. The two-frame limit at default speed is 0.66347; V-046's 0.548 was an error.
+- **Decision (user):** Phase 3's done-when is reworded in PLAN.md to what the evidence supports.
+- **Not run:** none of B2 or B3 has run on the GPU, real video, pretrained weights or df-analyze.
+- **Open for later:**
+  - P-105: pre-cut clips such as UCF101's get no shared-source warning.
+  - Phase 4: a group-aware check before any per-segment uncertainty claim.
+- **Next:** finish B2's fix round, merge B2, merge B3 with the pretrained + `two_stream` refusal, run the full suite, then R1, R2, P-105, P-106, P-108.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**

@@ -140,9 +140,19 @@ biased split and ≈ chance on the unbiased one).
 Single frame, late, early, slow fusion; attention pooling fixed to act on
 embeddings (G5); CNN→LSTM/GRU; temporal transformer; **TSM**; **two-stream**
 with `--motion_source farneback|mv|raft`; token merging for ViT/Swin
-(stretch). **Done when:** every motion-aware model beats chance by a wide
-margin on the Phase 2 direction task while single-frame does not — asserted in
-tests — and everything trains/evaluates/embeds/infers through the pipeline.
+(stretch). **Done when:** each motion-aware architecture can learn direction,
+with reversal and frame-order behaviour consistent with using motion, and
+appearance controls stay at chance across seeds — asserted in tests — and
+everything trains/evaluates/embeds/infers through the pipeline. This is wiring
+evidence on an untrained tiny backbone with budgets tuned on the held-out set,
+not proof that every model reliably beats chance.
+
+Changed by the user on 2026-10-31. The original target was that every
+motion-aware model beats chance by a wide margin on the direction task while
+single-frame does not. It can't be met as written: two frames cap `late_fusion`
+at about 0.663 at default speed, below the 0.85 threshold, and
+`temporal_transformer` passed 5 of 10 runs at 1500 clips (95% interval
+0.19–0.81). See `docs/video-plan/reports/B2.md`.
 
 ### Phase 4 — Long-video analysis, CtxPL action localisation, unsupervised
 **A.** Sliding-window timeline with smoothing → event segments (baseline),
