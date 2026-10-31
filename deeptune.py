@@ -63,6 +63,15 @@ def main(argv=None):
         issues.append('These flags are only supported for the images and video modalities: '
                       + ', '.join('--' + name for name in training_options.non_default()))
     # --- end training basics ---
+    # --- evaluation suite (B3) ---
+    if args.modality != 'video':
+        if args.validation != 'holdout':
+            issues.append('--validation kfold and bootstrap632 are only supported for the video modality.')
+        if args.export_dfanalyze:
+            issues.append('--export_dfanalyze is only supported for the video modality.')
+    elif args.validation != 'holdout' and training_options.resume is not None:
+        issues.append('--resume cannot be combined with --validation: every fold must train a fresh model.')
+    # --- end B3 ---
     if issues:
         args.parser.error("\n".join(issues))
     args.mode = effective_mode(cfg)
@@ -303,6 +312,26 @@ def main(argv=None):
         from evaluators.video.evaluate import evaluate as evaluate_video
         from embed.video.embed import embed as embed_video
 
+        # --- evaluation suite (B3) ---
+        from evaluators.video.report import shared_source_warning
+        video_split_warning = shared_source_warning(test_data_path, train_data_path, val_data_path)
+        if video_split_warning:
+            print(f'Warning: {video_split_warning}')
+        # The folds run before the final model, and on train + validation rows only.
+        video_eval_config = dict(mode=defaults['mode'], num_classes=args.num_classes, model_version=args.model_version, model_str=args.model_version,
+                                 use_peft=args.use_peft, added_layers=defaults['added_layers'], embed_size=defaults['embed_size'],
+                                 batch_size=args.batch_size, freeze_backbone=FREEZE_BACKBONE, num_frames=args.num_frames, pooling=args.pooling)
+        if args.validation != 'holdout':
+            from evaluators.video.run_validation import run_video_validation
+            video_train_config = dict(batch_size=args.batch_size, num_epochs=defaults['num_epochs'], learning_rate=defaults['learning_rate'],
+                                      added_layers=defaults['added_layers'], embed_size=defaults['embed_size'], freeze_backbone=FREEZE_BACKBONE,
+                                      use_peft=args.use_peft, num_classes=args.num_classes, fixed_seed=defaults['fixed_seed'], mode=defaults['mode'],
+                                      model_str=args.model_version, model_version=args.model_version, num_frames=args.num_frames,
+                                      pooling=args.pooling, trainable_params=args.trainable_params)
+            run_video_validation(args, train_data_path, val_data_path, Path(args.out)/parent_dir, train_video, evaluate_video,
+                                 video_train_config, video_eval_config, GROUPER)
+        # --- end B3 ---
+
         ckpt_directory = train_video(
             train_df=train_data_path,
             val_df=val_data_path,
@@ -368,6 +397,18 @@ def main(argv=None):
         print_experiment_paths_table(df_path=df_path, train_data_path=train_data_path, val_data_path=val_data_path, test_data_path=test_data_path, ckpt_directory=ckpt_directory, exp_path=exp_path)
         print_training_log_table(csv_dir/"training_log.csv")
         print_metrics_table(metrics_dict, embed_shape, modality='video',mapping_path=MAPPING_PATH)
+        # --- evaluation suite (B3): last, so that a problem here cannot cost the results above ---
+        if args.export_dfanalyze:
+            from embed.video.dfanalyze import export_from_args
+            export_from_args(args, {'train': train_data_path, 'val': val_data_path, 'test': test_data_path}, ckpt_directory, USE_CASE,
+                             args.model_version, defaults['added_layers'], defaults['embed_size'], args.num_classes, defaults['mode'],
+                             Path(args.out)/parent_dir, args.model_version, args.batch_size, args.num_frames, args.pooling, GROUPER)
+        if args.report_boot > 0:
+            from evaluators.video.run_validation import write_final_report
+            write_final_report(args, Path(args.out)/parent_dir, ckpt_directory, test_data_path, val_data_path, train_data_path, MAPPING_PATH,
+                               evaluate_video, dict(video_eval_config, embed_size=defaults['embed_size']), GROUPER,
+                               extra_warnings=[video_split_warning] if video_split_warning else [])
+        # --- end B3 ---
 
     elif args.modality == 'tabular':
 
