@@ -46,7 +46,7 @@ if "$python" -m pip check; then results+=("pip check: ok"); else results+=("pip 
 
 echo "== pytest"
 pytest_log="$report_dir/pytest.log"
-"$python" -m pytest tests -q --durations=10 -p no:cacheprovider "--junitxml=$junit" | tee "$pytest_log"
+"$python" -m pytest tests -q -m "not seed_study" --durations=10 -p no:cacheprovider "--junitxml=$junit" | tee "$pytest_log"
 pytest_code=${PIPESTATUS[0]}
 summary=$(grep -E '[0-9]+ (passed|failed|error)' "$pytest_log" | tail -n 1 | sed -E 's/^=+ *//; s/ *=+$//')
 [ -n "$summary" ] || summary="no summary (exit $pytest_code)"

@@ -146,6 +146,10 @@ class adjustedPeftDenseNet(nn.Module):
             x = self.fc1(x)
             return x
 
+        if extract_embed:
+            # the raw features: added_layers = 1 must not go through its classifier
+            return x
+
         if self.added_layers == 2:
             x = self.fc1(x)
             x = F.relu(x)

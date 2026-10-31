@@ -31,4 +31,4 @@ namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["ui: requires a graphics-capable desktop"]
+markers = ["ui: requires a graphics-capable desktop", "slow: takes a minute or more on CPU; still part of the full suite", "seed_study: repeats an oracle over several model seeds, minutes each; the check scripts deselect it"]

@@ -6,9 +6,13 @@ Models are given as specs:
   single_frame:<backbone>   Karpathy single-frame baseline (middle frame only)
   mean:<backbone>           frame pooling, mean over frames (late fusion)
   attention:<backbone>      frame pooling, learned attention over frames
+  late_fusion:<backbone>    first and last frames (also early_fusion, tsm, cnn_rnn, temporal_transformer)
+  two_stream:<backbone>     RGB + Farneback flow; two_stream@mv:<backbone> uses codec motion vectors
+  slow_fusion:<native 3D>   a native 3D model
   <native 3D name>          e.g. r3d_18, mc3_18, r2plus1d_18 (slow fusion)
-  flow_logreg / flow_probe  reference probe: mean horizontal Farneback flow -> logistic regression
-                            (speed: flow summary -> ridge regression)
+  flow_logreg / flow_probe  reference probe. direction, scene_bias: mean horizontal Farneback flow -> logistic
+                            regression. periodic: flow summary -> logistic regression (the mean flow of an
+                            oscillation is about zero). speed: flow summary -> ridge regression.
 <backbone> is any 2D model version DeepTune knows (resnet18, efficientnet_b0, ...).
 "dummy" (an untrained resnet18) and "dummy_video3d" (an untrained r3d_18) exist
 for quick CPU smoke runs only.
@@ -38,9 +42,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from handlers.video_arch import TEMPORAL_ARCHITECTURES, format_pooling_spec  # noqa: E402
+
 TASKS = ("direction", "scene_bias", "periodic", "speed")
 EVAL_SPLITS = {"direction": ("test",), "periodic": ("test",), "speed": ("test",), "scene_bias": ("val", "test")}
 REGRESSION_TASKS = {"speed"}  # mode=reg: label = speed in px/frame; metrics R^2 and MAE
+FLOW_SUMMARY_TASKS = {"periodic", "speed"}  # the signal is not the signed mean flow (same features as benchmarks/probes.py)
 
 
 def task_mode(task: str) -> str:
@@ -60,7 +67,9 @@ def parse_args(argv=None):
                    help="Validation split used by the Trainer (scene_bias: the biased held-out split).")
     p.add_argument("--size", type=int, default=64, help="Generated frame size.")
     p.add_argument("--num_frames", type=int, default=None, help="Generated clip length (default 12; periodic 16).")
-    p.add_argument("--seed", type=int, default=0, help="Data and model seed.")
+    p.add_argument("--seed", type=int, default=0, help="Data seed, and the model seed unless --model_seed is given.")
+    p.add_argument("--model_seed", type=int, default=None,
+                   help="Seed for model initialisation and training. Default: --seed. Change it to repeat a run on the same data.")
     p.add_argument("--codec", default="auto")
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--batch_size", type=int, default=8)
@@ -72,7 +81,10 @@ def parse_args(argv=None):
     p.add_argument("--resize", type=int, default=112, help="Frame side fed to 2D backbones.")
     p.add_argument("--hflip", action="store_true", help="Random clip-level horizontal flip (refused on direction tasks).")
     p.add_argument("--threads", type=int, default=4, help="torch CPU threads (keep low on a laptop).")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.model_seed is None:
+        args.model_seed = args.seed
+    return args
 
 
 def generate_or_load(args):
@@ -110,19 +122,33 @@ def parse_spec(spec: str):
         return "probe", spec
     if ":" in spec:
         pooling, version = spec.split(":", 1)
-        if pooling not in ("single_frame", "mean", "attention"):
+        if pooling == "slow_fusion":
+            return "native", version
+        if pooling.partition("@")[0] not in ("single_frame", "mean", "attention", *TEMPORAL_ARCHITECTURES):
             raise SystemExit(f"Unknown temporal strategy {pooling!r} in {spec!r}.")
         return pooling, version
     return "native", spec
 
 
-def build_model(kind, version, num_classes, args, mode="cls"):
+def _temporal_pooling(kind, num_frames):
+    """The model's pooling spec and the clips' motion source for a runner `kind` such as 'two_stream@mv'."""
+    arch, _, source = kind.partition("@")
+    if arch not in TEMPORAL_ARCHITECTURES:
+        return kind, None
+    return format_pooling_spec(arch, num_frames=num_frames), (source or "farneback") if arch == "two_stream" else None
+
+
+def build_model(kind, version, num_classes, args, mode="cls", num_frames=None):
     from src.video.frame_pool import VideoFramePoolClassifier
     from src.video.single_frame import VideoSingleFrameClassifier
     from utils import build_video_model, is_native_video_architecture
 
     if kind == "native" and not is_native_video_architecture(version):
         raise SystemExit(f"{version!r} is not a native video model; use e.g. mean:{version}.")
+    if kind.partition("@")[0] in TEMPORAL_ARCHITECTURES:
+        return build_video_model(model_version=version, num_classes=num_classes, added_layers=args.added_layers,
+                                 embed_size=args.embed_size, freeze_backbone=args.freeze_backbone, mode=mode,
+                                 use_peft=args.use_peft, pooling=_temporal_pooling(kind, num_frames)[0])
     if version == "dummy":  # untrained resnet18 for smoke runs; not resolvable by build_video_model
         from src.vision.resnet import adjustedResNet
         from src.vision.resnet_peft import adjustedPeftResNet
@@ -150,21 +176,25 @@ class ClipHFlip:
         clip, label, *rest = self.dataset[idx]
         if self.rng.random() < self.p:
             clip = clip.flip(-1)
+            if clip.shape[-3] == 5:  # two-stream: a mirrored clip moves the other way, so dx changes sign too
+                clip[..., 3, :, :] *= -1
         return (clip, label, *rest)
 
 
 def make_loaders(ds, kind, version, num_frames, args):
     from torch.utils.data import DataLoader
     from torchvision import transforms
-    from datasets.video_datasets import ParquetVideoDataset, collate_video_samples, native_video_transform
+    from datasets.video_datasets import ParquetVideoDataset, VideoDataOptions, collate_video_samples, native_video_transform
     from handlers.video_manifest import load_video_manifest
 
-    clip_transform = native_video_transform(version) if kind == "native" else None
+    # Native 3D models and SigLIP have their own preprocessing; other 2D backbones use the per-frame transform below.
+    clip_transform = native_video_transform(version) if kind == "native" or version.startswith("siglip") else None
     frame_transform = None if clip_transform is not None else transforms.Compose([
         transforms.Resize((args.resize, args.resize)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
+    options = VideoDataOptions(clip_motion=_temporal_pooling(kind, num_frames)[1])
     loaders = {}
     for split, path in ds.splits.items():
         frame = load_video_manifest(path)
@@ -173,9 +203,9 @@ def make_loaders(ds, kind, version, num_frames, args):
         else:
             frame["labels"] = frame["label_idx"].astype(int)
         dataset = ParquetVideoDataset(frame[["videos", "labels"]], transform=frame_transform,
-                                      num_frames=num_frames, clip_transform=clip_transform)
+                                      num_frames=num_frames, clip_transform=clip_transform, options=options)
         if split == "train" and args.hflip:
-            dataset = ClipHFlip(dataset, seed=args.seed)
+            dataset = ClipHFlip(dataset, seed=args.model_seed)
         loaders[split] = DataLoader(dataset, batch_size=args.batch_size, shuffle=split == "train",
                                     collate_fn=collate_video_samples, num_workers=0)
     return loaders
@@ -211,15 +241,15 @@ def scores(outputs, labels, mode="cls"):
 
 
 def run_probe(ds, args):
-    """Flow reference: mean horizontal Farneback flow -> logistic regression
-    (classification), or the flow summary -> ridge regression (speed)."""
+    """Flow reference: mean horizontal Farneback flow (direction, scene_bias) or the flow summary (periodic, speed),
+    then logistic regression, or ridge regression for speed."""
     from sklearn.linear_model import LogisticRegression, RidgeCV
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
     from benchmarks.motion_features import flow_summary_features, mean_flow_features, read_frames
 
     mode = task_mode(args.task)
-    featurize = flow_summary_features if mode == "reg" else mean_flow_features
+    featurize = flow_summary_features if args.task in FLOW_SUMMARY_TASKS else mean_flow_features
     target = "labels" if mode == "reg" else "label_idx"
     start = time.perf_counter()
     feats = {}
@@ -243,9 +273,9 @@ def run_model(ds, kind, version, args, run_dir):
 
     meta = ds.load_metadata()
     num_frames = next(iter(meta["videos"].values()))["num_frames"]
-    torch.manual_seed(args.seed)
+    torch.manual_seed(args.model_seed)
     mode = task_mode(args.task)
-    model = build_model(kind, version, 1 if mode == "reg" else len(meta["classes"]), args, mode=mode)
+    model = build_model(kind, version, 1 if mode == "reg" else len(meta["classes"]), args, mode=mode, num_frames=num_frames)
     loaders = make_loaders(ds, kind, version, num_frames, args)
     val_loader = loaders["val"]  # never test: the Trainer logs on it and fits error_model.json on it
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -256,7 +286,9 @@ def run_model(ds, kind, version, args, run_dir):
     for split in EVAL_SPLITS[args.task]:
         start = time.perf_counter()
         out[split] = scores(*evaluate(model, loaders[split], mode), mode)
-        out[f"{split}_eval_seconds"] = round(time.perf_counter() - start, 1)
+        seconds = time.perf_counter() - start
+        out[f"{split}_eval_seconds"] = round(seconds, 1)
+        out[split]["clips_per_s"] = len(loaders[split].dataset) / max(seconds, 1e-9)  # includes decoding
     return out
 
 

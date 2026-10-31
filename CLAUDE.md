@@ -61,6 +61,7 @@ CUDA in a test; skip GPU-only paths cleanly with a reason.
 ```powershell
 .venv\Scripts\python.exe -m pytest tests -q            # full suite
 .venv\Scripts\python.exe -m pytest tests -q -k video    # video-focused
+.venv\Scripts\python.exe -m pytest tests -q -m seed_study  # five-seed oracle studies only (about 9 min on CPU)
 .venv\Scripts\python.exe -m pip check
 .venv\Scripts\python.exe scripts\smoke_video.py --model resnet18 --manifest
 .venv\Scripts\python.exe scripts\smoke_video.py --model r3d_18
@@ -70,6 +71,7 @@ CUDA in a test; skip GPU-only paths cleanly with a reason.
 `scripts\check.ps1` (Linux/CI: `scripts/check.sh`) runs pip check → full pytest
 (JUnit in `.artifacts\check\`) → both video smoke scripts, and prints one
 `CHECK PASS|FAIL | ...` line. `-Quick` / `--quick` skips the smoke runs.
+Both check scripts deselect `seed_study`, so run those tests with the command above.
 To mimic CI on this machine, hide the GPU: `$env:CUDA_VISIBLE_DEVICES='-1'` (on PowerShell 5.1, `''` deletes the variable and leaves the GPU visible).
 
 ## Architecture rules

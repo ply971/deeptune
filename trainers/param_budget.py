@@ -152,12 +152,14 @@ def apply_top_down_budget(model: nn.Module, budget: int) -> dict:
     the trainable part of the backbone is one contiguous top block. The model's
     shape is not changed.
 
-    Raises ValueError when the head alone is larger than the budget.
+    A model's ``always_trainable`` name prefixes count as head: without those layers it could not see time at all
+    (src/video/temporal.py). Raises ValueError when the head alone is larger than the budget.
     """
     budget = parse_param_count(budget)
     named = list(model.named_parameters())
-    head = [(n, p) for n, p in named if parameter_group(n) == "head"]
-    backbone = [(n, p) for n, p in named if parameter_group(n) != "head"]
+    required = tuple(getattr(model, "always_trainable", ()))
+    head = [(n, p) for n, p in named if parameter_group(n) == "head" or n.startswith(required)]
+    backbone = [(n, p) for n, p in named if not (parameter_group(n) == "head" or n.startswith(required))]
 
     head_size = sum(p.numel() for _, p in head)
     if head_size > budget:

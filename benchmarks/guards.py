@@ -35,7 +35,7 @@ def _find_metadata(source: Path | str | dict) -> dict | None:
         try:
             if not candidate.is_file():
                 continue
-            meta = json.loads(candidate.read_text(encoding="utf-8"))
+            meta = json.loads(candidate.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):  # unreadable / invalid JSON / bad encoding
             continue
         if _is_benchmark_metadata(meta):

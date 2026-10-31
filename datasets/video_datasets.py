@@ -46,9 +46,11 @@ from torch.utils.data import Dataset
 from datasets.frame_cache import (DEFAULT_FRAME_CACHE_SIZE, FrameCache, clip_sampling_is_cacheable, frame_cache_key, retry_while_locked,
                                   motion_curve_key, resize_short_side)
 from datasets.video_augment import ClipAugment, ClipAugmentConfig
+from datasets.motion_stack import clip_motion_field, load_motion_field, normalise_motion_field
 from datasets.video_io import (BACKEND_CHOICES, CURVE_METHODS, VideoDecodeError, VideoReader, describe_source,
                                source_fingerprint)
 from datasets.video_sampling import STRATEGIES, SamplingSpec, sample_clip_indices
+from handlers.video_arch import CLIP_MOTION_SOURCES, clip_motion_source, curve_method
 
 LOGGER = logging.getLogger('deeptune.video')
 
@@ -71,6 +73,9 @@ class VideoPresetTransform:
 
 def native_video_transform(model_version: str):
     from src.video.video3d import VIDEO3D_ARCHITECTURES
+    if str(model_version).startswith('siglip'):
+        from src.video.siglip_backbone import SiglipClipTransform
+        return SiglipClipTransform(model_version)
     return VideoPresetTransform(model_version) if model_version in VIDEO3D_ARCHITECTURES else None
 
 
@@ -104,6 +109,9 @@ class VideoDataOptions:
     video_augment: bool = False
     video_flip: bool = False
     video_speed_perturb: float = 0.0
+    # Two-stream only: attach this motion field as channels 3-4 of each frame ('farneback' or 'mv').
+    clip_motion: Optional[str] = None
+    motion_cache: Optional[str] = None
     test_clips: int = 1
     test_crops: int = 1
     num_workers: object = 'auto'
@@ -118,6 +126,8 @@ class VideoDataOptions:
             raise ValueError(f'temporal_sampling must be one of {", ".join(STRATEGIES)}.')
         if self.motion_source not in CURVE_METHODS:
             raise ValueError(f'motion_source must be one of {", ".join(CURVE_METHODS)}.')
+        if self.clip_motion not in (None, *CLIP_MOTION_SOURCES):
+            raise ValueError(f'clip_motion must be one of {", ".join(CLIP_MOTION_SOURCES)}.')
         if int(self.test_clips) < 1:
             raise ValueError('test_clips must be at least 1.')
         if self.video_flip and not self.video_augment:
@@ -144,6 +154,7 @@ class VideoDataOptions:
 
 
 _OPTION_TYPES = {
+    'motion_cache': str,
     'video_backend': str, 'temporal_sampling': str, 'clip_stride': int, 'clip_duration_sec': float,
     'motion_source': str, 'video_augment': bool, 'video_flip': bool, 'video_speed_perturb': float,
     'test_clips': int, 'test_crops': int, 'num_workers': (int, str), 'frame_cache': str, 'frame_cache_size': int, 'frame_resize': int,
@@ -161,6 +172,12 @@ def video_options_from_args(args=None, **overrides) -> VideoDataOptions:
             continue
         if isinstance(value, kind if isinstance(kind, tuple) else (kind,)) or (kind is float and isinstance(value, int)):
             values[name] = value
+    # --- two-stream models (handlers/video_arch.py): the architecture decides whether clips carry motion ---
+    if args is not None:
+        pooling = args.get('pooling') if isinstance(args, dict) else getattr(args, 'pooling', None)
+        values['clip_motion'] = clip_motion_source(pooling, values.get('motion_source'))
+        if 'motion_source' in values:
+            values['motion_source'] = curve_method(values['motion_source'])
     values.update({k: v for k, v in overrides.items() if v is not None})
     return VideoDataOptions(**values)
 
@@ -353,6 +370,7 @@ class _VideoClipDataset(Dataset):
         self._ends = self._time_column(df, 'end_sec')
         self._motion_cache: dict = {}
         self._warned: set = set()
+        self._augment_params = None
         self.frame_cache = (FrameCache(self.options.frame_cache, self.options.effective_frame_resize)
                             if self.options.frame_cache else None)
         self._frames_cacheable = clip_sampling_is_cacheable(self.spec, self.train)
@@ -442,7 +460,7 @@ class _VideoClipDataset(Dataset):
     def _to_tensor(self, frames: np.ndarray) -> torch.Tensor:
         clip = torch.from_numpy(np.ascontiguousarray(frames)).permute(0, 3, 1, 2)  # uint8 [T, C, H, W]
         if self.augment is not None:
-            clip, _ = self.augment(clip)
+            clip, self._augment_params = self.augment(clip)
         if self.clip_transform is not None:
             return self.clip_transform(clip)
         if self.transform:
@@ -454,9 +472,31 @@ class _VideoClipDataset(Dataset):
         with VideoReader(source, backend=self.options.video_backend) as reader:
             indices = self.sample_indices(i, reader)
             frames = self._decode_frames(i, reader, indices.reshape(-1))
+            motion = self._load_motion_channels(reader, indices)
         frames = frames.reshape(self.num_clips, self.num_frames, *frames.shape[1:])
-        clips = [self._to_tensor(clip) for clip in frames]
+        clips = []
+        for n, frames_of_clip in enumerate(frames):
+            clip = self._to_tensor(frames_of_clip)
+            clips.append(clip if motion is None else self._attach_motion(clip, motion[n]))
         return clips[0] if self.num_clips == 1 else torch.stack(clips)
+
+    # -- motion channels (two-stream models, datasets/motion_stack.py) ------
+    def _load_motion_channels(self, reader: VideoReader, indices: np.ndarray) -> Optional[np.ndarray]:
+        """Normalised motion ``[N, T, 2, Hb, Wb]`` of the sampled frames, or None when clips carry no motion."""
+        if self.options.clip_motion is None:
+            return None
+        meta = reader.metadata()
+        field = load_motion_field(reader, indices.reshape(-1), self.options.clip_motion, cache_dir=self.options.motion_cache)
+        field = normalise_motion_field(field, meta.height, meta.width)
+        return field.reshape(self.num_clips, self.num_frames, *field.shape[1:])
+
+    def _attach_motion(self, clip: torch.Tensor, field: np.ndarray) -> torch.Tensor:
+        """``[T, 3, H, W]`` + motion -> ``[T, 5, H, W]``. The clip's own crop and flip apply to the motion too."""
+        if self.augment is not None:
+            field = ClipAugment.apply_to_motion(field, self._augment_params)
+        motion = torch.from_numpy(np.ascontiguousarray(clip_motion_field(field)))
+        motion = torch.nn.functional.interpolate(motion, size=clip.shape[-2:], mode='bilinear', align_corners=False)
+        return torch.cat([clip, motion.to(clip.dtype)], dim=1)
 
     def __getitem__(self, idx):
         try:

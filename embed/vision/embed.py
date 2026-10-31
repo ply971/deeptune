@@ -151,7 +151,9 @@ def load_vision_model(
         if use_case not in ('peft', 'finetuned'):
             raise ValueError('There is no third option other than ["finetuned", "peft"] for DenseNet.')
        
-        if added_layers == 1 or added_layers == 0:  # This is because DenseNet embeddings extraction using DeepTune only supports it via intermediate layer.
+        # A choice for the images modality, for the reason in the message. The model class itself does return these
+        # features with added_layers=1, and video frame models use them (src/vision/densenet.py).
+        if added_layers == 1 or added_layers == 0:
             raise ValueError("Kindly note that extracting embeddings from DenseNet is only supported through the intermediate embedding layer (added_layers=2). Extracting embeddings from pretrained model directly could lead potentially to misleading results as the last layer in the densenet architecture before the classification layer is a BatchNorm, which are normalization features that is used to stabilize training, and doesn't provide meaningful images presentation.")
 
     if use_case == 'peft':

@@ -163,6 +163,34 @@ class _SilencedStderr:
         return False
 
 
+# FourCCs that name the same bitstream format. OpenCV reports the tag it reads
+# back, which is not always the one requested ("mp4v" comes back as "FMP4").
+_CODEC_FAMILIES = {
+    "mp4v": "mpeg4", "fmp4": "mpeg4", "xvid": "mpeg4", "divx": "mpeg4", "dx50": "mpeg4",
+    "avc1": "h264", "avc3": "h264", "h264": "h264", "x264": "h264",
+    "hev1": "hevc", "hvc1": "hevc", "h265": "hevc", "x265": "hevc",
+    "mjpg": "mjpeg", "vp80": "vp8", "vp09": "vp9", "av01": "av1",
+}
+
+
+def codec_family(fourcc: str) -> str:
+    """The bitstream format a FourCC names (case-insensitive); unknown FourCCs name themselves."""
+    tag = fourcc.strip().lower()
+    return _CODEC_FAMILIES.get(tag, tag)
+
+
+def read_fourcc(path: Path) -> str:
+    """The FourCC of a written video as OpenCV reads it back, or "" if it cannot be read."""
+    cap = cv2.VideoCapture(str(path))
+    try:
+        if not cap.isOpened():
+            return ""
+        tag = int(cap.get(cv2.CAP_PROP_FOURCC))
+    finally:
+        cap.release()
+    return tag.to_bytes(4, "little").decode("latin1") if tag > 0 else ""
+
+
 def _probe_fourcc(fourcc: str) -> bool:
     with tempfile.TemporaryDirectory(prefix="deeptune-codec-") as folder:
         path = os.path.join(folder, "probe.mp4")
@@ -178,7 +206,7 @@ def _probe_fourcc(fourcc: str) -> bool:
         cap = cv2.VideoCapture(path)
         ok, _ = cap.read()
         cap.release()
-        return bool(ok)
+        return bool(ok) and codec_family(read_fourcc(path)) == codec_family(fourcc)
 
 
 def resolve_codec(codec: str = "auto") -> str:
@@ -188,7 +216,8 @@ def resolve_codec(codec: str = "auto") -> str:
     that Phase 1 can export - and falls back to MPEG-4 Part 2 (``mp4v``), which
     also stores motion vectors. OpenCV wheels usually lack an H.264 *encoder*
     (OpenH264 DLL missing), so on most machines the result is ``mp4v``. The
-    chosen codec is recorded in every dataset's metadata.
+    chosen codec is recorded in every dataset's metadata, and :func:`write_mp4`
+    checks that each file really has it.
     """
     if codec != "auto":
         if len(codec) != 4:
@@ -200,7 +229,12 @@ def resolve_codec(codec: str = "auto") -> str:
 
 
 def write_mp4(path: Path, frames_rgb: np.ndarray, fps: float, fourcc: str) -> None:
-    """Write uint8 RGB frames [T, H, W, 3] to an MP4 file with OpenCV."""
+    """Write uint8 RGB frames [T, H, W, 3] to an MP4 file with OpenCV.
+
+    OpenCV may silently write another codec than the FourCC it was given (a
+    FourCC the MP4 muxer has no tag for). The file is read back, and a codec
+    mismatch raises, so the codec a dataset records is always the one it holds.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     t, h, w, _ = frames_rgb.shape
@@ -212,3 +246,9 @@ def write_mp4(path: Path, frames_rgb: np.ndarray, fps: float, fourcc: str) -> No
             writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
     finally:
         writer.release()
+    actual = read_fourcc(path)
+    if codec_family(actual) != codec_family(fourcc):
+        raise RuntimeError(
+            f"Asked OpenCV for codec {fourcc!r} but {path} holds {actual or 'nothing readable'!r}. This OpenCV build "
+            "cannot write that codec to MP4. Use 'auto' or 'mp4v'; for lossless clips use the PyAV writer in "
+            "scripts/check_single_frame_adversary.py.")

@@ -111,7 +111,10 @@ class adjustedDenseNet(nn.Module):
             # return the embeddings after fc1 but before fc2
             x = self.fc1(x)
             return x
-        
+
+        if extract_embed:
+            # the raw features: added_layers = 1 must not go through its classifier (see above)
+            return x
 
         if self.added_layers == 2:
             x = self.fc1(x)

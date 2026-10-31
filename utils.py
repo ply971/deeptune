@@ -28,6 +28,8 @@ from src.video.video3d import adjustedVideo3D, VIDEO3D_ARCHITECTURES
 from src.video.video3d_peft import adjustedPeftVideo3D
 from src.video.frame_pool import VideoFramePoolClassifier
 from src.video.single_frame import VideoSingleFrameClassifier
+from src.video.temporal import build_temporal_model
+from handlers.video_arch import TEMPORAL_ARCHITECTURES, parse_pooling_spec
 
 from helpers import fixed_seed
 
@@ -40,6 +42,7 @@ MODEL_CLS_MAP: dict[str, Type[nn.Module]] = {
     "vgg": adjustedVGGNet,
     "vit": adjustedViT,
     "convnext": adjustedConvNext,
+    "dummy": adjustedResNet,  # untrained resnet18, for tests and smoke runs
 }
 
 PEFT_MODEL_CLS_MAP: dict[str, Type[nn.Module]] = {
@@ -50,6 +53,7 @@ PEFT_MODEL_CLS_MAP: dict[str, Type[nn.Module]] = {
     "vgg": adjustedPeftVGGNet,
     "vit": adjustedViTPeft,
     "convnext": adjustedPeftConvNext,
+    "dummy": adjustedPeftResNet,  # untrained resnet18, for tests and smoke runs
 }
 
 # Native spatio-temporal video architectures (3D-CNNs and video transformers).
@@ -162,6 +166,11 @@ def get_video_model_cls(model_version: str, use_peft: bool = False) -> Type[nn.M
         video_map = VIDEO3D_PEFT_MODEL_CLS_MAP if use_peft else VIDEO3D_MODEL_CLS_MAP
         return video_map.get(model_version, adjustedPeftVideo3D if use_peft else adjustedVideo3D)
 
+    if get_model_architecture(model_version) == "siglip":
+        # Video only: the images modality keeps its own SigLIP pipeline (src/vision/siglip.py).
+        from src.video.siglip_backbone import adjustedPeftSiglip, adjustedSiglip
+        return adjustedPeftSiglip if use_peft else adjustedSiglip
+
     return get_model_cls(get_model_architecture(model_version), use_peft=use_peft)
 
 
@@ -185,6 +194,9 @@ def build_video_model(
     the rest of DeepTune's Trainer/TestTrainer/embedding pipeline treats them
     identically regardless of which family was chosen.
 
+    `pooling` is a frame pooling or a temporal architecture's spec, e.g.
+    "tsm:tsm_fold_div=8" (handlers/video_arch.py, src/video/temporal.py).
+
     `lora_rank` applies to native PEFT models only, where None means the rank
     equals embed_size, as in runs recorded before --lora_rank existed. The other
     PEFT models tie the rank to embed_size and ignore it.
@@ -193,6 +205,15 @@ def build_video_model(
 
     if lora_rank is not None and not (use_peft and is_native_video_architecture(model_version)):
         print(f'--lora_rank {lora_rank} is ignored: {lora_rank_ignored_reason(model_version, use_peft)}')
+
+    # --- temporal architectures (Phase 3) ---
+    arch, arch_options = parse_pooling_spec(pooling)
+    if arch in TEMPORAL_ARCHITECTURES:
+        if is_native_video_architecture(model_version):
+            raise ValueError(f"{arch} needs a 2D image backbone (e.g. resnet18); {model_version} is a native video architecture.")
+        return build_temporal_model(arch, arch_options, model_cls, model_version, num_classes, added_layers, embed_size,
+                                    freeze_backbone, mode)
+    # --- end temporal architectures ---
 
     if is_native_video_architecture(model_version):
         if pooling == "single_frame":

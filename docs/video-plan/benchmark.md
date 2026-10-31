@@ -37,7 +37,7 @@ single frame is uniform, whatever its velocity.
 | `--bias` | 0.9 | scene_bias only. |
 | `--n_videos`, `--min_length`, `--max_length`, `--max_instances`, `--n_classes`, `--background_motion` | 40, 150, 300, 3, 3, mixed | untrimmed only. |
 | `--fps` | 10 | Stored in the metadata. Segment times are `frame / fps`. |
-| `--codec` | auto | `auto` uses H.264 (`avc1`) if the OpenCV build can encode it, otherwise MPEG-4 Part 2 (`mp4v`). Both carry motion vectors. The pip OpenCV wheel on Windows has no OpenH264 DLL, so you get `mp4v` there. The codec used is recorded in `dataset.json`. |
+| `--codec` | auto | `auto` uses H.264 (`avc1`) if the OpenCV build can encode it, otherwise MPEG-4 Part 2 (`mp4v`). Both carry motion vectors. The pip OpenCV wheel on Windows has no OpenH264 DLL, so you get `mp4v` there. The codec used is recorded in `dataset.json`. Each written file is read back, and an explicit FourCC that OpenCV cannot honour raises an error instead of being recorded falsely. |
 
 Generating is fast. 500 clips at 32×32 with 12 frames take about 1.5 s. Twelve untrimmed videos
 of about 200 frames at 48×48 take about 0.3 s.
@@ -118,7 +118,7 @@ Every clip has its own background, so `group` = clip.
 out/
   videos/<video_id>.mp4
   manifest.csv          every clip
-  train.csv, test.csv   one split each (+ val.csv for scene_bias); same columns as manifest.csv
+  train.csv, val.csv, test.csv   one split each (val.csv when n_val > 0); same columns as manifest.csv
   dataset.json          metadata + per-video ground truth
   masks.npz             blob masks per video: np.packbits(bool[T, H, W]); shape in dataset.json
   gt_segments.csv       untrimmed only: video-id, t-start, t-end, label   (ActivityNet / CtxPL eval style)
@@ -200,9 +200,9 @@ The same adversary does learn when a frame carries signal: on `scene_bias` it re
 biased split and 0.5125 on the unbiased test split, so these chance scores are not a training
 failure. Limits: one seed and 5 epochs. Training accuracy stayed near 51 %, so a much longer run
 could still find a weak leak. With two clips per scene, the 400 test clips hold fewer independent
-scenes, so the usual ±0.05 interval at n = 400 is a lower bound. `flow_probe` uses mean flow on
-classification tasks and cannot separate periodic (0.5175 / 0.51), which is why `r3d_18` is the
-control there. State the result as "no signal found by these probes and this adversary", not as a
+scenes, so the usual ±0.05 interval at n = 400 is a lower bound. When this table was run,
+`flow_probe` used mean flow on periodic and could not separate it (0.5175 / 0.51), which is why
+`r3d_18` is the control there; the runner now uses the flow summary on periodic. State the result as "no signal found by these probes and this adversary", not as a
 proof that a single frame carries none.
 
 `scripts/check_benchmark_honesty.py` prints the same numbers at any size. The table below shows
@@ -247,9 +247,14 @@ without PEFT) sees only the middle frame (`src/video/single_frame.py`). It is bu
   --n_train 700 --n_test 400 --size 64 --epochs 5
 ```
 
+The temporal models run as `late_fusion:<backbone>`, `early_fusion:`, `tsm:`, `cnn_rnn:`,
+`temporal_transformer:`, `two_stream:` (Farneback), `two_stream@mv:` and `slow_fusion:<native 3D>`.
+Each table also has `test_clips_per_s` (inference, decoding included).
+
 `--task scene_bias` reports `biased_val_*` and `unbiased_test_*` columns. `--task speed` is a
-regression task (`mode=reg`) and reports `test_r2` and `test_mae`; its flow reference is the
-flow summary fed to ridge regression (`flow_probe`, alias `flow_logreg`). `--hflip` adds a random
+regression task (`mode=reg`) and reports `test_r2` and `test_mae`. The flow reference (`flow_probe`,
+alias `flow_logreg`) is mean horizontal flow on direction and scene_bias, and the flow summary on
+periodic (logistic regression) and speed (ridge regression). `--hflip` adds a random
 clip-level horizontal flip, and `benchmarks.guards.check_flip_augmentation` refuses it on
 direction-labelled data (`direction`, `scene_bias`, `untrimmed`). Any future augmentation code
 should call the same guard.

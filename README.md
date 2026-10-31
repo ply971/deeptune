@@ -55,7 +55,7 @@ app with every dependency bundled in.
 - Fine-tuning state-of-the-art Computer Vision algorithms (ResNet, DenseNet, etc.) for image classification.
 - Fine-tuning state-of-the-art NLP (BERT, GPT-2) algorithms for text classification.
 - End-to-end training for tabular and time-series algorithms.
-- Fine-tuning video classifiers on raw video clips, either by sampling frames through the existing 2D vision backbones (with pooling over time, or `--pooling single_frame` for the middle-frame baseline), or through native spatio-temporal architectures (3D-CNNs and video transformers) that learn motion directly.
+- Fine-tuning video classifiers on raw video clips, either by sampling frames through the existing 2D vision backbones (with pooling over time, or `--pooling single_frame` for the middle-frame baseline), through temporal architectures on those backbones (`--video_arch`: late and early fusion, TSM, CNN + RNN, temporal transformer, two-stream), or through native spatio-temporal architectures (3D-CNNs and video transformers) that learn motion directly.
 - Seeded synthetic video benchmarks with exact ground truth (motion direction, speed, periodic motion, untrimmed videos with action segments, scene-biased backgrounds): `python -m benchmarks.synthetic_motion --task direction --out DIR`, then `scripts/run_motion_benchmark.py` to compare models. See [docs/video-plan/benchmark.md](docs/video-plan/benchmark.md).
 - Providing PEFT with LoRA support for Computer Vision and Video algorithms implemented, enabling state-of-the-art models that typically require substantial computational resources to perform efficiently on lower-powered devices. This approach not only reduces computational overhead but also enhances performance.
 - Leveraging fine-tuned and pretrained state-of-the-art vision, video, and language models to generate robust knowledge representations for downstream visual, temporal, and textual tasks.
@@ -266,6 +266,14 @@ lifetime high-water mark, elsewhere the current RSS. `peak_memory_meaning` in
       <td>Video</td>
       <td>'r3d_18', 'mc3_18', 'r2plus1d_18', 'mvit_v2_s', 'swin3d_t', 'swin3d_s', or 'swin3d_b'</td>
     <tr>
+      <td>Temporal Video (--video_arch)</td>
+      <td>✅</td>
+      <td>✅</td>
+      <td>✅</td>
+      <td>Classification & Regression</td>
+      <td>Video</td>
+      <td>'late_fusion' (first and last frames), 'cnn_rnn' (LSTM or GRU over frames) and 'temporal_transformer' (transformer over frames): any 2D version above, or 'siglip'. 'early_fusion' (frames stacked on the first convolution), 'tsm' (temporal shift in each residual block) and 'two_stream' (RGB + motion fields): ResNet versions. 'slow_fusion': a native 3D CNN, 'r2plus1d_18' by default. 'single_frame': the middle frame, as a baseline</td>
+    <tr>
       <td>GPT</td>
       <td>✅</td>
       <td>—</td>
@@ -385,6 +393,54 @@ cache vs cached features.
 ```powershell
 .venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version r3d_18 --num_frames 16 --temporal_sampling segment --video_augment --test_clips 3
 ```
+
+## Video architectures: how a model fuses time
+
+`--video_arch` picks the architecture and `--model_version` its 2D backbone. The run records it
+in `cli_arguments.json` (as `--pooling`), so evaluation, embedding and `infer.py` rebuild it.
+
+| `--video_arch` | What it does | Options |
+|---|---|---|
+| `frame_pool` (default) | Pools per-frame embeddings, then classifies the pooled embedding. | `--pooling mean\|attention` |
+| `single_frame` | Middle frame only. A baseline: it cannot see motion. | |
+| `late_fusion` | First and last frames, embeddings merged by FC layers. | |
+| `early_fusion` | All frames stacked on an inflated first convolution. ResNet family; the frame count is fixed at build time. With `--freeze_backbone` that convolution stays trainable: its inflated weights cannot tell frame order until trained. | |
+| `slow_fusion` | A native 3D CNN: `--model_version` if it names one, otherwise `r2plus1d_18`. | |
+| `tsm` | Temporal Shift Module in each residual block. ResNet family, no extra parameters. | `--tsm_fold_div` |
+| `cnn_rnn` | Per-frame embeddings into an LSTM or GRU. | `--rnn_type --rnn_hidden --rnn_layers --bidirectional` |
+| `temporal_transformer` | Per-frame embeddings into a small transformer with a CLS token. Passed about half its benchmark runs, see below. | `--tt_layers --tt_heads --tt_dim` |
+| `two_stream` | RGB middle frame + stacked motion fields, fused late. ResNet family. With `--freeze_backbone` the motion stream's inflated first convolution stays trainable: frozen, it cannot separate dx from dy. | `--motion_source farneback\|mv --fusion avg\|fc --motion_length --motion_cache DIR` |
+
+```powershell
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version resnet18 --video_arch tsm
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version resnet18 --video_arch two_stream --motion_source mv --motion_cache .artifacts\motion
+```
+
+- **Motion source.** `farneback` is OpenCV optical flow and works on any codec. `mv` reads codec
+  motion vectors: it is cheaper but needs a codec that stores them, and clips of about 48 px or more.
+  Fields are stored in pixels per frame. For the model, 5 % of the frame's size per frame maps to 1,
+  clipped to [-1, 1]; no mean is subtracted. `--motion_cache` keeps them on disk, keyed by the video's
+  hash and the parameters.
+- **SigLIP.** `--model_version siglip` uses SigLIP as the frame backbone (with `frame_pool`,
+  `single_frame`, `late_fusion`, `cnn_rnn`, `temporal_transformer`, and `--use-peft`), from the command
+  line only. Its weights download on first use.
+- **Old checkpoints.** Frame-pooling checkpoints from before embeddings were pooled load and predict
+  as before (they keep pooling logits).
+- **DenseNet embeddings.** On video, a DenseNet frame model with `--added_layers 1` now embeds to its
+  features, not its class logits, so embeddings saved by earlier runs have a different shape. Weights and
+  predictions are unchanged. The images embedder still refuses `added_layers` below 2 on DenseNet.
+- **What the benchmark shows** (`tests/models/test_temporal_oracle.py`, untrained tiny backbone, CPU,
+  held-out scenes): `single_frame`, `mean`, `attention` and `tsm` with its shift turned off stay at chance in
+  all 20 runs over five model seeds. A motion model's run counts as passed at 85 % held-out accuracy or more, with
+  its reversal and frame-order checks. From 240 clips and five model seeds, `two_stream` passed 5 of 5 with either
+  motion source, as did `slow_fusion` (on an untrained r3d_18, not the default r2plus1d_18); `tsm` passed 4 of 5
+  and `early_fusion` 3 of 5. `cnn_rnn` passed 2 of 10 runs from 240 clips and 9 of 10 from 800. `temporal_transformer` passed 5 of 10
+  from 1500 clips (`tt_dim=64`, learning rate 3e-4); the other runs stayed at 0.50-0.625, so the benchmark does not
+  show that it reliably learns direction. `late_fusion` passed 7 of 10 from 800 clips, on a task at half the default
+  speed only. At the default speed it passed 0 of 10 (best 0.585), and it cannot pass: on the benchmark's wrap-around
+  world, no rule that sees only two frames can exceed about 0.663. This is evidence that the models are wired
+  correctly, not a ranking of them or a statement of how much data they need. Real ResNets are not yet measured
+  on these models.
 
 ## Video features: decode once, extract once
 
