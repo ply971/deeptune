@@ -37,6 +37,7 @@ SEGMENT_COLUMNS = ('video-id', 't-start', 't-end')
 _UNCERTAINTY_MAX_GAP = 0.05  # largest count-weighted |stated - observed| still called calibrated
 _UNCERTAINTY_MIN_ROWS = 100  # a floor, not a working size: see WORKING_ROWS_NOTE
 WORKING_ROWS_NOTE = 'Calibrated data needs about 500 to 800 rows to pass this check reliably, as the weighted gap of a smaller sample is mostly noise.'
+INDEPENDENT_ROWS_NOTE = 'This check assumes independent rows. Rows from one video are often correlated, and that alone can give this verdict on calibrated data, so check per video before reading it as miscalibration.'
 _UNCERTAINTY_MAX_BIN_GAP = 0.10  # a decile further off than this must at least have the stated value inside its joint interval
 
 
@@ -222,8 +223,10 @@ def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap:
     95th percentile of what calibrated data of this size gives, `gap_if_calibrated_p95`), and 'inconclusive' (it failed, but the
     data are consistent with being calibrated). Only 'calibrated' may be attached as an error estimate.
 
-    `ranks_errors` is the weaker property, that more `ranks_errors` is the weaker property, that more
-    uncertain rows go wrong more often (AUROC above 0.5 and a positive Spearman correlation). A rank-only signal may still
+    Both the interval and the 95th percentile assume independent rows. With two routes to it, 'miscalibrated' fires on about
+    6-13% of calibrated independent samples up to 800 rows, and on most samples when rows within a video are strongly correlated.
+
+    `ranks_errors` is the weaker property, that more uncertain rows go wrong more often (AUROC above 0.5 and a positive Spearman correlation). A rank-only signal may still
     be mapped to an error rate by fitting an `ErrorModel` on held-out rows; it must not be stated as a probability as is."""
     from scipy.stats import spearmanr
     stated = np.asarray(uncertainty, dtype=np.float64).reshape(-1)
@@ -253,7 +256,7 @@ def validate_uncertainty(uncertainty, observed_error, n_bins: int = 10, max_gap:
     auroc = _auroc(stated, observed.astype(bool))
     return {'n': int(len(stated)), 'unit': unit, 'split': split, 'calibration_error': gap, 'max_gap_allowed': max_gap, 'min_rows': min_rows,
             'max_bin_gap_allowed': max_bin_gap, 'calibrated': not failures, 'calibration_failures': failures, 'verdict': verdict, 'gap_if_calibrated_p95': null_gap,
-            'verdict_note': WORKING_ROWS_NOTE if verdict == 'inconclusive' else None, 'spearman': correlation, 'auroc_error_detection': auroc,
+            'verdict_note': {'inconclusive': WORKING_ROWS_NOTE, 'miscalibrated': INDEPENDENT_ROWS_NOTE}.get(verdict), 'spearman': correlation, 'auroc_error_detection': auroc,
             'ranks_errors': bool(auroc is not None and auroc > 0.5 and correlation is not None and correlation > 0),
             'table': table}
 

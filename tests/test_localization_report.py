@@ -400,12 +400,13 @@ def test_verdicts_for_too_few_rows_and_real_miscalibration():
     assert not few['calibrated'] and few['verdict'] == 'inconclusive' and '500 to 800' in few['verdict_note']
     stated, wrong = _simulated_uncertainty(0, lambda t, _: t ** 4)
     big = lr.validate_uncertainty(stated, wrong)
-    assert big['verdict'] == 'miscalibrated' and big['verdict_note'] is None and big['calibration_error'] > big['gap_if_calibrated_p95']
+    assert big['verdict'] == 'miscalibrated' and 'independent rows' in big['verdict_note'] and big['calibration_error'] > big['gap_if_calibrated_p95']
     stated = np.r_[np.full(900, .2), np.full(100, .05)]
     wrong = np.r_[(np.arange(900) % 5 == 0) * 1., (np.arange(100) % 2 == 0) * 1.]
     assert lr.validate_uncertainty(stated, wrong)['verdict'] == 'miscalibrated'
     stated, wrong = _simulated_uncertainty(0, lambda t, _: t)
-    assert lr.validate_uncertainty(stated, wrong)['verdict'] == 'calibrated'
+    passed = lr.validate_uncertainty(stated, wrong)
+    assert passed['verdict'] == 'calibrated' and passed['verdict_note'] is None
 
 
 def test_an_inconclusive_check_attaches_nothing():
