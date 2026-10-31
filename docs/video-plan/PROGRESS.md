@@ -55,17 +55,22 @@ Keep entries short and factual. This is the handoff between sessions.
   - Not covered here: fp16, resume with DataLoader workers (all runs used `--num_workers 0`), and early stopping actually stopping (`c` ran all 6 epochs).
 - **B2 gate, GPU, in progress** (`run_motion_benchmark.py --task direction`, 64 px, 700 train, 400 test, 5 epochs, batch 8, pretrained, single dataset, chance 0.5). Test accuracy:
 
-  | Model | Seed 0 | Seed 1 |
-  |---|---|---|
-  | `single_frame` / `mean` / `attention` | 0.498 / 0.508 / 0.510 | 0.500 / 0.500 / 0.500 |
-  | `late_fusion` (limit about 0.663) | 0.500 | 0.493 |
-  | `early_fusion`, `tsm`, `slow_fusion:r2plus1d_18` | 1.000 | 1.000 |
-  | `cnn_rnn` | 0.648 | 1.000 |
-  | `temporal_transformer` | 0.500 | 0.500 |
-  | `two_stream` farneback / mv | 0.963 / 1.000 | 1.000 / 0.998 |
-  | `flow_probe` | 0.993 | 0.993 |
+  | Model | Seed 0 | Seed 1 | Seed 2 |
+  |---|---|---|---|
+  | `single_frame` | 0.498 | 0.500 | 0.498 |
+  | `mean` | 0.508 | 0.500 | 0.493 |
+  | `attention` | 0.510 | 0.500 | 0.500 |
+  | `late_fusion` (limit about 0.663) | 0.500 | 0.493 | 0.500 |
+  | `early_fusion` | 1.000 | 1.000 | 0.985 |
+  | `tsm` | 1.000 | 1.000 | 1.000 |
+  | `slow_fusion:r2plus1d_18` | 1.000 | 1.000 | 1.000 |
+  | `cnn_rnn` | 0.648 | 1.000 | 0.503 |
+  | `temporal_transformer` | 0.500 | 0.500 | 0.505 |
+  | `two_stream` farneback | 0.963 | 1.000 | 0.993 |
+  | `two_stream` mv | 1.000 | 0.998 | 0.990 |
+  | `flow_probe` | 0.993 | 0.993 | 0.993 |
 
-  Seed 0 took 24.3 min and seed 1 took 30.0 min. Seed 2 is running. Results: `.artifacts/gate/b2/direction/`.
+  84 min in total. Single dataset, so the seeds vary only the model and training order. `temporal_transformer` stayed near 50% on training as well as validation on all three seeds, so it did not memorise, unlike its tiny-backbone failures. This run is 5 epochs with the runner's default settings, not B2's `tt_dim=64`, lr 3e-4 oracle settings, and the cause is not investigated: possibly a settings problem or a bug. Phase 3's reworded target says each architecture can learn direction, and on real ResNets `temporal_transformer` has not shown that here. `late_fusion` has not either, as expected at this speed. Results: `.artifacts/gate/b2/direction/`. `scene_bias` and `periodic` are running.
 - **Next:** finish B2 (`direction` seed 2, `scene_bias`, `periodic`, UCF101 through the pipeline and `infer.py`), then B3's 5-fold report, then V1a (its desktop steps need the user or screen control), then R1, R2, P-105, P-106, P-108, R3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
