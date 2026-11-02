@@ -239,9 +239,10 @@ count. To use the installed model:
 1. Double-click `Launch-Cat-Tracking.cmd` in the repository root to open page 07.
 2. Click **Browse file**, choose a video, then click **Load / preview**.
    A prepared example is `.artifacts/cat-tracking/videos/black-cat-walking.mov`.
-3. In **Find, track and count**, choose **Trained cat detector**. When the
-   installed checkpoint exists, this detector is selected automatically.
-4. Use the prompt `cat`. **Cat checkpoint** automatically points to
+3. In **Find, track and count**, choose **Trained cat detector** under
+   **Detector**. The page always starts on the general prompt-based detector;
+   when the installed checkpoint exists, a hint above the detector note says so.
+4. Choosing it sets the prompt to `cat` and fills **Cat checkpoint** with
    `saved_models/cat-detector/best.pt`; for another trained cat checkpoint,
    paste its absolute path instead.
 5. Keep **Frames step** at `1` and click **Find, track and count**.

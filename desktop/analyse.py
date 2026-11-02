@@ -87,6 +87,14 @@ def installed_cat_checkpoint() -> Optional[Path]:
     return path if path.is_file() else None
 
 
+def installed_cat_hint(checkpoint: Optional[Path]) -> str:
+    """Page 07 always starts on the general detector; an installed cat detector is offered, not preselected."""
+    if checkpoint is None:
+        return ''
+    return (f'Your trained cat detector is installed ({checkpoint}). To use it, choose Trained cat detector '
+            'under Detector; the prompt becomes cat and the checkpoint path is filled in.')
+
+
 def detector_by_label(label: str) -> DetectorChoice:
     for choice in DETECTORS:
         if choice.label == label:

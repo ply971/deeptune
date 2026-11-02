@@ -440,8 +440,14 @@ def on_detector_changed(sender: Any = 0, app_data: Any = None) -> None:
     key = analyse.detector_by_label(dpg.get_value('analyse_detector_combo')).key
     dpg.set_value('analyse_score_input', analyse.default_track_score(key))
     dpg.configure_item('analyse_checkpoint_input', show=key == 'pet_fasterrcnn')
+    installed = analyse.installed_cat_checkpoint()
     if key == 'pet_fasterrcnn':
         dpg.set_value('analyse_prompt_input', 'cat')
+        if installed and not str(dpg.get_value('analyse_checkpoint_input') or '').strip():
+            dpg.set_value('analyse_checkpoint_input', str(installed))
+    hint = analyse.installed_cat_hint(installed)
+    dpg.set_value('analyse_cat_hint', hint)
+    dpg.configure_item('analyse_cat_hint', show=bool(hint) and key != 'pet_fasterrcnn')
     _refresh_detector_notice()
 
 
@@ -739,11 +745,10 @@ def _build_model_card(shell: Shell) -> None:
 def _build_track_card(shell: Shell) -> None:
     colors = shell.palette
     checkpoint = analyse.installed_cat_checkpoint()
-    first = analyse.detector_by_key('pet_fasterrcnn') if checkpoint else analyse.DETECTORS[0]
+    first = analyse.DETECTORS[0]  # the user's choice (2026-11-02): an installed cat detector is offered by a hint, not preselected
     with shell.card('FIND, TRACK AND COUNT'):
         dpg.add_text('Type what to find. Separate several things with commas.', color=colors.muted, wrap=850)
-        dpg.add_input_text(tag='analyse_prompt_input', hint='person, car', width=-1,
-                           default_value='cat' if checkpoint else '')
+        dpg.add_input_text(tag='analyse_prompt_input', hint='person, car', width=-1, default_value='')
         with ui.group(horizontal=True):
             dpg.add_combo(tag='analyse_detector_combo', items=[d.label for d in analyse.DETECTORS],
                           default_value=first.label, width=200, label='Detector', callback=on_detector_changed)
@@ -760,8 +765,10 @@ def _build_track_card(shell: Shell) -> None:
                              wrap=380)
         dpg.add_text(analyse.FRAMES_STEP_NOTE, color=colors.muted, wrap=850)
         dpg.add_input_text(tag='analyse_checkpoint_input', label='Cat checkpoint',
-                           hint='Full path to best.pt', width=-160, show=bool(checkpoint),
+                           hint='Full path to best.pt', width=-160, show=False,
                            default_value=str(checkpoint) if checkpoint else '')
+        hint = analyse.installed_cat_hint(checkpoint)
+        dpg.add_text(hint, tag='analyse_cat_hint', color=colors.accent, wrap=850, show=bool(hint))
         dpg.add_text(analyse.detector_note(first.key), tag='analyse_detector_note', color=colors.muted, wrap=850)
         with ui.group(horizontal=True):
             button = dpg.add_button(tag='analyse_track_button', label=analyse.track_button_label(first.key), height=44,
