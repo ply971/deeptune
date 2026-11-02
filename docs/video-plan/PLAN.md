@@ -337,6 +337,10 @@ model selection, smart and exhaustive) stay in the project, but now come after
 the core work as an extension, not in Wave 2. This overrides their placement
 above. R3 stays protected from cuts.
 
+**R3 moved up (user, 2026-11-02):** R3 (auto model selection, smart and exhaustive)
+runs now, after the R1 and R2 merges and right before Wave 3. P-105 to P-109 stay
+in the later extension.
+
 Until P-105 lands, every real-data manifest needs a correct `group` column by
 hand: pre-cut clips such as UCF101's get no shared-source warning.
 
