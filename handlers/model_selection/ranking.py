@@ -11,6 +11,7 @@ not corrected for having picked these two out of many.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Optional
@@ -42,12 +43,31 @@ def read_cv_result(run_dir: Path, out_root: Path) -> dict:
         raise FileNotFoundError(f'No validation_kfold/cv_summary.json under {run_dir}.')
     summary = json.loads(path.read_text(encoding='utf-8'))
     intervals = summary.get('out_of_fold', {}).get('intervals', {})
+    oof = pd.read_csv(path.parent / 'oof_predictions.csv', usecols=['row_id', 'fold', 'video_id', 'target'])
     return {'folds': summary['per_fold'],
             'out_of_fold': summary.get('out_of_fold', {}).get('metrics', {}),
             'intervals': {name: {key: value.get(key) for key in ('low', 'high', 'level', 'unit', 'n_units', 'warning')}
                           for name, value in intervals.items()},
-            'grouped': summary.get('grouped'), 'k': summary.get('k'),
+            'grouped': summary.get('grouped'), 'k': summary.get('k'), 'fold_signature': fold_signature(oof),
             'oof_path': str((path.parent / 'oof_predictions.csv').relative_to(out_root))}
+
+
+def fold_signature(oof: pd.DataFrame) -> str:
+    """A hash of which row went to which fold. Candidates are only comparable, and only paired, on identical folds."""
+    table = oof[['row_id', 'fold', 'video_id', 'target']].sort_values('row_id', kind='stable').astype(str)
+    return hashlib.sha256(table.to_csv(index=False).encode('utf-8')).hexdigest()[:16]
+
+
+def fold_mismatch(entries: list) -> Optional[str]:
+    """Why these finished candidates cannot be ranked against each other, or None."""
+    signatures = {}
+    for entry in entries:
+        signatures.setdefault(entry.get('fold_signature'), []).append(entry.get('label', entry['key']))
+    if len(signatures) <= 1:
+        return None
+    parts = '; '.join(f'{len(labels)} on folds {signature} (e.g. {labels[0]})' for signature, labels in signatures.items())
+    return (f'the finished candidates were not cross-validated on the same folds ({parts}). Their scores come from different '
+            'splits of the development rows, so ranking or pairing them would compare unlike things.')
 
 
 def fold_stats(entry: dict, metric: str) -> tuple[Optional[float], Optional[float]]:
@@ -100,6 +120,8 @@ def paired_difference(out_root: Path, entry_a: dict, entry_b: dict, mode: str, m
         a['video_id'].astype(str).equals(b['video_id'].astype(str))
     if not same:
         raise ValueError('The two candidates were not cross-validated on the same rows, so they cannot be compared pairwise.')
+    if not a['fold'].astype(str).equals(b['fold'].astype(str)):
+        raise ValueError('The two candidates were not cross-validated on the same folds, so they cannot be compared pairwise.')
 
     def scores(table):
         if mode == 'cls':
@@ -124,7 +146,9 @@ def read_final_result(run_dir: Path) -> dict:
     if not found:
         raise FileNotFoundError(f'No eval_output_*/evaluation_report.json under {run_dir}.')
     report = json.loads(found[-1].read_text(encoding='utf-8'))
-    return {'n': report.get('n'), 'metrics': report.get('metrics', {}),
+    splits = sorted(Path(run_dir).glob('*/data_splits_*/split_summary.json'), key=lambda p: p.stat().st_mtime)
+    validation_seed = json.loads(splits[-1].read_text(encoding='utf-8')).get('validation_seed') if splits else None
+    return {'n': report.get('n'), 'metrics': report.get('metrics', {}), 'validation_seed': validation_seed,
             'intervals': {name: {key: value.get(key) for key in ('low', 'high', 'level', 'unit', 'n_units', 'warning')}
                           for name, value in report.get('intervals', {}).items()},
             'report': str(found[-1])}

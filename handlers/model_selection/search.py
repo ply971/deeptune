@@ -26,7 +26,7 @@ import pandas as pd
 from handlers.model_selection.estimate import LARGE_RUN_TRAININGS, describe_hours, search_seconds
 from handlers.model_selection.grid import Candidate, Grid, RunSettings, candidate_argv
 from handlers.model_selection.ledger import FINISHED, LEDGER_FILE, Ledger, candidate_key
-from handlers.model_selection.ranking import (DEFAULT_METRIC, METRICS, WINNERS_CURSE, fold_stats, leaderboard, paired_difference,
+from handlers.model_selection.ranking import (DEFAULT_METRIC, METRICS, WINNERS_CURSE, fold_mismatch, fold_stats, leaderboard, paired_difference,
                                               read_cv_result, read_final_result)
 from handlers.model_selection.runner import RunResult, SubprocessRunner
 from handlers.model_selection.sealed import DEV_FILE, SEALED_FILE, check_split_files, make_sealed_split
@@ -34,6 +34,7 @@ from handlers.model_selection.sealed import DEV_FILE, SEALED_FILE, check_split_f
 MANIFEST_FILE, FINAL_FILE, PILOT_FILE = 'search.json', 'final.json', 'pilot.json'
 CANDIDATES_FILE, LEADERBOARD_FILE, SELECTION_FILE = 'candidates.csv', 'leaderboard.csv', 'selection.json'
 EXIT_OK, EXIT_NO_RESULT, EXIT_REFUSED, EXIT_NEEDS_YES, EXIT_INTERRUPTED = 0, 1, 2, 3, 130
+IMBALANCE_RATIO = 1.5  # largest / smallest class above this: accuracy gets a warning
 
 
 @dataclass
@@ -86,6 +87,18 @@ class ExhaustiveStrategy:
 STRATEGIES = {'exhaustive': ExhaustiveStrategy}
 
 
+def code_version() -> dict:
+    """The git commit of this code, and whether tracked files had changed (T1's run_environment)."""
+    from trainers.training_basics import run_environment
+    environment = run_environment()
+    return {'commit': environment['commit'], 'commit_dirty': environment['commit_dirty']}
+
+
+def _finished(entry: dict) -> bool:
+    """Trained or tried. A check's decision (refused, skipped, a preflight crash) is made again on every run."""
+    return entry['status'] in FINISHED and entry.get('stage') != 'checks'
+
+
 def _json_normal(value):
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
@@ -127,6 +140,14 @@ class ModelSearch:
         self.out = Path(options.out).resolve()
         self.data_dir = self.out / 'data'
         self.ledger = Ledger(self.out / LEDGER_FILE)
+        self.code: Optional[dict] = None
+        self.warnings: list = []
+
+    def warn(self, text: str) -> None:
+        """Printed now, and kept for selection.json."""
+        if text not in self.warnings:
+            self.warnings.append(text)
+        self.say(f'Warning: {text}')
 
     # -- data and resume -------------------------------------------------------------------------------------------------
     def _input(self) -> tuple[Path, str]:
@@ -154,9 +175,12 @@ class ModelSearch:
         if not path.is_file():
             if self.ledger.path.is_file():
                 return None, f'{self.out} has a ledger but no {MANIFEST_FILE}; it is not a search folder this code can resume.'
-            self.say(f'Setting the sealed test set aside ({self.o.test_fraction:.0%} of the groups, seed {self.o.settings.seed}) before anything trains.')
+            self.say(f'Setting the sealed test set aside (about {self.o.test_fraction:.0%}, seed {self.o.settings.seed}) before anything trains.')
             split = make_sealed_split(input_path, self.data_dir, self.o.settings.target, self.o.settings.grouper, self.mode,
                                       self.o.test_fraction, self.o.settings.seed)
+            sealed_part = split['sealed_test']
+            self.say(f'Sealed test set: {sealed_part["rows"]} clips' + (f' in {sealed_part["groups"]} groups' if 'groups' in sealed_part else '')
+                     + f'; development rows: {split["dev"]["rows"]}; unit: {split["unit"]}.')
             manifest = {'schema_version': 1, 'input': str(Path(self.o.df).resolve()), 'input_fingerprint': input_fp,
                         'raw_data': self.o.raw_data, 'test_fraction': self.o.test_fraction, 'split': split, 'settings': settings,
                         'grid': grid, 'grid_history': [], 'strategy': self.o.strategy}
@@ -217,8 +241,11 @@ class ModelSearch:
                 except Exception as exc:  # the trainer's own builder refused this combination
                     builds[build] = exc
             footprint = builds[build]
-            if isinstance(footprint, Exception):
+            if isinstance(footprint, ValueError):  # the builder's refusal of an invalid combination
                 checked.append(Checked(candidate, key, argv, 'refused', f'model build: {type(footprint).__name__}: {footprint}'))
+                continue
+            if isinstance(footprint, Exception):  # a crash, e.g. a failed download: not the candidate's fault, tried again next run
+                checked.append(Checked(candidate, key, argv, 'failed', f'preflight: {type(footprint).__name__}: {footprint}'))
                 continue
             frames = int(args.num_frames)
             item = Checked(candidate, key, argv, 'runnable', footprint=footprint.to_dict(), cost=footprint.cost(frames))
@@ -236,17 +263,17 @@ class ModelSearch:
     def _record_decisions(self, checked: list, ledger: dict) -> None:
         """Refused and skipped candidates get a ledger line, once per new decision, so none is silently dropped."""
         for item in checked:
-            if item.status in ('refused', 'skipped'):
+            if item.status in ('refused', 'skipped', 'failed'):
                 last = ledger.get(item.key)
-                if last is None or (last['status'] not in FINISHED and (last['status'], last.get('reason')) != (item.status, item.reason)):
-                    ledger[item.key] = self.ledger.append(self._entry(item, item.status, reason=item.reason))
+                if last is None or (not _finished(last) and (last['status'], last.get('reason')) != (item.status, item.reason)):
+                    ledger[item.key] = self.ledger.append(self._entry(item, item.status, reason=item.reason, stage='checks'))
         rows = [{'key': item.key, 'candidate': item.candidate.label(), **item.candidate.config(), 'check': item.status,
                  'reason': item.reason, **{f'preflight_{k}': v for k, v in item.footprint.items()}} for item in checked]
         pd.DataFrame(rows).to_csv(self.out / CANDIDATES_FILE, index=False)
 
     def _entry(self, item: Checked, status: str, **extra) -> dict:
         return {'key': item.key, 'label': item.candidate.label(), 'config': item.candidate.config(), 'status': status,
-                'footprint': item.footprint, **extra}
+                'footprint': item.footprint, 'code': self.code, **extra}
 
     # -- estimate --------------------------------------------------------------------------------------------------------
     def _pilot(self, pending: list, dev: Path) -> Optional[dict]:
@@ -272,6 +299,29 @@ class ModelSearch:
             return None
         return record
 
+    # -- warnings --------------------------------------------------------------------------------------------------------
+    def _imbalance_warning(self, split: dict) -> None:
+        counts = split['dev'].get('class_counts') or {}
+        if self.mode != 'cls' or len(counts) < 2 or self.metric != 'accuracy':
+            return
+        ratio = max(counts.values()) / min(counts.values())
+        if ratio > IMBALANCE_RATIO:
+            self.warn(f'the classes are imbalanced (the largest has {ratio:.1f}x the clips of the smallest in the development rows), '
+                      'so accuracy rewards predicting the large classes. Consider --metric balanced_accuracy.')
+
+    def _code_warning(self, ledger: dict) -> None:
+        other = self._other_commits(ledger.values())
+        if other:
+            self.warn(f'{len(other)} finished candidates were trained by other code versions (commits '
+                      f'{", ".join(sorted({str(c)[:12] for c in other.values()}))}) than this one ({str(self.code.get("commit"))[:12]}). '
+                      'Their scores may not be comparable with new ones.')
+
+    def _other_commits(self, entries) -> dict:
+        """key -> commit, for finished candidates whose recorded commit differs from the current one."""
+        current = (self.code or {}).get('commit')
+        return {entry['key']: (entry.get('code') or {}).get('commit') for entry in entries
+                if _finished(entry) and (entry.get('code') or {}).get('commit') != current}
+
     # -- the search ------------------------------------------------------------------------------------------------------
     def run(self) -> int:
         o, k = self.o, self.o.settings.k
@@ -288,20 +338,26 @@ class ModelSearch:
         split = manifest['split']
         dev, sealed = self.data_dir / DEV_FILE, self.data_dir / SEALED_FILE
         ledger = self.ledger.load()
+        self.code = code_version()
+        for warning in split.get('warnings', []):
+            self.warn(warning)
+        self._imbalance_warning(split)
+        self._code_warning(ledger)
 
         self.say(f'Search {self.strategy.name}: {o.grid.formula()}.')
         checked = self.check_candidates(dev, split['dev']['fingerprint'])
         self._record_decisions(checked, ledger)
         runnable = [item for item in checked if item.status == 'runnable']
         retry = ('failed', 'did_not_fit') if o.retry_failed else ()
-        finished = {key for key, entry in ledger.items() if entry['status'] in FINISHED and entry['status'] not in retry}
+        finished = {key for key, entry in ledger.items() if _finished(entry) and entry['status'] not in retry}
         planned = self.strategy.plan(runnable)
         pending = [item for item in planned if item.key not in finished]
         final_record = self._final_record()
         final_needed = not (final_record and final_record.get('status') == 'done' and not pending)
         trainings = len(pending) * k + (1 if final_needed else 0)
-        counts = {status: sum(item.status == status for item in checked) for status in ('runnable', 'refused', 'skipped')}
+        counts = {status: sum(item.status == status for item in checked) for status in ('runnable', 'refused', 'skipped', 'failed')}
         self.say(f'Candidates: {len(checked)}; refused by checks: {counts["refused"]}; skipped (budget or memory): {counts["skipped"]}; '
+                 f'preflight failed: {counts["failed"]}; '
                  f'runnable: {counts["runnable"]}, of which {len(planned) - len(pending)} already finished in the ledger.')
         for item in checked:
             if item.status != 'runnable':
@@ -336,7 +392,7 @@ class ModelSearch:
         try:
             self._train(pending, ledger)
         except KeyboardInterrupt:
-            done = sum(entry['status'] in FINISHED for entry in self.ledger.load().values())
+            done = sum(_finished(entry) for entry in self.ledger.load().values())
             self.say(f'Interrupted. The ledger holds {done} finished candidates; the one that was running has no line and runs again. '
                      'Rerun the same command to resume.')
             return EXIT_INTERRUPTED
@@ -378,6 +434,13 @@ class ModelSearch:
         ranked = [entry for entry in sorted((e for e in entries if e['status'] == 'done' and fold_stats(e, self.metric)[0] is not None),
                                             key=lambda e: list(table['key']).index(e['key']))]
         selection = self._selection_base(manifest, checked, entries)
+        mismatch = fold_mismatch(ranked)
+        if mismatch:
+            selection['winner'] = None
+            selection['reason'] = f'Refused to rank: {mismatch} The sealed test set was not used.'
+            _write_json(self.out / SELECTION_FILE, selection)
+            self.say(selection['reason'])
+            return EXIT_REFUSED
         if not ranked:
             selection['winner'] = None
             selection['reason'] = 'No candidate finished, so there is no winner and the sealed test set was not used.'
@@ -403,6 +466,7 @@ class ModelSearch:
         final = self._final(by_key[winner['key']], dev, sealed)
         selection['final'] = {key: value for key, value in final.items() if key != 'test'}
         selection['test'] = final.get('test')
+        selection['seeds']['refit_validation'] = (final.get('test') or {}).get('validation_seed')
         selection['sealed_test_uses'] = final.get('sealed_test_uses', 0)
         if selection['sealed_test_uses'] > 1:
             selection['notes'].append(f'The sealed test set has scored {selection["sealed_test_uses"]} different winners of this folder, '
@@ -428,7 +492,9 @@ class ModelSearch:
             verdict = ('the interval excludes 0' if paired['zero_excluded'] else
                        'the interval includes 0, so on this data the two are not distinguishable')
             text += (f' Runner-up {runner_up["label"]} ({runner_up[f"cv_{self.metric}_mean"]:.4f}); paired difference on the pooled '
-                     f'out-of-fold rows {paired["point"]:+.4f} [{paired["low"]:+.4f}, {paired["high"]:+.4f}], {verdict}.')
+                     f'out-of-fold rows {paired["point"]:+.4f} [{paired["low"]:+.4f}, {paired["high"]:+.4f}], {verdict}. '
+                     'The top two were picked on these same rows, so this interval flatters their gap: it is not a test, and it is '
+                     'not corrected for the selection.')
         return text
 
     def _final(self, item: Checked, dev: Path, sealed: Path) -> dict:
@@ -464,8 +530,12 @@ class ModelSearch:
         counts = {status: sum(entry['status'] == status for entry in entries) for status in ('done', 'failed', 'did_not_fit', 'refused', 'skipped')}
         backbones = sorted({entry['config']['backbone'] for entry in entries if entry['status'] == 'done'})
         return {'schema_version': 1, 'strategy': self.strategy.name, 'grid': self.o.grid.to_dict(), 'grid_formula': self.o.grid.formula(),
-                'settings': asdict(self.o.settings), 'seeds': {'split': self.o.settings.seed, 'folds': self.o.settings.seed,
-                                                                'training': self.o.settings.seed},
+                'settings': asdict(self.o.settings),
+                'seeds': {'split': self.o.settings.seed, 'folds': self.o.settings.seed, 'training': self.o.settings.seed,
+                          'fold_inner_validation': f'{self.o.settings.seed} + fold index (evaluators/video/validation.py)',
+                          'refit_validation': None},
+                'code': {**(self.code or {}), 'candidates_from_other_commits': self._other_commits(entries)},
+                'warnings': self.warnings,
                 'split': manifest['split'], 'metric': self.metric, 'higher_is_better': METRICS[self.mode][self.metric] > 0,
                 'counts': counts, 'weights_licences': self._licences(backbones),
                 'notes': [WINNERS_CURSE,
@@ -500,4 +570,6 @@ class ModelSearch:
         else:
             self.say(f'  sealed test: not scored ({selection["final"].get("status")}: {selection["final"].get("reason", "")})')
         self.say(f'  {WINNERS_CURSE}')
+        for warning in selection.get('warnings', []):
+            self.say(f'  Warning: {warning}')
         self.say(f'Files: {self.out / LEADERBOARD_FILE}, {self.out / SELECTION_FILE}, {self.out / LEDGER_FILE}')

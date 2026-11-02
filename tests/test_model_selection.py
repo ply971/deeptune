@@ -44,13 +44,16 @@ class FakeRunner:
     """Trains nothing. A candidate's predictions are right on the rows whose fixed pseudo-random number is below its quality."""
     QUALITY = {'resnet_tiny': 0.85, 'siglip_tiny': 0.55, 'dummy_video3d': 0.7, 'vjepa2_tiny': 0.4}
 
-    def __init__(self, out_of_memory=(), interrupt_on_call=None, seconds=12.0):
+    def __init__(self, out_of_memory=(), interrupt_on_call=None, seconds=12.0, quality=None, fold_quality=None, seed_offset=None):
         self.calls, self.reads, self.role = [], [], None
         self.out_of_memory, self.interrupt_on_call, self.seconds = set(out_of_memory), interrupt_on_call, seconds
+        self.quality_by_backbone = {**self.QUALITY, **(quality or {})}
+        self.fold_quality = dict(fold_quality or {})  # backbone -> one quality per fold, replacing the single one
+        self.seed_offset = dict(seed_offset or {})  # backbone -> added to its fold seed, as a bug giving each candidate other folds would
 
     def quality(self, argv) -> float:
         rate = float(_flag(argv, '--learning_rate'))
-        return self.QUALITY[_flag(argv, '--model_version')] - (0.1 if rate > 1e-3 else 0.0)
+        return self.quality_by_backbone[_flag(argv, '--model_version')] - (0.1 if rate > 1e-3 else 0.0)
 
     def __call__(self, argv, run_dir, role):
         self.calls.append((role, [str(a) for a in argv]))
@@ -85,13 +88,17 @@ class FakeRunner:
         frame = pd.read_parquet(_flag(argv, '--df'))
         self.reads.append(('cv', str(Path(_flag(argv, '--df')).resolve()), frame['videos'].tolist()))
         codes, names = pd.factorize(frame['labels'], sort=True)
-        quality, classes = self.quality(argv), len(names)
+        quality, classes, backbone = self.quality(argv), len(names), _flag(argv, '--model_version')
         right = self._correct(len(frame), quality, 0.0)
 
         def fit_predict(train_rows, val_rows, eval_rows, name):
-            return FoldScores(self._probabilities(codes[eval_rows], right[eval_rows], classes))
+            correct = right[eval_rows]
+            if backbone in self.fold_quality:
+                correct = self._correct(len(frame), self.fold_quality[backbone][int(name.split('_')[1])], 0.0)[eval_rows]
+            return FoldScores(self._probabilities(codes[eval_rows], correct, classes))
+        seed = int(_flag(argv, '--seed')) + self.seed_offset.get(backbone, 0)
         run_validation('kfold', codes, fit_predict, run_dir / 'deeptune-x' / 'validation_kfold', mode='cls', ids=frame['videos'].tolist(),
-                       groups=frame['group'].tolist(), k=int(_flag(argv, '--k')), seed=int(_flag(argv, '--seed')), ci_boot=60)
+                       groups=frame['group'].tolist(), k=int(_flag(argv, '--k')), seed=seed, ci_boot=60)
 
     def _final(self, argv, run_dir):
         from evaluators.video.report import build_report
@@ -156,7 +163,7 @@ def test_grid_file_and_flags_combine(tmp_path):
 
 def test_extra_deeptune_flags_reach_every_run(tmp_path):
     args = select_model.build_parser().parse_args(['--df', 'x.parquet', '--out', 'o', '--backbones', 'resnet18',
-                                                   '--deeptune_args=--precision bf16 --video_augment'])
+                                                   '--deeptune_args', '--precision', 'bf16', '--video_augment'])
     options = select_model.options_from_args(args)
     assert options.settings.deeptune_args == ['--precision', 'bf16', '--video_augment']
     argv = candidate_argv(Candidate('resnet18'), options.settings, tmp_path / DEV, tmp_path / 'run', 'cv')
@@ -496,3 +503,175 @@ def test_prepare_whole_dataset_encodes_every_row_and_writes_no_test_file(data, t
     pool = pd.read_parquet(path)
     assert len(pool) == len(pd.read_parquet(data)) and set(pool['labels']) == {0, 1, 2}
     assert not list(Path(path).parent.glob('test_split*')) and json.loads((Path(path).parent / 'split_summary.json').read_text())['strategy'] == 'cv_only'
+
+
+# -- review fix round (ml-critic, R3a) -----------------------------------------------------------------------------------------
+@pytest.mark.parametrize('extra', [
+    ['--df', 'full.parquet'], ['--df=full.parquet'], ['--see', '7'], ['--seed', '7'], ['--test_df', 'x.parquet'], ['--cv_only'],
+    ['--raw-data'], ['--learning_rate', '0.1'], ['--freeze-backbone'], ['--num_epochs', '99'], ['--config', 'c.yaml'], ['--d', 'x'],
+])
+def test_extra_flags_that_select_model_controls_are_refused(extra):
+    args = select_model.build_parser().parse_args(['--df', 'x.parquet', '--out', 'o', '--backbones', 'resnet18', '--deeptune_args', *extra])
+    with pytest.raises(ValueError, match='--deeptune_args'):
+        select_model.options_from_args(args)
+
+
+def test_extra_flags_must_be_separate_words_and_keep_windows_paths(tmp_path):
+    args = select_model.build_parser().parse_args(['--df', 'x.parquet', '--out', 'o', '--backbones', 'resnet18',
+                                                   '--deeptune_args=--precision bf16'])
+    with pytest.raises(ValueError, match='separate words'):
+        select_model.options_from_args(args)
+    path = 'C:\\Users\\someone\\motion cache'
+    args = select_model.build_parser().parse_args(['--df', 'x.parquet', '--out', 'o', '--backbones', 'resnet18',
+                                                   '--deeptune_args', '--motion_cache', path])
+    settings = select_model.options_from_args(args).settings
+    assert settings.deeptune_args == ['--motion_cache', path]
+    argv = candidate_argv(Candidate('resnet18'), settings, tmp_path / DEV, tmp_path / 'run', 'cv')
+    assert argv[argv.index('--motion_cache') + 1] == path
+
+
+def test_the_critics_repro_cannot_train_a_candidate_on_the_full_input(data, tmp_path):
+    with pytest.raises(SystemExit):
+        select_model.main(['--df', str(data), '--out', str(tmp_path / 's'), '--backbones', 'resnet_tiny',
+                           '--deeptune_args', '--df', str(data), '--seed', '7'], runner=FakeRunner(), footprint_fn=fake_footprint)
+    assert not (tmp_path / 's').exists()
+
+
+def test_candidates_cross_validated_on_different_folds_are_not_ranked(data, tmp_path, capsys):
+    out = tmp_path / 'search'
+    assert _run(_argv(data, out, '--no_pilot'), FakeRunner(seed_offset={'siglip_tiny': 5})) == 2
+    assert 'not cross-validated on the same folds' in capsys.readouterr().out
+    assert not (out / 'final.json').exists()  # nothing reached the sealed test set
+
+
+def test_ranking_uses_the_mean_over_folds_not_the_best_fold(data, tmp_path):
+    out = tmp_path / 'search'
+    runner = FakeRunner(fold_quality={'siglip_tiny': [1.0, 0.2, 0.2], 'resnet_tiny': [0.6, 0.6, 0.6]})
+    assert _run(_argv(data, out, '--no_pilot'), runner) == 0
+    folds = {entry['config']['backbone']: [f['accuracy'] for f in entry['folds']] for entry in _ledger(out)}
+    assert max(folds['siglip_tiny']) > max(folds['resnet_tiny']) and np.mean(folds['siglip_tiny']) < np.mean(folds['resnet_tiny'])
+    assert json.loads((out / 'selection.json').read_text())['winner']['config']['backbone'] == 'resnet_tiny'
+
+
+@pytest.mark.parametrize('order', [('siglip_tiny', 'resnet_tiny'), ('resnet_tiny', 'siglip_tiny')])
+def test_a_tie_keeps_grid_order(data, tmp_path, order):
+    out = tmp_path / 'search'
+    assert _run(_argv(data, out, '--no_pilot', backbones=order), FakeRunner(quality={'siglip_tiny': 0.85, 'resnet_tiny': 0.85})) == 0
+    board = pd.read_csv(out / 'leaderboard.csv')
+    assert board.loc[0, 'cv_accuracy_mean'] == board.loc[1, 'cv_accuracy_mean']
+    assert list(board['backbone']) == list(order)
+
+
+def test_the_paired_point_is_the_winner_minus_the_runner_up_and_the_refit_reads_dev_then_sealed(data, tmp_path):
+    out, runner = tmp_path / 'search', FakeRunner()
+    assert _run(_argv(data, out, '--no_pilot', backbones=('siglip_tiny', 'resnet_tiny', 'vjepa2_tiny')), runner) == 0
+    selection = json.loads((out / 'selection.json').read_text())
+    entries = {entry['key']: entry for entry in _ledger(out)}
+    winner, runner_up = entries[selection['winner']['key']], entries[selection['runner_up']['key']]
+    expected = winner['out_of_fold']['accuracy'] - runner_up['out_of_fold']['accuracy']
+    assert expected != 0 and selection['paired_difference']['point'] == pytest.approx(expected)
+    assert 'picked on these same rows' in selection['reason']
+    role, final = runner.calls[-1]
+    assert role == 'final'
+    assert Path(_flag(final, '--df')).resolve() == (out / 'data' / DEV).resolve()
+    assert Path(_flag(final, '--test_df')).resolve() == (out / 'data' / SEALED).resolve()
+
+
+def test_the_code_version_is_recorded_and_a_change_is_flagged_on_resume(data, tmp_path, monkeypatch, capsys):
+    import handlers.model_selection.search as search_module
+    out = tmp_path / 'search'
+    monkeypatch.setattr(search_module, 'code_version', lambda: {'commit': 'aaaa', 'commit_dirty': False})
+    assert _run(_argv(data, out, '--no_pilot')) == 0
+    assert {entry['code']['commit'] for entry in _ledger(out)} == {'aaaa'}
+    capsys.readouterr()
+    monkeypatch.setattr(search_module, 'code_version', lambda: {'commit': 'bbbb', 'commit_dirty': True})
+    assert _run(_argv(data, out, '--no_pilot', '--allow_grid_change', backbones=('resnet_tiny', 'siglip_tiny', 'vjepa2_tiny'))) == 0
+    printed = capsys.readouterr().out
+    assert 'other code version' in printed and 'aaaa' in printed
+    selection = json.loads((out / 'selection.json').read_text())
+    assert selection['code']['commit'] == 'bbbb' and selection['code']['commit_dirty'] is True
+    assert sorted(selection['code']['candidates_from_other_commits'].values()) == ['aaaa', 'aaaa']
+    assert any('other code version' in warning for warning in selection['warnings'])
+
+
+def test_imbalanced_classes_get_a_warning_about_accuracy(tmp_path, capsys):
+    rows = [{'videos': str((tmp_path / f'{label}_{i}.mp4').resolve()), 'labels': label, 'group': f'{label}-src{i // 3}'}
+            for label, count in (('left', 30), ('right', 12), ('up', 12)) for i in range(count)]
+    data = tmp_path / 'clips.parquet'
+    pd.DataFrame(rows).to_parquet(data, index=False)
+    assert _run(_argv(data, tmp_path / 'a', '--dry_run')) == 0
+    printed = capsys.readouterr().out
+    assert 'imbalanced' in printed and '--metric balanced_accuracy' in printed
+    assert _run(_argv(data, tmp_path / 'b', '--no_pilot')) == 0
+    assert any('imbalanced' in warning for warning in json.loads((tmp_path / 'b' / 'selection.json').read_text())['warnings'])
+    capsys.readouterr()
+    assert _run(_argv(data, tmp_path / 'c', '--dry_run', '--metric', 'balanced_accuracy')) == 0
+    assert 'imbalanced' not in capsys.readouterr().out
+
+
+def test_the_split_message_names_its_unit_and_warns_when_clips_are_treated_as_independent(tmp_path, capsys):
+    rows = [{'videos': str((tmp_path / f'v_{label}_g{i // 3:02d}_c{i % 3 + 1:02d}.avi').resolve()), 'labels': label}
+            for label in ('Archery', 'Bowling') for i in range(15)]
+    data = tmp_path / 'clips.parquet'
+    pd.DataFrame(rows).to_parquet(data, index=False)
+    assert _run(_argv(data, tmp_path / 's', '--dry_run')) == 0
+    printed = capsys.readouterr().out
+    assert 'of the groups' not in printed and 'unit: row' in printed
+    assert 'Warning' in printed and 'independent' in printed and 'UCF101' in printed
+    assert any('UCF101' in w for w in json.loads((tmp_path / 's' / 'data' / 'split.json').read_text())['warnings'])
+
+
+def test_a_preflight_that_crashes_is_failed_not_refused_and_is_tried_again(data, tmp_path):
+    out = tmp_path / 'search'
+
+    def flaky(args, num_classes, measure):
+        if args.model_version == 'siglip_tiny':
+            raise OSError('could not download the weights')
+        return fake_footprint(args, num_classes, measure)
+    assert _run(_argv(data, out, '--no_pilot'), footprint_fn=flaky) == 0
+    table = pd.read_csv(out / 'candidates.csv').set_index('backbone')
+    assert table.loc['siglip_tiny', 'check'] == 'failed' and 'preflight: OSError: could not download' in table.loc['siglip_tiny', 'reason']
+    runner = FakeRunner()
+    assert _run(_argv(data, out, '--no_pilot'), runner) == 0
+    assert [_flag(a, '--model_version') for role, a in runner.calls if role == 'cv'] == ['siglip_tiny']
+
+
+def test_test_file_overlap_compares_groups_as_text_and_paths_from_their_file(tmp_path):
+    from handlers.split_dataset import split_with_test_file
+    rows = pd.DataFrame({'videos': [str((tmp_path / f'{i}.mp4').resolve()) for i in range(30)], 'labels': ['a', 'b'] * 15,
+                         'group': [i // 2 for i in range(30)]})
+    dev, test = rows[rows['group'] < 12], rows[rows['group'] >= 11].assign(group=lambda f: f['group'].astype(str))
+    dev.to_parquet(tmp_path / 'd.parquet', index=False)
+    test.to_parquet(tmp_path / 't.parquet', index=False)
+    with pytest.raises(ValueError, match="share 1 'group' groups"):
+        split_with_test_file(tmp_path / 'd.parquet', tmp_path / 't.parquet', tmp_path / 'r1', True, False, 'labels', 'video', None, 'cls')
+    folder = tmp_path / 'data'
+    folder.mkdir()
+    rows = rows.drop(columns='group')
+    relative = rows.head(20).assign(videos=['../' + Path(p).name for p in rows.head(20)['videos']])  # relative to its own file
+    relative.to_parquet(folder / 'd.parquet', index=False)
+    rows.iloc[[0, 25]].to_parquet(folder / 't.parquet', index=False)  # row 0 is the same file as dev's ../0.mp4
+    with pytest.raises(ValueError, match='share 1 video files'):
+        split_with_test_file(folder / 'd.parquet', folder / 't.parquet', tmp_path / 'r2', True, False, 'labels', 'video', None, 'cls')
+
+
+def test_test_file_of_clip_bytes_without_groups_warns_that_overlap_cannot_be_checked(tmp_path):
+    from handlers.split_dataset import split_with_test_file
+    rows = pd.DataFrame({'videos': [bytes([i]) * 4 for i in range(24)], 'labels': ['a', 'b'] * 12})
+    rows.head(18).to_parquet(tmp_path / 'd.parquet', index=False)
+    rows.tail(6).to_parquet(tmp_path / 't.parquet', index=False)
+    with pytest.warns(UserWarning, match='cannot be checked'):
+        train, _, _ = split_with_test_file(tmp_path / 'd.parquet', tmp_path / 't.parquet', tmp_path / 'r', True, False, 'labels', 'video',
+                                           None, 'cls', seed=7)
+    summary = json.loads((Path(train).parent / 'split_summary.json').read_text())
+    assert 'cannot be checked' in summary['overlap_check'] and summary['validation_seed'] == 7
+
+
+def test_a_ledger_key_belongs_to_one_dataset_and_one_set_of_training_settings():
+    """Defence in depth: search.json already refuses changed data or settings, and the key must not match across them either."""
+    from handlers.model_selection.ledger import candidate_key
+    config, training = Candidate('resnet18').config(), RunSettings().training()
+    key = candidate_key(config, 'data-a', training)
+    assert candidate_key(config, 'data-b', training) != key
+    assert candidate_key(config, 'data-a', {**training, 'epochs': training['epochs'] + 1}) != key
+    assert candidate_key(config, 'data-a', dict(training)) == key

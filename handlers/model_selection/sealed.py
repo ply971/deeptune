@@ -9,6 +9,7 @@ Every candidate run gets `dev.parquet` only. `sealed_test.parquet` is read once,
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,23 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 DEV_FILE, SEALED_FILE, SPLIT_FILE, ASSIGNMENT_FILE = 'dev.parquet', 'sealed_test.parquet', 'split.json', 'split_assignment.csv'
+UCF101_NAME = re.compile(r'_g\d+_c\d+', re.IGNORECASE)  # v_Archery_g01_c02.avi: gNN is the actor and scene group
+
+
+def independence_warnings(table: pa.Table, unit: str) -> list:
+    """Loud warnings when the split treats clips as independent, which is wrong whenever clips share a source."""
+    from evaluators.video.run_validation import _holds_paths
+    if not unit.startswith('row'):
+        return []
+    found = ['clips are treated as independent: there is no group column and no two rows share a source video file. If several '
+             'clips come from one person, scene or recording, they land on both sides of the sealed split and of every fold, and '
+             'every score reads too high. Add a group column naming the source of each clip, or pass --grouper.']
+    if _holds_paths(table):
+        names = [Path(value).name for value in table.column('videos').to_pylist() if value]
+        if names and sum(bool(UCF101_NAME.search(name)) for name in names) >= len(names) / 2:
+            found.append('the file names look like UCF101 (..._gNN_cNN): clips with one gNN share actors and backgrounds. Put the class '
+                         'and gNN in a group column.')
+    return found
 
 
 def _units(table: pa.Table, grouper: Optional[str]) -> tuple[Optional[list], str]:
@@ -90,7 +108,7 @@ def make_sealed_split(input_path: Path, data_dir: Path, target: str = 'labels', 
               'input': str(input_path.resolve()), 'input_fingerprint': data_fingerprint(input_path),
               'dev': {**describe(dev_rows), 'file': DEV_FILE, 'fingerprint': data_fingerprint(data_dir / DEV_FILE)},
               'sealed_test': {**describe(test_rows), 'file': SEALED_FILE, 'fingerprint': data_fingerprint(data_dir / SEALED_FILE)},
-              'assignment': ASSIGNMENT_FILE,
+              'assignment': ASSIGNMENT_FILE, 'warnings': independence_warnings(table, unit),
               'rule': 'Candidates are trained and scored on dev rows only. The sealed test rows are scored once, by the winner.'}
     (data_dir / SPLIT_FILE).write_text(json.dumps(record, indent=2), encoding='utf-8')
     return record

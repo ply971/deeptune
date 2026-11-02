@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -162,6 +163,59 @@ class RunSettings:
         settings = asdict(self)
         settings.pop('boot')  # bootstrap resamples change intervals, not models
         return settings
+
+
+# deeptune.py destinations that --deeptune_args may not set. The data, the split, the folds and the seed decide what the
+# sealed test means; the rest are set per candidate by the grid axes or by select_model.py's own flags, so an extra flag
+# would silently replace them (argparse keeps the last value).
+RESERVED_DESTS = {
+    'df': 'select_model gives every candidate the development rows only', 'test_df': 'only the final refit gets the sealed test file',
+    'cv_only': 'set per run', 'validation': 'set per run', 'k': 'use --k', 'n_boot': 'set per run', 'seed': 'use --seed',
+    'fixed_seed': 'set per run', 'raw_data': 'use --raw-data on select_model', 'modality': 'video only', 'out': 'set per run',
+    'mode': 'use --mode', 'model_version': 'a grid axis (--backbones)', 'config': 'a config file could set any of these',
+    'video_arch': 'a grid axis (--video_archs)', 'pooling': 'a grid axis (--poolings)', 'num_frames': 'a grid axis (--num_frames)',
+    'learning_rate': 'a grid axis (--learning_rates)', 'freeze_backbone': 'a grid axis (--train_modes)',
+    'use_peft': 'a grid axis (--train_modes)', 'lora_rank': 'a grid axis (--train_modes)', 'embed_size': 'set by --train_modes lora:R',
+    'trainable_params': 'a grid axis (--train_modes partial:N)', 'unfreeze_backbone': 'a grid axis (--train_modes full)',
+    'num_epochs': 'use --epochs', 'batch_size': 'use --batch_size', 'num_workers': 'use --num_workers',
+    'early_stopping_patience': 'use --early_stopping_patience', 'target': 'use --target', 'num_classes': 'use --num_classes',
+    'grouper': 'use --grouper', 'accept_weights_licence': 'use --accept_weights_licence', 'report_boot': 'use --boot',
+}
+_NUMBER = re.compile(r'^-\d+(\.\d*)?([eE][-+]?\d+)?$|^-\.\d+$')
+
+
+def _deeptune_parser():
+    import contextlib
+    import io
+    from cli import DeepTuneVisionOptions
+    from utils import RunType
+    with contextlib.redirect_stdout(io.StringIO()):
+        return DeepTuneVisionOptions(RunType.ONECALL, args=['--modality', 'video', '--df', 'x.parquet', '--out', 'x']).parser
+
+
+def extra_args_problems(extra: list) -> list[str]:
+    """Why these extra deeptune.py words cannot be passed to every run. Each word that starts with a dash is matched to a
+    deeptune.py flag the way argparse matches it (exact, else a unique prefix), so `--d` or `--see` are caught too."""
+    parser = _deeptune_parser()
+    options = parser._option_string_actions  # argparse's own table of option strings
+    problems = []
+    for word in map(str, extra):
+        if not word.startswith('-') or _NUMBER.match(word):
+            continue
+        name = word.split('=', 1)[0]
+        if ' ' in name:
+            problems.append(f'{word!r}: give each flag and value as separate words after --deeptune_args, e.g. --deeptune_args --precision bf16.')
+            continue
+        action = options.get(name)
+        if action is None:
+            matches = {options[s] for s in options if s.startswith(name) and name.startswith('--')} if parser.allow_abbrev else set()
+            if len(matches) != 1:
+                problems.append(f'{word!r} is ' + ('an ambiguous abbreviation of deeptune.py flags.' if matches else 'not a deeptune.py flag.'))
+                continue
+            action = matches.pop()
+        if action.dest in RESERVED_DESTS:
+            problems.append(f'{word!r} sets deeptune.py\'s {action.dest}, which select_model.py controls: {RESERVED_DESTS[action.dest]}.')
+    return problems
 
 
 def train_mode_flags(train_mode: str, backbone: str) -> list[str]:

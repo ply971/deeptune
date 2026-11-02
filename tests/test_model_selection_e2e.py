@@ -33,7 +33,8 @@ def test_select_model_end_to_end_through_deeptune_subprocesses(tmp_path):
     data, out = _dataset(tmp_path), tmp_path / 'search'
     env = dict(os.environ, CUDA_VISIBLE_DEVICES='-1', OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')
     code = select_model.main(['--df', str(data), '--out', str(out), '--backbones', 'resnet_tiny', 'vjepa2_tiny', '--num_frames', '4',
-                              '--k', '2', '--epochs', '1', '--batch_size', '4', '--boot', '50', '--no_pilot', '--gpu_memory_gb', 'none'],
+                              '--k', '2', '--epochs', '1', '--batch_size', '4', '--boot', '50', '--no_pilot', '--gpu_memory_gb', 'none',
+                              '--seed', '7'],
                              runner=SubprocessRunner(env=env))
     assert code == 0, (out / 'ledger.jsonl').read_text() if (out / 'ledger.jsonl').exists() else 'no ledger'
     ledger = [json.loads(line) for line in (out / 'ledger.jsonl').read_text().splitlines()]
@@ -57,4 +58,5 @@ def test_select_model_end_to_end_through_deeptune_subprocesses(tmp_path):
     final = out / selection['final']['run_dir']
     split = json.loads(next(final.glob('*/data_splits_*/split_summary.json')).read_text())
     assert split['test_source'] == '--test_df' and split['sample_counts']['test'] == len(sealed)
+    assert split['validation_seed'] == 7 and selection['seeds']['refit_validation'] == 7  # --seed reaches the refit's validation split
     assert sorted(pd.read_parquet(next(final.glob('*/data_splits_*/test_split.parquet')))['videos']) == sorted(sealed['videos'])

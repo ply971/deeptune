@@ -10,7 +10,6 @@ The run count and a rough time estimate are printed before anything trains. Reru
 from __future__ import annotations
 
 import argparse
-import shlex
 import sys
 from pathlib import Path
 
@@ -77,8 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--boot', type=int, default=2000, help='Group-bootstrap resamples for every interval (default 2000).')
     run.add_argument('--accept_weights_licence', nargs='+', default=[], metavar='LICENCE',
                      help='Accept opt-in weights licences by name, as deeptune.py spells them (e.g. CC-BY-NC-4.0). Recorded.')
-    run.add_argument('--deeptune_args', default='',
-                     help='More deeptune.py flags for every run, as one string after =, e.g. --deeptune_args="--precision bf16".')
+    run.add_argument('--deeptune_args', nargs=argparse.REMAINDER, default=[], metavar='FLAG',
+                     help='More deeptune.py flags for every run, as separate words, LAST on the line: --deeptune_args --precision bf16. '
+                          'No shell-style splitting, so Windows paths keep their backslashes. Flags select_model.py sets itself '
+                          '(data, split, seed, folds, grid axes, epochs, batch size...) are refused.')
     limits = p.add_argument_group('limits and checks')
     limits.add_argument('--max_trainable_params', type=parse_param_count, default=None, metavar='COUNT',
                         help='Skip candidates that would train more parameters than this (e.g. 5M). Default: no limit.')
@@ -115,14 +116,17 @@ def _gpu_memory(text: str):
 
 
 def options_from_args(args):
-    from handlers.model_selection.grid import Grid, RunSettings
+    from handlers.model_selection.grid import Grid, RunSettings, extra_args_problems
     from handlers.model_selection.search import SearchOptions
+    problems = extra_args_problems(args.deeptune_args)
+    if problems:
+        raise ValueError('--deeptune_args: ' + ' '.join(problems))
     grid = Grid.from_sources(args.grid, backbones=args.backbones, video_archs=args.video_archs, poolings=args.poolings,
                              train_modes=args.train_modes, learning_rates=args.learning_rates, num_frames=args.num_frames)
     settings = RunSettings(mode=args.mode, num_classes=args.num_classes, target=args.target, grouper=args.grouper, k=args.k,
                            seed=args.seed, epochs=args.epochs, early_stopping_patience=args.early_stopping_patience,
                            batch_size=args.batch_size, num_workers=args.num_workers, boot=args.boot,
-                           accept_weights_licence=list(args.accept_weights_licence), deeptune_args=shlex.split(args.deeptune_args))
+                           accept_weights_licence=list(args.accept_weights_licence), deeptune_args=list(args.deeptune_args))
     return SearchOptions(df=args.df, out=args.out, grid=grid, settings=settings, strategy=args.search, metric=args.metric,
                          raw_data=args.raw_data, test_fraction=args.test_fraction, max_trainable_params=args.max_trainable_params,
                          gpu_memory_gb=_gpu_memory(args.gpu_memory_gb), preflight=args.preflight, pilot=args.pilot, dry_run=args.dry_run,
