@@ -220,7 +220,8 @@ coordinator plan is in the session's plan file. Agent reports go in
 
 **Honesty rule.** No feature or paper promises a fixed accuracy such as 99%.
 "No false predictions" is delivered as **abstention with a stated error
-guarantee** (conformal / selective prediction). Every number is measured on
+guarantee** (selective prediction: Learn then Test risk control by default,
+split conformal for the `silent_error` option). Every number is measured on
 public benchmarks or on the user's data, with confidence intervals.
 
 **Licences** (corrected 2026-10-30 from the model cards / repo LICENSE files,
@@ -239,7 +240,7 @@ licence of every set of weights it used.
 | A1 | Trainable-parameter budget + "trainable / total" report | — |
 | A4 | Per-prediction `expected_error` fitted on validation, calibration table | — |
 | R1 | Modern video backbones as frozen features or PEFT: VideoMAE (V2), V-JEPA 2, SigLIP 2 / DINOv3 frame features; ensembles; multi-clip TTA | Phase 1, 3 |
-| R2 | Conformal prediction + abstention ("not sure") with a target error rate; selective-risk curves | A4, Phase 5 |
+| R2 | Abstention ("not sure") with a target error rate: Learn then Test risk control (default) or split conformal (`silent_error`); selective-risk curves. Prediction sets are not built | A4, Phase 5 |
 | R3 | Auto model selection: try backbones and settings with grouped CV, keep the best, report CIs. **`--search smart`** (default, the user's staged design): (0) profile the training data only (size, classes, length, groups, leakage audit, label issues, motion probe) and suggest fixes without changing anything silently; (1) screen one small model per backbone family on cached features, then every backbone in the best families, with memory limits applied; (2) tune settings one group at a time on the top models (what trains, then learning rate, then frames) with early stopping; (3) re-check the top combinations together, since one-group-at-a-time tuning misses interactions, then grouped CV on the top 3. Ship only after measuring it against a true exhaustive run on a small grid, reporting how far its pick falls from the true best, with its reason shown for every choice and user override allowed. **`--search exhaustive`** (user request, 2026-10-30): train every combination in the chosen grid of backbones, temporal heads, trainable layers and settings. Both print the run count and a time estimate before starting, can stop and resume, report models that don't fit in memory as skipped, keep a ranked leaderboard, and score only the final winner on the sealed test set | Phase 5, R1, B1, B2, T1 |
 | S0 | Spatial data layer: box/mask/track labels (COCO JSON, YOLO txt, MOT txt, CVAT export import); **auto-labelling** = Grounding DINO boxes → SAM 2 masks → user corrects | Phase 1 |
 | S1 | Detection on video frames: fine-tune RT-DETR v2 / D-FINE (+ torchvision Faster R-CNN baseline); zero-shot open-vocabulary detection (Grounding DINO, OWLv2: "lobster" with no training) | S0 |
@@ -295,7 +296,8 @@ P-001…P-012 (an id clash, see P-113).
     mixup/cutmix, layer-wise LR decay, EMA, multi-crop × multi-clip testing,
     and peak-memory logging per option (P-103). On 8 GB: probe or side
     network first, then LoRA on ViT-B, then LoRA on ViT-L.
-  - R2 = the paper core: **group-aware conformal abstention** on a separate,
+  - R2 = the paper core: **group-aware abstention with a risk guarantee** (Learn
+    then Test by default; split conformal only for `silent_error`; V-053) on a separate,
     group-disjoint calibration split, since validation is used for model
     selection once early stopping exists (P-104, P-114, V-011).
   - S1/S3: a parity check against the Apache `trackers` library, after

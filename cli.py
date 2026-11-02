@@ -9,6 +9,7 @@ from handlers.video_arch import PROBE_ARCHITECTURES, VIDEO_ARCH_ARG_NAMES, add_v
 from handlers.training_args import TRAINING_BASICS_ARG_NAMES, add_training_basics_arguments, apply_config_defaults
 from handlers.evaluation_args import (DFANALYZE_ARG_NAMES, DFANALYZE_EMBED_ARG_NAMES, EVALUATION_ARG_NAMES, add_dfanalyze_arguments,
                                       add_evaluation_arguments)
+from handlers.abstention_args import ABSTENTION_ARG_NAMES, add_abstention_arguments
 import json
 import os, shutil
 
@@ -67,6 +68,11 @@ class DeepTuneVisionOptions:
         for name in evaluation_names:
             setattr(self, name, getattr(parsed_args, name))
         # --- end B3 ---
+        # --- abstention (R2) ---
+        if run_type == RunType.ONECALL:
+            for name in ABSTENTION_ARG_NAMES:
+                setattr(self, name, getattr(parsed_args, name))
+        # --- end R2 ---
         # self.input_dir: Optional[Path] = parsed_args.input_dir.resolve() if parsed_args.input_dir else None
         self.out: Optional[Path] = parsed_args.out.resolve() if parsed_args.out else None
         self.batch_size: Optional[int] = parsed_args.batch_size
@@ -389,6 +395,7 @@ Other PEFT models ignore this flag and use --embed_size as their rank.""")
         add_training_basics_arguments(p)  # T1
         add_evaluation_arguments(p)  # B3
         add_dfanalyze_arguments(p)  # B3
+        add_abstention_arguments(p)  # R2
 
     def _add_trainable_params_arg(self):
         self.parser.add_argument(

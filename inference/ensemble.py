@@ -204,7 +204,7 @@ def _predict_member(checkpoint: Path, recorded: dict, df: pd.DataFrame, batch_si
                              int(recorded.get('added_layers') or 2), int(recorded.get('embed_size') or 1000),
                              bool(recorded.get('freeze_backbone', False)), recorded.get('mode') or 'cls', bool(recorded.get('use_peft', False)),
                              batch_size, args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
-                             with_probabilities=True, **extra)
+                             with_probabilities=True, abstain=False, **extra)  # a member's abstention.json describes that member alone
 
 
 def _with_flag_acceptance(recorded: dict, accept_licences) -> dict:
@@ -256,7 +256,8 @@ def ensemble_runs(runs: Sequence[Path], data: Path, out: Path, batch_size: int =
               'members': [{'checkpoint': str(c), 'model_version': v['model_version'], 'pooling': v.get('pooling'),
                            'num_frames': v.get('num_frames'), 'test_clips': v.get('test_clips'), 'test_crops': v.get('test_crops'),
                            'weights_licence': _member_licence(v), 'weights_revision': _member_revision(v)} for c, v in zip(checkpoints, recorded)],
-              'expected_error': "not given: each member's error model describes that member alone"}
+              'expected_error': "not given: each member's error model describes that member alone",
+              'abstention': 'not applied to ensembles'}
     return _write(result, out, record, mode)
 
 
@@ -296,5 +297,6 @@ def ensemble_tables(paths: Sequence[Path], out: Path, mode: str = 'cls', label_m
         members.append({'predictions': str(path), 'weights_licence': recorded.get('weights_licence', 'not recorded next to this file'),
                         'weights_revision': recorded.get('weights_revision', 'not recorded next to this file')})
     record = {'method': 'mean of class probabilities' if mode == 'cls' else 'mean of predicted values', 'mode': mode, 'label_check': label_check, 'members': members,
-              'expected_error': "not given: each member's error model describes that member alone"}
+              'expected_error': "not given: each member's error model describes that member alone",
+              'abstention': 'not applied to ensembles'}
     return _write(result, out, record, mode)

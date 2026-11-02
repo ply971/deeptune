@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from datasets.video_datasets import (VideoDataOptions, native_video_transform, open_video_dataset, video_loader_kwargs)
 from helpers import transformations
-from inference.common import attach_expected_error, labels_are_comparable
+from inference.common import attach_abstention, attach_expected_error, labels_are_comparable
 from options import DEVICE, PIN_MEM
 from src.video.multi_clip import clip_disagreement, error_model_clips_mismatch, multi_clip_scores
 from src.video.multi_crop import wrap_for_test_crops
@@ -40,6 +40,7 @@ def predict_video(
     video_options: Optional[VideoDataOptions] = None,
     lora_rank: Optional[int] = None,
     with_probabilities: bool = False,
+    abstain: bool = True,
 ) -> pd.DataFrame:
     """Runs `checkpoint_path`'s model over every row of `df` (a 'videos'
     column of file paths or clip bytes, detected automatically, + optional
@@ -54,7 +55,10 @@ def predict_video(
     `lora_rank` is the run's recorded rank for a native PEFT model; None means
     it equals `embed_size`, as in runs recorded before --lora_rank existed.
 
-    `with_probabilities` adds a ``probability_<k>`` column per class, which ensembles average."""
+    `with_probabilities` adds a ``probability_<k>`` column per class, which ensembles average.
+
+    With `abstain` (default) and an abstention.json for these weights, adds `answered` and
+    `decision`, and puts the summary in `result.attrs['abstention']`. Ensembles pass False."""
     video_options = video_options or VideoDataOptions()
     error_model_clips_mismatch(checkpoint_path, video_options.test_clips, test_crops=video_options.test_crops)
     model = build_video_model(
@@ -129,4 +133,9 @@ def predict_video(
             result[f'probability_{k}'] = column
     if scores:
         attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), state_dict)
+    if abstain and mode == 'cls':  # after expected_error, which a rule can use as its score
+        from evaluators.abstention import pipeline_record
+        summary = attach_abstention(result, checkpoint_path, num_classes, state_dict, pipeline_record(video_options, num_frames, pooling), label_mapping=label_mapping)
+        if summary is not None:
+            result.attrs['abstention'] = summary
     return result

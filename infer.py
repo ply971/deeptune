@@ -65,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     from handlers.video_args import add_video_data_arguments
     add_video_data_arguments(p, training=False)
 
+    p.add_argument('--no_abstain', action='store_true',
+                   help="Video classification: ignore the run's abstention.json and give every clip's prediction. By default a run fitted with --target_error says \"not sure\" in the decision column.")
+
     # Tabular only.
     p.add_argument('--target', default='labels')
     p.add_argument('--finetuning-mode', action='store_true', help='TabPFN only.')
@@ -225,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             args.embed_size, args.freeze_backbone, args.mode, args.use_peft, args.batch_size,
             args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
             **({} if args.lora_rank is None else {'lora_rank': args.lora_rank}),
+            abstain=not args.no_abstain,
         )
     elif args.modality == 'text':
         from inference.text import predict_text
@@ -256,6 +260,12 @@ def main(argv: list[str] | None = None) -> int:
              'weights_revision': weights_revision(args.model_version)}, indent=2), encoding='utf-8')
     print(f'Wrote {len(predictions)} prediction(s) to {predictions_path}')
 
+    # Abstention (R2): what the rule did, and what it does and does not promise.
+    abstention = predictions.attrs.get('abstention')
+    if abstention is not None:
+        from evaluators.abstention import INFERENCE_SUMMARY_FILENAME
+        (args.out / INFERENCE_SUMMARY_FILENAME).write_text(json.dumps(abstention, indent=2), encoding='utf-8')
+
     # summarize_predictions works off column names ('correct' for
     # classification, 'abs_error' for regression) every predict_* function
     # above already writes when the input data had labels, regardless of
@@ -269,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         json_path, _ = save_report(calibration, args.out, CALIBRATION_STEM, extra={'split': 'inference'})
         metrics['error_estimate'] = metrics_summary(calibration)
         print(f'Wrote error calibration to {json_path}')
+    if metrics is not None and abstention is not None:
+        metrics['abstention'] = {k: abstention.get(k) for k in ('answered', 'not_sure', 'answer_rate', 'target_error', 'status', 'guarantee_holds', 'clip_error_among_answered')}
     if metrics is not None:
         metrics_path = args.out / 'inference_metrics.json'
         metrics_path.write_text(json.dumps(metrics, indent=2), encoding='utf-8')

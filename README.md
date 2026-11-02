@@ -689,6 +689,34 @@ What keeps the numbers honest:
 
 Embedding script: add `--export_dfanalyze` to `python -m embed.video.embed`, with `--dfanalyze_train_df` (needed for `--dfanalyze_dims`) and `--dfanalyze_val_df`. With `--use_case pretrained`, embeddings now come from the bare backbone at its own width, ignoring `--added_layers` and `--embed_size`. Before, they could be the output of a randomly initialised head, so re-extract any you made that way. `weights_licence` in the records states the terms of those weights: some `DEFAULT` weights are non-commercial, such as `vit_h_14`'s.
 
+## "Not sure": abstention with a target error (video classification)
+
+The model can decline to answer. `--target_error` asks it to say "not sure" rather than exceed an error rate among the clips it does answer. **This does not promise any accuracy, and it cannot remove every wrong answer.** A weak model answers little or nothing, and a stronger one answers more at the same target.
+
+```bash
+python deeptune.py --modality video --df clips.csv --raw-data --model_version r3d_18 --out runs/ --target_error 0.05
+python infer.py --modality video --checkpoint runs/.../trainval_output_*/model_weights.pth --data new_clips/ --out preds/ --model_version r3d_18 --num_classes 101
+```
+
+- **What happens:** `--calib_fraction` (default 0.1) of the dataset moves from the training split into a separate calibration split, whole groups at a time, so training has less data. Validation and test rows do not change. Validation is not used to calibrate, because it chose the weights. Test rows are never used to fit.
+- **Inference:** `infer.py` reloads `abstention.json` from beside the weights. `predictions.csv` gains `decision` (the label, or `not sure`) and `answered`, and `abstention_summary.json` says what was promised. `--no_abstain` turns it off.
+
+| `--abstain_guarantee` | What is bounded | How it holds |
+|---|---|---|
+| `selective_risk` (default) | Error among answered clips: take a new group with an answered clip, then one of its answered clips | With probability at least 1 - `--abstain_delta` (0.95 by default) over the calibration draw, for new groups i.i.d. with the calibration groups |
+| `silent_error` | The chance that a new group has any answered wrong clip. This is not the error among answered clips | On average over calibration draws, for new groups exchangeable with the calibration groups |
+
+- **Groups matter.** Clips cut from one video are dependent, so the effective sample is the number of groups, and more clips per group mostly do not help. Give your data a `group` column. Without one, clips naming the same source file are treated as one group. Otherwise, **the output says the guarantee is at clip level and assumes independent clips**. Pre-cut segments of one recording in separate files look independent and nothing here can detect them, so the guarantee would not hold for them.
+- **When the target cannot be met** on the calibration data, every clip gets `not sure`, the output says so, and it states the lowest target those data support.
+- **Few groups.** Below an effective n that depends on the target (70 groups at 20%, 160 at 10%, 342 at 5%, 903 at 2%, 1810 at 1%), `loose` is true. For `silent_error` the headline says "Guarantee is loose": one calibration draw can miss half as much again as the target, and `realised_coverage` gives the interval from the Beta distribution on the number of groups. For `selective_risk` the bound itself still holds with few answered groups, so the headline says "Few answered group units" instead: the bound is conservative there and how much is answered varies a lot between draws.
+- **Budget first.** Before training, a `Certification budget` line says how many wrong calibration groups the target can tolerate, for example at most 2 of 250 groups (0.8%) for a 5% target at delta 0.05. The bound is conservative, so a model needs observed error well under the target. `abstention.json` repeats it under `certification_budget`.
+- **Not guaranteed:** accuracy on any one clip, group or class; per-class error; clip-weighted error if big groups err more (it is reported beside the group-weighted one); new clips from a group already seen; any distribution shift; wrong calibration labels.
+- **Settings must match.** The threshold belongs to its weights and scoring settings. Other weights: no abstention is applied. Another `--test_clips`, `--test_crops`, sampling or frame count, another `--label_mapping` than the run's, or another `error_model.json` behind `--abstain_score expected_error`: a warning, and `guarantee_holds` becomes false. A run that used `--resume_allow_data_change` claims no guarantee, as its weights may have trained on the calibration rows. Calibration labels must be class indices in range, or class names the run's `label_mapping.json` knows; anything else is refused. Probabilities are the raw softmax, because the temperature in the evaluation report is not applied at inference, and the guarantee does not need them to be calibrated.
+- **On the test set:** `eval_output_*/` gets `abstention_report.json`, `selective_risk_curve.csv` and `.png`, and `predictions_abstention.csv`. The plot draws the target against the quantity it bounds: group-weighted error for `selective_risk` (clip-weighted error is drawn beside it, marked not guaranteed), the share of groups with an answered wrong clip for `silent_error`. Intervals are pointwise, over resampled whole groups; the plot is skipped with a warning without matplotlib. One test set is one draw: a point above the target does not by itself refute the guarantee.
+- **A finished run:** `python -m evaluators.video.abstention_fit --checkpoint <weights> --calib_df <groups the run never saw> --target_error 0.05`. The run's own `data_splits_*` train, validation and test files are always checked, and `--other_df` adds more. Any group or source overlap removes the guarantee, and so does having nothing to compare with (weights moved away from their run, or clip bytes with no group column). It warns when the run already has test results, since a rule fitted after seeing them is not independent of them.
+
+Choose the target before seeing test results. Trying several targets on one test set and keeping the best is model selection on test. Methods: the default `selective_risk` is Learn then Test risk control (Angelopoulos et al., arXiv 2110.01052) applied to per-group losses, not conformal prediction; `silent_error` is split conformal on one score per group, and no prediction sets are built, with realised coverage from Angelopoulos & Bates (arXiv 2107.07511). Classification only for now.
+
 ## Detect and track objects in video (zero-shot)
 
 Describe what to find in words. No labels or training needed:

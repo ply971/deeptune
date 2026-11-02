@@ -72,6 +72,17 @@ def main(argv=None):
     elif args.validation != 'holdout' and training_options.resume is not None:
         issues.append('--resume cannot be combined with --validation: every fold must train a fresh model.')
     # --- end B3 ---
+    # --- abstention (R2) ---
+    if args.target_error is not None:
+        if args.modality != 'video':
+            issues.append('--target_error is only supported for the video modality.')
+        elif effective_mode(cfg) != 'cls':
+            issues.append('--target_error needs classification: a regression model has no error rate to bound.')
+        elif args.calib_fraction >= globals()['defaults']['train_size']:
+            issues.append(f"--calib_fraction must be below the training share, {globals()['defaults']['train_size']}.")
+        if args.abstain_score == 'expected_error' and args.no_error_model:
+            issues.append('--abstain_score expected_error needs the error model, so it cannot be combined with --no_error_model.')
+    # --- end R2 ---
     if issues:
         args.parser.error("\n".join(issues))
     args.mode = effective_mode(cfg)
@@ -131,9 +142,18 @@ def main(argv=None):
         time_idx_column=args.time_idx_column,
     )
 
+    # --- abstention (R2): whole groups move from training to a separate calibration split; validation and test do not change ---
+    calibration_data_path = None
+    if args.target_error is not None:
+        from evaluators.video.abstention_fit import carve_calibration_split
+        calibration_seed = 42 if defaults['fixed_seed'] else None  # like the split: --seed varies training, not which groups calibrate
+        calibration_data_path = carve_calibration_split(train_data_path, args.calib_fraction, defaults['train_size'], GROUPER, calibration_seed,
+                                                        args.target_error, args.abstain_delta, args.abstain_guarantee)
+    # --- end R2 ---
+
     df = pd.read_parquet(train_data_path, columns=['labels'])
 
-    if args.modality == 'video':  # lets an ensemble verify what each class index means (inference/ensemble.py)
+    if args.modality == 'video':  # lets an ensemble verify what each class index means (inference/ensemble.py); the R2 carve above leaves the mapping as it was
         from inference.common import label_mapping_record
         args.label_mapping_path, args.label_mapping_sha256 = label_mapping_record(Path(train_data_path).parent / 'label_mapping.json')
 
@@ -413,6 +433,22 @@ def main(argv=None):
                                evaluate_video, dict(video_eval_config, embed_size=defaults['embed_size']), GROUPER,
                                extra_warnings=[video_split_warning] if video_split_warning else [])
         # --- end B3 ---
+        # --- abstention (R2): after the test scores, which it does not see; the report then checks the fitted rule on them ---
+        if args.target_error is not None:
+            from datasets.video_datasets import video_options_from_args
+            from evaluators.video.abstention_fit import fit_on_calibration_split, report_on_eval_dir
+            from utils import is_native_video_architecture, resolve_lora_rank
+            abstention_rule = fit_on_calibration_split(
+                calibration_data_path, ckpt_directory, target_error=args.target_error, delta=args.abstain_delta, guarantee=args.abstain_guarantee,
+                score_name=args.abstain_score, model_version=args.model_version, num_classes=args.num_classes, added_layers=defaults['added_layers'],
+                embed_size=defaults['embed_size'], freeze_backbone=FREEZE_BACKBONE, use_peft=args.use_peft, batch_size=args.batch_size, num_frames=args.num_frames,
+                pooling=args.pooling, video_options=video_options_from_args(args), grouper=GROUPER, other_splits=(train_data_path, val_data_path, test_data_path),
+                lora_rank=resolve_lora_rank(args, ckpt_directory) if args.use_peft and is_native_video_architecture(args.model_version) else None,
+                disjoint_by_construction=True,  # this run drew the calibration rows from training before it trained
+                void_reasons=['--resume_allow_data_change was set, so the weights may have trained on these calibration rows.'] if training_options.resume_allow_data_change else [])
+            report_on_eval_dir(abstention_rule, next(path for path in sorted((Path(args.out)/parent_dir).glob('eval_output_*')) if path.is_dir()), test_data_path, GROUPER,
+                               n_boot=args.report_boot, calib_df=calibration_data_path)
+        # --- end R2 ---
 
     elif args.modality == 'tabular':
 
