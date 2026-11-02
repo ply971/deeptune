@@ -355,6 +355,18 @@ in the later extension.
 - Order: R3a fix round and merge, then R3b = smart + augmentation setting +
   random + bayes.
 
+**Every feature in the desktop app (user, 2026-11-03).** Each user-facing
+feature must be usable from the GUI, not only the CLI: this includes what has
+already landed (B2 temporal models, R1 hub backbones, ensembles, T1 recipe,
+augmentation, test-time clips/crops, k-fold/bootstrap validation and report,
+error estimate and abstention, df-analyze export, feature cache and probes,
+R3 model selection, device choice). Enforced by a GUI coverage test: every
+argparse flag of deeptune.py, infer.py, select_model.py, ensemble.py,
+extract_features.py, train_feature_head.py and track.py must be reachable from
+the GUI, except a short documented allow-list of internal or test-only flags.
+From now on a feature is not done until its GUI control exists (rule 1 of the
+professional-quality rules still applies). The GUI stays torch-free.
+
 Until P-105 lands, every real-data manifest needs a correct `group` column by
 hand: pre-cut clips such as UCF101's get no shared-source warning.
 
