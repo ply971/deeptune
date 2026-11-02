@@ -138,13 +138,14 @@ From the repo root, GPU visible, on the UCF101 10-class demo manifest (330 clips
 
 ```powershell
 $data = "C:\Users\Ahmed Magdy\deeptune-demo\train_clips.csv"
-$grid = @('--backbones','r3d_18','r2plus1d_18','resnet18','--train_modes','frozen','lora:8','--num_frames','16','--k','5','--epochs','5','--batch_size','4','--deeptune_args=--precision bf16')
+$grid = @('--backbones','r3d_18','r2plus1d_18','resnet18','--train_modes','frozen','lora:8','--num_frames','16','--k','5','--epochs','5','--batch_size','4')
+$extra = @('--deeptune_args','--precision','bf16')  # always last on the line
 # 1. Counts and refusals only; trains nothing
-.venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a @grid --dry_run
+.venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a @grid --dry_run @extra
 # 2. The pilot and the estimate; write down the estimate
-.venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a @grid --estimate_only
+.venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a @grid --estimate_only @extra
 # 3. The search (add --yes if the estimate is over 8 h). Press Ctrl+C once mid-run, then rerun the same line to check resume
-.venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a @grid
+.venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a @grid @extra
 # 4. Out of memory on purpose: one large model at a large batch, memory check off, to see did_not_fit and the search going on
 .venv\Scripts\python.exe select_model.py --df $data --raw-data --out .artifacts\gate\r3a_oom --backbones swin3d_b r3d_18 --train_modes full --num_frames 16 --k 2 --epochs 1 --batch_size 16 --gpu_memory_gb none --no_pilot --yes
 ```
@@ -152,3 +153,53 @@ $grid = @('--backbones','r3d_18','r2plus1d_18','resnet18','--train_modes','froze
 Record in PROGRESS.md: the printed estimate against the real wall time; each candidate's `estimated_gpu_gb` in
 `candidates.csv` against its peak GPU memory (`peak_gpu_reserved_mb` in each run's `training_run.json`, from T1); the leaderboard, the paired difference and the
 sealed-test score with its interval; and that `final/<key>/.../split_summary.json` names `sealed_test.parquet`.
+
+## Review fix round (ml-critic: "merge after fixes")
+
+`video-analysis` was merged in first (668f480), which brings 92dc079, the fix for the two `test_video_followups.py`
+failures above. With the new tests on the unfixed code: 22 failed, 30 passed. The tests of items 1-3 and 5-11 failed before their fixes; those of items 4 and 12 pin behaviour that was already right and were written to kill the mutants.
+
+| # | Item | Fix | Test(s) in `tests/test_model_selection.py` |
+|---|---|---|---|
+| 1 | `--deeptune_args` could undo the sealing (`--df full --seed 7`) | `grid.extra_args_problems`: every dashed word is matched to a deeptune.py flag as argparse matches it (exact, else a unique prefix), and the flags select_model sets (data, split, seed, folds, grid axes, epochs, batch size, target, grouper, boot, licences, `--config`, `--raw-data`) are refused with the reason. None of the grid-axis flags was found safe to pass. | `test_extra_flags_that_select_model_controls_are_refused` (12 cases, incl. `--see`, `--d`, `--df=`), `test_the_critics_repro_cannot_train_a_candidate_on_the_full_input` |
+| 2 | Windows paths lost backslashes (`shlex.split`) | `--deeptune_args` is `nargs=REMAINDER`, last on the line, word by word; a word holding a space is refused with advice | `test_extra_flags_must_be_separate_words_and_keep_windows_paths`, `test_extra_deeptune_flags_reach_every_run` |
+| 3 | "Same folds" never checked | Each ledger line has a `fold_signature` (hash of row to fold); finished candidates on different folds are refused before ranking or the sealed test; the paired difference also compares the `fold` column | `test_candidates_cross_validated_on_different_folds_are_not_ranked` |
+| 4 | Untested ranking claims | none needed | `test_ranking_uses_the_mean_over_folds_not_the_best_fold` (M5), `test_the_paired_point_is_the_winner_minus_the_runner_up_...` (M9), `test_a_tie_keeps_grid_order` (M11, both orders) |
+| 5 | Code version | `code` (commit, dirty) on every ledger line and in `selection.json`, from T1's `run_environment`; resume warns about lines from other commits, and the summary repeats it | `test_the_code_version_is_recorded_and_a_change_is_flagged_on_resume` |
+| 6 | `--test_df` overlap checks | groups compared as text; relative paths resolved from their Parquet file's folder; bytes with no group column warn that overlap cannot be checked, recorded as `overlap_check` | `test_test_file_overlap_compares_groups_as_text_and_paths_from_their_file`, `test_test_file_of_clip_bytes_without_groups_...` |
+| 7 | "20% of the groups" said for rows | the split message names the real unit; loud warning when clips are treated as independent, plus a UCF101 `_gNN_cNN` hint; in `split.json` and `selection.json` | `test_the_split_message_names_its_unit_and_warns_...` |
+| 8 | Refit inner split ignored `--seed` | `split_with_test_file(seed=)`, passed from `--seed` only on the `--test_df` path, so plain deeptune.py runs keep 42; `validation_seed` in `split_summary.json` and `selection.json` `seeds.refit_validation` | e2e now runs `--seed 7` and checks both; the bytes test checks `validation_seed` |
+| 9 | "Interval excludes 0" without caveat | the reason says the top two were picked on the same rows, so the interval flatters the gap and is not a test | asserted in the M9 test |
+| 10 | Imbalanced classes with accuracy | warning (largest/smallest > 1.5 in the development rows) suggesting `--metric balanced_accuracy`, kept in `selection.json` | `test_imbalanced_classes_get_a_warning_about_accuracy` |
+| 11 | Preflight crash labelled "refused" | `ValueError` from the builder stays refused; any other exception is `failed` ("preflight: ..."), marked `stage: checks`, and is tried again on the next run | `test_a_preflight_that_crashes_is_failed_not_refused_and_is_tried_again` |
+| 12 | M12 survived | none needed | the M9 test also asserts the refit's `--df` is `dev.parquet` and its `--test_df` the sealed file |
+
+**Edits to existing R3a tests (mine, unmerged).** `test_extra_deeptune_flags_reach_every_run` now passes the flags as
+separate words (`--deeptune_args --precision bf16 --video_augment`) instead of one `=` string, because item 2 changed the
+interface; its assertions are unchanged. The other changed lines extend `FakeRunner` (per-backbone quality, per-fold
+quality, a fold-seed offset) with defaults that keep its old behaviour. No assertion was removed or weakened.
+
+**Mutants** (critic's `mutplug.py`, run with `-x` on `tests/test_model_selection.py`):
+
+| Mutant | Result |
+|---|---|
+| M1 sealed to cv, M1b full input to cv, M4 drop refused, M6 sealed ignores groups, M7 test_df without group check, M8 pilot on sealed, M10 no refusal on settings change | killed (as before) |
+| M2 fold seed per candidate | **killed** (fold check) |
+| M5 rank by max fold | **killed** |
+| M9 runner-up is the winner | **killed** |
+| M11 ties reversed | **killed** |
+| M12 final refit on full input | **killed** |
+| M3 key without data fingerprint, M3b key without training settings | **killed** by a new direct test of `candidate_key`; through the search they are caught earlier by `search.json`'s refusals |
+
+## Proposals (not built)
+
+- Tie-break by trainable parameters (fewer first) instead of grid order, so a tie goes to the cheaper model.
+- A one-standard-error rule: among candidates within one fold SE of the best mean, pick the smallest. It counters the
+  winner's curse somewhat, but fold SEs are too narrow (folds share data), so it should be reported, not silently applied.
+- Nested cross-validation as an opt-in, to estimate the whole selection procedure's error instead of the winner's.
+
+Results after the fixes (CPU, `CUDA_VISIBLE_DEVICES=-1`):
+
+- `tests/test_model_selection.py`: `53 passed, 1 warning in 41.70s`
+- `tests/test_model_selection_e2e.py`: `1 passed in 43.08s`
+- `tests/test_small_dataset_splits.py tests/test_video_followups.py tests/test_evaluation_pipeline_e2e.py tests/test_abstention_pipeline.py tests/test_validation_schemes.py tests/test_video_pipeline_e2e.py`: `96 passed, 15 warnings in 233.34s`
