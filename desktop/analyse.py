@@ -35,7 +35,8 @@ from . import config as gc
 # ---------------------------------------------------------------------------
 
 LIMIT_NOTE = ('A trained clip classifier answers only with its own classes. Tracking and counting use the '
-              'detector named below, not your model.')
+              'selected detector, not your model for clip classification. Choose Trained cat detector '
+              'to use your fine-tuned cat checkpoint.')
 TRACKER_NOTE = ('Counts are tracker estimates (unique track IDs), not measured accuracy. A track that is lost '
                 'and found again can be counted twice, so check the overlay before you trust a count.')
 CONFIDENCE_NOTE = "Confidence is the model's own score, not a measured accuracy on this video."
@@ -76,7 +77,14 @@ class DetectorChoice:
 DETECTORS = (
     DetectorChoice('grounding_dino', 'Grounding DINO', 0.7),
     DetectorChoice('owlv2', 'OWLv2', 0.6),
+    DetectorChoice('pet_fasterrcnn', 'Trained cat detector', 0.0),
 )
+
+
+def installed_cat_checkpoint() -> Optional[Path]:
+    """A locally installed detector is ready without a download or torch import."""
+    path = Path(DEFAULT_MODELS['pet_fasterrcnn'])
+    return path if path.is_file() else None
 
 
 def detector_by_label(label: str) -> DetectorChoice:
@@ -110,6 +118,8 @@ def detector_is_cached(model_id: str) -> bool:
 
 def detector_note(key: str) -> str:
     """The notice shown before a detector is used."""
+    if key == 'pet_fasterrcnn':
+        return 'Local cat detector: paste the best.pt checkpoint path below. Supports cat only; no download.'
     choice = detector_by_key(key)
     total = sum(d.download_gb for d in DETECTORS)
     note = (f'{choice.label} ({choice.model_id}, {LICENCES.get(choice.model_id, "see the model card")}). '
@@ -121,6 +131,8 @@ def detector_note(key: str) -> str:
 
 def track_button_label(key: str) -> str:
     """The button says so when pressing it starts a download."""
+    if key == 'pet_fasterrcnn':
+        return 'Find, track and count'
     choice = detector_by_key(key)
     if detector_is_cached(choice.model_id):
         return 'Find, track and count'
@@ -129,6 +141,8 @@ def track_button_label(key: str) -> str:
 
 def loading_message(key: str) -> str:
     """First line of the live log. track.py prints nothing until a video is done."""
+    if key == 'pet_fasterrcnn':
+        return 'Loading the local trained cat detector and tracking this video.\n'
     choice = detector_by_key(key)
     download = '' if detector_is_cached(choice.model_id) else f'This first run downloads about {choice.download_gb} GB. '
     return (f'Loading {choice.label} and tracking. {download}'
@@ -493,6 +507,7 @@ class TrackConfig:
     every_n_frames: int = 1
     # Score a box needs to start a track. None = track.py's own defaults.
     track_score: Optional[float] = None
+    detector_model: Optional[Path] = None
 
 
 def threshold_flags(detector: str, score: Optional[float]) -> list[str]:
@@ -524,6 +539,10 @@ def build_track_argv(cfg: TrackConfig) -> list[str]:
             '--every_n_frames', str(int(cfg.every_n_frames)), '--save_video']
     # --prompt=value, so a prompt that starts with '-' is not taken for a flag.
     argv += [f'--prompt={prompt}' for prompt in cfg.prompts]
+    if cfg.detector == 'pet_fasterrcnn':
+        if cfg.detector_model is None:
+            raise ValueError('Choose a trained cat checkpoint first.')
+        argv += ['--detector_model', str(cfg.detector_model), '--batch_size', '1']
     return argv + threshold_flags(cfg.detector, cfg.track_score)
 
 
@@ -542,6 +561,11 @@ def validate_track_config(cfg: TrackConfig) -> list[str]:
             issues.append(str(exc))
     if cfg.detector not in DEFAULT_MODELS:
         issues.append(f'Unknown detector: {cfg.detector}')
+    if cfg.detector == 'pet_fasterrcnn':
+        if cfg.detector_model is None or not Path(cfg.detector_model).is_file():
+            issues.append('Paste the path to your trained cat checkpoint (best.pt).')
+        if any(p.lower() != 'cat' for p in cfg.prompts):
+            issues.append('The trained cat detector supports only the prompt cat.')
     if int(cfg.every_n_frames) < 1:
         issues.append('The frames step must be 1 or more.')
     if cfg.track_score is not None and not 0 < float(cfg.track_score) <= 1:
@@ -587,6 +611,7 @@ class TrackResults:
     overlay: Optional[Path] = None
     no_tracks_message: str = ''
     error: str = ''
+    trained_detector: bool = False
 
     @property
     def total_tracks(self) -> int:
@@ -676,6 +701,8 @@ def read_track_results(out: Path, video: Path, requested_detector: Optional[str]
     out = Path(out)
     video_dir = out / Path(video).stem  # track.py: <out>/<video stem>/ for a single --video
     results = TrackResults(video_dir=video_dir, video=Path(video).name)
+    record, _ = _read_json_object(out / 'track_arguments.json')
+    results.trained_detector = bool(record and record.get('detector') == 'pet_fasterrcnn')
     results.model, track_score, box_threshold = _detector_used(out, requested_detector)
     summary, problem = _read_json_object(video_dir / 'summary.json')
     if summary is None:

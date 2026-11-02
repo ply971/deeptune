@@ -1,0 +1,65 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\BaseballPitch\\v_BaseballPitch_g11_c02.avi",
+  "num_frames": 74,
+  "duration_s": 2.4691,
+  "every_n_frames": 1,
+  "prompts": [
+    "person"
+  ],
+  "fps": 29.97002997002997,
+  "total_tracks": 5,
+  "labels": {
+    "person": {
+      "count": 5,
+      "first_seen_s": 0.0,
+      "last_seen_s": 2.4358,
+      "tracks": [
+        {
+          "track_id": 1,
+          "first_frame": 0,
+          "last_frame": 73,
+          "first_seen_s": 0.0,
+          "last_seen_s": 2.4358,
+          "duration_s": 2.4691,
+          "num_observations": 72
+        },
+        {
+          "track_id": 2,
+          "first_frame": 0,
+          "last_frame": 73,
+          "first_seen_s": 0.0,
+          "last_seen_s": 2.4358,
+          "duration_s": 2.4691,
+          "num_observations": 73
+        },
+        {
+          "track_id": 3,
+          "first_frame": 0,
+          "last_frame": 73,
+          "first_seen_s": 0.0,
+          "last_seen_s": 2.4358,
+          "duration_s": 2.4691,
+          "num_observations": 74
+        },
+        {
+          "track_id": 4,
+          "first_frame": 2,
+          "last_frame": 73,
+          "first_seen_s": 0.0667,
+          "last_seen_s": 2.4358,
+          "duration_s": 2.4024,
+          "num_observations": 66
+        },
+        {
+          "track_id": 6,
+          "first_frame": 60,
+          "last_frame": 68,
+          "first_seen_s": 2.002,
+          "last_seen_s": 2.2689,
+          "duration_s": 0.3003,
+          "num_observations": 4
+        }
+      ]
+    }
+  }
+}

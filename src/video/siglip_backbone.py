@@ -1,37 +1,38 @@
 """SigLIP as a video frame backbone: the vision tower behind DeepTune's usual 2D backbone API, so frame pooling, single
 frame, late fusion, CNN + RNN and the temporal transformer can use it. ``--model_version siglip`` loads the weights the
 images modality uses (src/vision/siglip.py); ``siglip_tiny`` is untrained and tiny, for tests and CPU smoke runs.
+``siglip2_b16`` (the appearance stream of P-101) and ``dinov3_vitb16`` (opt-in, gated) use the same classes.
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-SIGLIP_INPUT_SIZE = {'siglip': 384, 'siglip_tiny': 32}
+from handlers.video_backbones import is_hub_frame_backbone
+
+SIGLIP_INPUT_SIZE = {'siglip': 384, 'siglip_tiny': 32, 'siglip2_b16': 224, 'siglip2_tiny': 32}
+# From each checkpoint's preprocessor_config.json: SigLIP is bicubic, the fixed-size SigLIP 2 bilinear.
+_RESIZE_MODE = {'siglip': 'bicubic', 'siglip_tiny': 'bicubic', 'siglip2_b16': 'bilinear', 'siglip2_tiny': 'bilinear'}
 
 
 def _load_vision_tower(version: str) -> nn.Module:
-    if version == 'siglip':
-        from src.vision.siglip import load_siglip_model_offline
-        return load_siglip_model_offline().vision_model
-    if version == 'siglip_tiny':
-        from transformers import SiglipVisionConfig, SiglipVisionModel
-        config = SiglipVisionConfig(hidden_size=32, intermediate_size=64, num_hidden_layers=1, num_attention_heads=2,
-                                    image_size=SIGLIP_INPUT_SIZE[version], patch_size=8)
-        return SiglipVisionModel(config)
+    if is_hub_frame_backbone(version):
+        from src.video.hub_backbones import load_hub_model
+        return load_hub_model(version)
     raise ValueError(f"Invalid SigLIP version {version!r}. Choose 'siglip' or 'siglip_tiny'.")
 
 
 class SiglipClipTransform:
-    """SigLIP's preprocessing for a uint8 clip ``[T, C, H, W]``: bicubic resize, antialiased when shrinking as the
-    image processor's PIL resize is, then mean and std 0.5."""
+    """SigLIP's preprocessing for a uint8 clip ``[T, C, H, W]``: the checkpoint's resize, antialiased when shrinking as
+    the image processor's PIL resize is, then mean and std 0.5."""
 
     def __init__(self, version: str):
         if version not in SIGLIP_INPUT_SIZE:
             raise ValueError(f"Invalid SigLIP version {version!r}. Choose 'siglip' or 'siglip_tiny'.")
         self.size = SIGLIP_INPUT_SIZE[version]
+        self.mode = _RESIZE_MODE[version]
 
     def __call__(self, clip: torch.Tensor) -> torch.Tensor:
-        frames = F.interpolate(clip.float() / 255.0, size=(self.size, self.size), mode='bicubic', align_corners=False, antialias=True)
+        frames = F.interpolate(clip.float() / 255.0, size=(self.size, self.size), mode=self.mode, align_corners=False, antialias=True)
         return (frames.clamp(0.0, 1.0) - 0.5) / 0.5
 
 

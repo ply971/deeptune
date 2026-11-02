@@ -1,0 +1,3771 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\BabyCrawling\\v_BabyCrawling_g03_c01.avi",
+  "fps": 25.0,
+  "width": 320,
+  "height": 240,
+  "num_frames": 215,
+  "every_n_frames": 1,
+  "prompts": [
+    "baby"
+  ],
+  "detector": {
+    "name": "owlv2",
+    "model_id": "google/owlv2-base-patch16-ensemble",
+    "device": "cuda",
+    "box_threshold": 0.1,
+    "nms_iou": 0.5,
+    "licence": "Apache-2.0"
+  },
+  "frames": [
+    {
+      "frame": 0,
+      "time_s": 0.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            121.89,
+            61.79,
+            305.42,
+            185.82
+          ],
+          "score": 0.6644,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 1,
+      "time_s": 0.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            120.33,
+            62.26,
+            306.01,
+            187.58
+          ],
+          "score": 0.686,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 2,
+      "time_s": 0.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            119.32,
+            61.18,
+            304.11,
+            187.4
+          ],
+          "score": 0.6746,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 3,
+      "time_s": 0.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            117.21,
+            59.57,
+            302.19,
+            185.87
+          ],
+          "score": 0.6699,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 4,
+      "time_s": 0.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            117.02,
+            58.2,
+            297.82,
+            184.61
+          ],
+          "score": 0.6696,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 5,
+      "time_s": 0.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            118.74,
+            58.23,
+            296.93,
+            184.08
+          ],
+          "score": 0.6694,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 6,
+      "time_s": 0.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            122.92,
+            55.06,
+            295.17,
+            179.6
+          ],
+          "score": 0.6783,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 7,
+      "time_s": 0.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            125.63,
+            54.93,
+            300.22,
+            179.68
+          ],
+          "score": 0.6777,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 8,
+      "time_s": 0.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            129.73,
+            54.05,
+            303.96,
+            179.76
+          ],
+          "score": 0.6695,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 9,
+      "time_s": 0.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            134.18,
+            54.4,
+            307.12,
+            179.8
+          ],
+          "score": 0.665,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 10,
+      "time_s": 0.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            136.35,
+            52.84,
+            309.48,
+            178.34
+          ],
+          "score": 0.666,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 11,
+      "time_s": 0.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            137.67,
+            49.41,
+            316.77,
+            174.12
+          ],
+          "score": 0.7496,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 12,
+      "time_s": 0.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            135.71,
+            46.71,
+            320.0,
+            171.38
+          ],
+          "score": 0.6651,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 13,
+      "time_s": 0.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            133.14,
+            45.47,
+            320.0,
+            169.26
+          ],
+          "score": 0.6867,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 14,
+      "time_s": 0.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            128.11,
+            46.59,
+            319.72,
+            168.56
+          ],
+          "score": 0.6845,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 15,
+      "time_s": 0.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            126.95,
+            47.59,
+            319.69,
+            167.98
+          ],
+          "score": 0.6799,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 16,
+      "time_s": 0.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            121.57,
+            49.08,
+            304.88,
+            169.72
+          ],
+          "score": 0.709,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            238.01,
+            2.49,
+            291.21,
+            40.07
+          ],
+          "score": 0.1017,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 17,
+      "time_s": 0.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            116.93,
+            47.76,
+            299.58,
+            169.53
+          ],
+          "score": 0.7185,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            236.93,
+            2.87,
+            290.26,
+            40.93
+          ],
+          "score": 0.1713,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 18,
+      "time_s": 0.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            117.35,
+            48.53,
+            298.27,
+            170.0
+          ],
+          "score": 0.7336,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 19,
+      "time_s": 0.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            116.76,
+            49.5,
+            297.62,
+            171.23
+          ],
+          "score": 0.7295,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 20,
+      "time_s": 0.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            118.94,
+            50.55,
+            298.93,
+            172.41
+          ],
+          "score": 0.7079,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 21,
+      "time_s": 0.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            125.96,
+            56.37,
+            305.98,
+            174.96
+          ],
+          "score": 0.6885,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 22,
+      "time_s": 0.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            129.2,
+            55.69,
+            311.79,
+            175.98
+          ],
+          "score": 0.6917,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 23,
+      "time_s": 0.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            132.43,
+            55.89,
+            318.83,
+            175.77
+          ],
+          "score": 0.6887,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 24,
+      "time_s": 0.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            136.87,
+            57.75,
+            319.85,
+            175.73
+          ],
+          "score": 0.688,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 25,
+      "time_s": 1.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            141.65,
+            56.49,
+            320.0,
+            175.14
+          ],
+          "score": 0.7002,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 26,
+      "time_s": 1.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            148.0,
+            54.64,
+            320.0,
+            174.78
+          ],
+          "score": 0.6713,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            146.66,
+            54.29,
+            203.5,
+            117.41
+          ],
+          "score": 0.107,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 27,
+      "time_s": 1.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.97,
+            53.07,
+            320.0,
+            174.93
+          ],
+          "score": 0.677,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            144.81,
+            53.2,
+            202.78,
+            116.95
+          ],
+          "score": 0.1063,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 28,
+      "time_s": 1.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            143.26,
+            53.16,
+            320.0,
+            174.53
+          ],
+          "score": 0.7105,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 29,
+      "time_s": 1.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            139.95,
+            55.05,
+            319.95,
+            173.5
+          ],
+          "score": 0.7004,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 30,
+      "time_s": 1.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            137.22,
+            53.63,
+            320.0,
+            173.02
+          ],
+          "score": 0.7118,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 31,
+      "time_s": 1.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            133.64,
+            55.26,
+            319.96,
+            175.48
+          ],
+          "score": 0.6581,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 32,
+      "time_s": 1.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            131.59,
+            55.12,
+            313.47,
+            176.6
+          ],
+          "score": 0.6875,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 33,
+      "time_s": 1.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            132.39,
+            54.12,
+            309.96,
+            179.4
+          ],
+          "score": 0.6942,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 34,
+      "time_s": 1.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            132.47,
+            51.37,
+            312.85,
+            178.48
+          ],
+          "score": 0.6941,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 35,
+      "time_s": 1.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            134.15,
+            50.57,
+            312.01,
+            177.24
+          ],
+          "score": 0.6939,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 36,
+      "time_s": 1.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            136.04,
+            47.12,
+            311.58,
+            174.65
+          ],
+          "score": 0.7006,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 37,
+      "time_s": 1.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            138.19,
+            46.36,
+            312.96,
+            173.91
+          ],
+          "score": 0.6995,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            271.62,
+            0.94,
+            320.0,
+            41.07
+          ],
+          "score": 0.1011,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 38,
+      "time_s": 1.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            141.42,
+            45.55,
+            313.04,
+            172.46
+          ],
+          "score": 0.7144,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 39,
+      "time_s": 1.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            142.27,
+            44.7,
+            313.58,
+            171.45
+          ],
+          "score": 0.7325,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 40,
+      "time_s": 1.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            144.0,
+            44.45,
+            314.28,
+            171.16
+          ],
+          "score": 0.7127,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 41,
+      "time_s": 1.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            143.24,
+            47.96,
+            313.28,
+            174.37
+          ],
+          "score": 0.7311,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 42,
+      "time_s": 1.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            144.49,
+            49.75,
+            317.55,
+            177.66
+          ],
+          "score": 0.7195,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 43,
+      "time_s": 1.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.92,
+            51.05,
+            318.67,
+            179.01
+          ],
+          "score": 0.7057,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 44,
+      "time_s": 1.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.18,
+            51.46,
+            318.15,
+            181.35
+          ],
+          "score": 0.6947,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 45,
+      "time_s": 1.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            133.61,
+            50.7,
+            318.92,
+            180.35
+          ],
+          "score": 0.6911,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 46,
+      "time_s": 1.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            134.41,
+            46.15,
+            319.02,
+            175.61
+          ],
+          "score": 0.7297,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 47,
+      "time_s": 1.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            141.07,
+            46.56,
+            319.22,
+            176.11
+          ],
+          "score": 0.7191,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 48,
+      "time_s": 1.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            143.27,
+            48.21,
+            318.92,
+            175.57
+          ],
+          "score": 0.7265,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 49,
+      "time_s": 1.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.65,
+            48.56,
+            320.0,
+            176.78
+          ],
+          "score": 0.7119,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 50,
+      "time_s": 2.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.8,
+            47.71,
+            319.31,
+            178.15
+          ],
+          "score": 0.7131,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 51,
+      "time_s": 2.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            144.61,
+            48.49,
+            318.49,
+            176.61
+          ],
+          "score": 0.7083,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 52,
+      "time_s": 2.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            144.91,
+            47.16,
+            319.16,
+            175.66
+          ],
+          "score": 0.6981,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 53,
+      "time_s": 2.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.44,
+            43.68,
+            319.86,
+            173.02
+          ],
+          "score": 0.7047,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 54,
+      "time_s": 2.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.67,
+            41.72,
+            319.86,
+            171.5
+          ],
+          "score": 0.7113,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 55,
+      "time_s": 2.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.95,
+            39.98,
+            319.57,
+            169.48
+          ],
+          "score": 0.7149,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 56,
+      "time_s": 2.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            148.38,
+            36.95,
+            320.0,
+            166.86
+          ],
+          "score": 0.7123,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 57,
+      "time_s": 2.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            147.45,
+            37.25,
+            320.0,
+            164.74
+          ],
+          "score": 0.6841,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 58,
+      "time_s": 2.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.28,
+            37.08,
+            320.0,
+            164.17
+          ],
+          "score": 0.7023,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 59,
+      "time_s": 2.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            143.45,
+            35.7,
+            320.0,
+            164.02
+          ],
+          "score": 0.7204,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 60,
+      "time_s": 2.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            138.77,
+            34.13,
+            320.0,
+            163.26
+          ],
+          "score": 0.6795,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            137.85,
+            33.87,
+            191.31,
+            94.18
+          ],
+          "score": 0.1019,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 61,
+      "time_s": 2.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            129.96,
+            36.21,
+            320.0,
+            163.01
+          ],
+          "score": 0.6944,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 62,
+      "time_s": 2.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            127.02,
+            38.18,
+            320.0,
+            163.38
+          ],
+          "score": 0.7238,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 63,
+      "time_s": 2.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            123.76,
+            39.42,
+            320.0,
+            163.25
+          ],
+          "score": 0.7113,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 64,
+      "time_s": 2.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            124.18,
+            38.24,
+            318.86,
+            163.39
+          ],
+          "score": 0.7091,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 65,
+      "time_s": 2.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            124.92,
+            37.47,
+            314.97,
+            165.33
+          ],
+          "score": 0.7273,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 66,
+      "time_s": 2.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            127.67,
+            34.5,
+            309.51,
+            168.73
+          ],
+          "score": 0.7101,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 67,
+      "time_s": 2.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            128.83,
+            33.04,
+            310.17,
+            168.87
+          ],
+          "score": 0.7138,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 68,
+      "time_s": 2.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            131.32,
+            32.99,
+            310.83,
+            168.9
+          ],
+          "score": 0.7116,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 69,
+      "time_s": 2.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            134.11,
+            33.74,
+            314.05,
+            169.27
+          ],
+          "score": 0.7058,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 70,
+      "time_s": 2.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            137.96,
+            34.75,
+            315.33,
+            170.08
+          ],
+          "score": 0.6982,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 71,
+      "time_s": 2.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.6,
+            35.17,
+            319.89,
+            173.57
+          ],
+          "score": 0.7116,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 72,
+      "time_s": 2.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            150.36,
+            33.7,
+            320.0,
+            175.15
+          ],
+          "score": 0.6859,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 73,
+      "time_s": 2.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            154.63,
+            33.01,
+            320.0,
+            176.12
+          ],
+          "score": 0.6883,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 74,
+      "time_s": 2.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            156.47,
+            32.97,
+            320.0,
+            177.65
+          ],
+          "score": 0.691,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 75,
+      "time_s": 3.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            157.12,
+            31.63,
+            320.0,
+            179.03
+          ],
+          "score": 0.723,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 76,
+      "time_s": 3.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.8,
+            30.18,
+            320.0,
+            179.54
+          ],
+          "score": 0.7122,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 77,
+      "time_s": 3.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.99,
+            30.15,
+            320.0,
+            180.57
+          ],
+          "score": 0.6872,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 78,
+      "time_s": 3.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.08,
+            31.12,
+            319.5,
+            181.25
+          ],
+          "score": 0.6934,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 79,
+      "time_s": 3.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.99,
+            32.37,
+            319.85,
+            182.58
+          ],
+          "score": 0.6988,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 80,
+      "time_s": 3.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.15,
+            32.88,
+            319.84,
+            182.63
+          ],
+          "score": 0.6914,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 81,
+      "time_s": 3.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            160.87,
+            34.88,
+            319.85,
+            183.59
+          ],
+          "score": 0.6746,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 82,
+      "time_s": 3.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            160.4,
+            35.11,
+            320.0,
+            184.95
+          ],
+          "score": 0.6868,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 83,
+      "time_s": 3.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.12,
+            34.19,
+            319.86,
+            184.27
+          ],
+          "score": 0.6956,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 84,
+      "time_s": 3.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.11,
+            34.49,
+            319.63,
+            185.12
+          ],
+          "score": 0.6873,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 85,
+      "time_s": 3.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            160.4,
+            34.24,
+            319.98,
+            187.01
+          ],
+          "score": 0.6752,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 86,
+      "time_s": 3.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            160.32,
+            32.19,
+            320.0,
+            186.95
+          ],
+          "score": 0.6582,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 87,
+      "time_s": 3.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.81,
+            30.65,
+            320.0,
+            186.7
+          ],
+          "score": 0.6373,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 88,
+      "time_s": 3.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.44,
+            29.82,
+            319.94,
+            185.76
+          ],
+          "score": 0.6463,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 89,
+      "time_s": 3.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.69,
+            28.81,
+            319.86,
+            184.8
+          ],
+          "score": 0.6403,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 90,
+      "time_s": 3.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.31,
+            27.75,
+            319.58,
+            184.24
+          ],
+          "score": 0.6216,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 91,
+      "time_s": 3.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            163.76,
+            27.84,
+            319.05,
+            183.73
+          ],
+          "score": 0.6417,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 92,
+      "time_s": 3.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            168.11,
+            27.05,
+            319.72,
+            184.89
+          ],
+          "score": 0.6081,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 93,
+      "time_s": 3.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            170.34,
+            26.65,
+            320.0,
+            185.92
+          ],
+          "score": 0.5935,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 94,
+      "time_s": 3.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            171.57,
+            27.34,
+            320.0,
+            187.08
+          ],
+          "score": 0.6117,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 95,
+      "time_s": 3.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            173.1,
+            27.56,
+            320.0,
+            187.98
+          ],
+          "score": 0.6201,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 96,
+      "time_s": 3.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            174.52,
+            26.82,
+            319.73,
+            192.25
+          ],
+          "score": 0.6216,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 97,
+      "time_s": 3.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            174.12,
+            25.81,
+            319.85,
+            192.63
+          ],
+          "score": 0.6359,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 98,
+      "time_s": 3.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            173.44,
+            25.1,
+            319.94,
+            191.35
+          ],
+          "score": 0.6647,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            0.13,
+            43.07,
+            29.04,
+            94.26
+          ],
+          "score": 0.1089,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 99,
+      "time_s": 3.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            172.41,
+            23.68,
+            319.24,
+            188.05
+          ],
+          "score": 0.6161,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 100,
+      "time_s": 4.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.43,
+            24.14,
+            319.47,
+            184.98
+          ],
+          "score": 0.6334,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 101,
+      "time_s": 4.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            166.54,
+            24.33,
+            319.24,
+            180.65
+          ],
+          "score": 0.6551,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 102,
+      "time_s": 4.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            163.0,
+            23.46,
+            318.75,
+            184.49
+          ],
+          "score": 0.6617,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 103,
+      "time_s": 4.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.92,
+            21.89,
+            320.0,
+            184.83
+          ],
+          "score": 0.6588,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 104,
+      "time_s": 4.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.34,
+            20.6,
+            320.0,
+            183.79
+          ],
+          "score": 0.6731,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 105,
+      "time_s": 4.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            160.62,
+            20.82,
+            319.9,
+            183.4
+          ],
+          "score": 0.6743,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 106,
+      "time_s": 4.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            157.38,
+            23.61,
+            320.0,
+            183.36
+          ],
+          "score": 0.6712,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 107,
+      "time_s": 4.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            155.65,
+            26.24,
+            319.61,
+            184.92
+          ],
+          "score": 0.6728,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 108,
+      "time_s": 4.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            155.07,
+            27.58,
+            319.75,
+            184.79
+          ],
+          "score": 0.6662,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 109,
+      "time_s": 4.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            153.42,
+            29.49,
+            320.0,
+            186.43
+          ],
+          "score": 0.6676,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 110,
+      "time_s": 4.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            152.66,
+            31.49,
+            319.69,
+            188.02
+          ],
+          "score": 0.6742,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 111,
+      "time_s": 4.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            150.66,
+            34.63,
+            319.5,
+            195.15
+          ],
+          "score": 0.6492,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 112,
+      "time_s": 4.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            152.64,
+            35.13,
+            320.0,
+            201.45
+          ],
+          "score": 0.6763,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 113,
+      "time_s": 4.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            151.62,
+            36.71,
+            320.0,
+            205.44
+          ],
+          "score": 0.6706,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 114,
+      "time_s": 4.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            151.98,
+            37.2,
+            320.0,
+            206.93
+          ],
+          "score": 0.6672,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 115,
+      "time_s": 4.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            151.46,
+            37.36,
+            320.0,
+            209.97
+          ],
+          "score": 0.6559,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 116,
+      "time_s": 4.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            150.9,
+            37.0,
+            319.96,
+            209.53
+          ],
+          "score": 0.671,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 117,
+      "time_s": 4.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            150.29,
+            36.89,
+            319.86,
+            209.09
+          ],
+          "score": 0.672,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 118,
+      "time_s": 4.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            151.04,
+            35.73,
+            320.0,
+            207.26
+          ],
+          "score": 0.6667,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 119,
+      "time_s": 4.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            149.93,
+            35.45,
+            320.0,
+            207.18
+          ],
+          "score": 0.668,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 120,
+      "time_s": 4.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            149.97,
+            35.07,
+            320.0,
+            207.07
+          ],
+          "score": 0.6744,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 121,
+      "time_s": 4.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            147.51,
+            34.37,
+            319.03,
+            204.79
+          ],
+          "score": 0.6746,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 122,
+      "time_s": 4.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.18,
+            34.58,
+            319.12,
+            204.32
+          ],
+          "score": 0.6828,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 123,
+      "time_s": 4.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            147.26,
+            33.13,
+            319.97,
+            204.18
+          ],
+          "score": 0.6855,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 124,
+      "time_s": 4.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            147.58,
+            31.77,
+            320.0,
+            201.88
+          ],
+          "score": 0.6739,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 125,
+      "time_s": 5.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.24,
+            31.44,
+            320.0,
+            201.46
+          ],
+          "score": 0.6848,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 126,
+      "time_s": 5.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            148.56,
+            30.04,
+            320.0,
+            197.39
+          ],
+          "score": 0.6854,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 127,
+      "time_s": 5.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            148.67,
+            29.97,
+            320.0,
+            195.65
+          ],
+          "score": 0.6797,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 128,
+      "time_s": 5.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            150.22,
+            29.99,
+            320.0,
+            195.5
+          ],
+          "score": 0.6765,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 129,
+      "time_s": 5.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            152.95,
+            28.81,
+            320.0,
+            194.89
+          ],
+          "score": 0.6936,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 130,
+      "time_s": 5.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            153.03,
+            29.28,
+            320.0,
+            194.88
+          ],
+          "score": 0.702,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 131,
+      "time_s": 5.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            155.14,
+            28.93,
+            319.67,
+            193.5
+          ],
+          "score": 0.6897,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 132,
+      "time_s": 5.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            155.08,
+            29.15,
+            319.18,
+            193.27
+          ],
+          "score": 0.6591,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 133,
+      "time_s": 5.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            153.96,
+            29.8,
+            319.79,
+            194.28
+          ],
+          "score": 0.6874,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 134,
+      "time_s": 5.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            155.32,
+            31.41,
+            320.0,
+            195.22
+          ],
+          "score": 0.6544,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 135,
+      "time_s": 5.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            157.31,
+            32.65,
+            319.44,
+            198.94
+          ],
+          "score": 0.6319,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 136,
+      "time_s": 5.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            152.71,
+            32.47,
+            319.92,
+            207.08
+          ],
+          "score": 0.6395,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 137,
+      "time_s": 5.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            153.72,
+            32.88,
+            319.81,
+            205.95
+          ],
+          "score": 0.6331,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 138,
+      "time_s": 5.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            149.93,
+            33.79,
+            319.5,
+            203.87
+          ],
+          "score": 0.6717,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 139,
+      "time_s": 5.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.88,
+            34.69,
+            318.53,
+            202.35
+          ],
+          "score": 0.5896,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            162.07,
+            35.25,
+            201.59,
+            78.28
+          ],
+          "score": 0.1428,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            147.91,
+            34.53,
+            213.86,
+            125.89
+          ],
+          "score": 0.115,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 140,
+      "time_s": 5.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.59,
+            32.76,
+            320.0,
+            202.34
+          ],
+          "score": 0.6437,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 141,
+      "time_s": 5.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            147.64,
+            29.93,
+            320.0,
+            200.72
+          ],
+          "score": 0.6352,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 142,
+      "time_s": 5.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            148.45,
+            25.06,
+            320.0,
+            200.29
+          ],
+          "score": 0.6198,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 143,
+      "time_s": 5.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            151.74,
+            22.14,
+            320.0,
+            203.65
+          ],
+          "score": 0.5916,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            166.92,
+            23.32,
+            206.84,
+            64.99
+          ],
+          "score": 0.1325,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 144,
+      "time_s": 5.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            158.16,
+            17.94,
+            320.0,
+            205.49
+          ],
+          "score": 0.5474,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            175.87,
+            19.26,
+            216.76,
+            64.42
+          ],
+          "score": 0.1738,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            158.3,
+            17.78,
+            231.32,
+            114.29
+          ],
+          "score": 0.1033,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 145,
+      "time_s": 5.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.49,
+            13.83,
+            320.0,
+            207.32
+          ],
+          "score": 0.6277,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            182.84,
+            15.25,
+            225.65,
+            60.38
+          ],
+          "score": 0.1436,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 146,
+      "time_s": 5.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.29,
+            8.13,
+            320.0,
+            216.76
+          ],
+          "score": 0.6343,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            182.03,
+            9.05,
+            225.03,
+            56.62
+          ],
+          "score": 0.1048,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 147,
+      "time_s": 5.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            163.6,
+            6.56,
+            320.0,
+            215.64
+          ],
+          "score": 0.6158,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            187.38,
+            7.26,
+            228.19,
+            53.28
+          ],
+          "score": 0.1322,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 148,
+      "time_s": 5.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            160.92,
+            4.99,
+            320.0,
+            211.45
+          ],
+          "score": 0.6108,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            184.59,
+            5.62,
+            226.33,
+            51.93
+          ],
+          "score": 0.1341,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 149,
+      "time_s": 5.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            158.03,
+            5.16,
+            320.0,
+            210.88
+          ],
+          "score": 0.6196,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 150,
+      "time_s": 6.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            158.45,
+            3.97,
+            320.0,
+            204.82
+          ],
+          "score": 0.7437,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 151,
+      "time_s": 6.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            153.16,
+            5.11,
+            320.0,
+            197.59
+          ],
+          "score": 0.4976,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            175.31,
+            6.24,
+            216.15,
+            50.71
+          ],
+          "score": 0.1435,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            153.19,
+            5.77,
+            239.81,
+            109.13
+          ],
+          "score": 0.115,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 152,
+      "time_s": 6.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            141.71,
+            4.95,
+            319.44,
+            181.69
+          ],
+          "score": 0.5472,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            166.09,
+            4.66,
+            207.28,
+            48.6
+          ],
+          "score": 0.1467,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 153,
+      "time_s": 6.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            138.86,
+            2.33,
+            320.0,
+            170.54
+          ],
+          "score": 0.5338,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            158.98,
+            2.29,
+            199.52,
+            50.76
+          ],
+          "score": 0.1889,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 154,
+      "time_s": 6.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            130.92,
+            4.61,
+            319.32,
+            164.95
+          ],
+          "score": 0.6731,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            149.64,
+            3.7,
+            190.32,
+            49.66
+          ],
+          "score": 0.1609,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 155,
+      "time_s": 6.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            128.63,
+            8.5,
+            317.71,
+            165.3
+          ],
+          "score": 0.6865,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 156,
+      "time_s": 6.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            130.1,
+            16.76,
+            315.12,
+            170.56
+          ],
+          "score": 0.6835,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 157,
+      "time_s": 6.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            130.43,
+            18.54,
+            312.59,
+            172.5
+          ],
+          "score": 0.6413,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 158,
+      "time_s": 6.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            130.25,
+            20.21,
+            309.71,
+            179.87
+          ],
+          "score": 0.673,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 159,
+      "time_s": 6.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            129.43,
+            20.54,
+            309.47,
+            180.94
+          ],
+          "score": 0.6781,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 160,
+      "time_s": 6.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            130.25,
+            19.58,
+            313.9,
+            182.92
+          ],
+          "score": 0.6727,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 161,
+      "time_s": 6.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            133.65,
+            16.35,
+            317.44,
+            187.68
+          ],
+          "score": 0.6805,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 162,
+      "time_s": 6.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            137.68,
+            11.99,
+            318.89,
+            188.47
+          ],
+          "score": 0.7209,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 163,
+      "time_s": 6.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            139.39,
+            11.0,
+            319.37,
+            190.77
+          ],
+          "score": 0.7152,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 164,
+      "time_s": 6.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            142.38,
+            11.86,
+            319.06,
+            192.43
+          ],
+          "score": 0.6991,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 165,
+      "time_s": 6.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            145.33,
+            10.62,
+            318.89,
+            193.29
+          ],
+          "score": 0.6719,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 166,
+      "time_s": 6.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            146.88,
+            10.0,
+            314.21,
+            187.85
+          ],
+          "score": 0.6767,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 167,
+      "time_s": 6.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            149.25,
+            8.71,
+            305.84,
+            183.31
+          ],
+          "score": 0.6875,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 168,
+      "time_s": 6.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            151.71,
+            8.98,
+            304.54,
+            184.69
+          ],
+          "score": 0.6989,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 169,
+      "time_s": 6.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            152.62,
+            6.69,
+            305.87,
+            187.12
+          ],
+          "score": 0.7021,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 170,
+      "time_s": 6.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            152.78,
+            5.78,
+            307.61,
+            188.88
+          ],
+          "score": 0.6874,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 171,
+      "time_s": 6.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            154.47,
+            4.92,
+            313.09,
+            188.51
+          ],
+          "score": 0.7041,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 172,
+      "time_s": 6.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            156.9,
+            5.21,
+            320.0,
+            189.3
+          ],
+          "score": 0.6835,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 173,
+      "time_s": 6.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            157.55,
+            6.15,
+            320.0,
+            190.02
+          ],
+          "score": 0.6855,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 174,
+      "time_s": 6.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            158.09,
+            7.0,
+            320.0,
+            189.0
+          ],
+          "score": 0.7105,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 175,
+      "time_s": 7.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            159.81,
+            5.79,
+            320.0,
+            186.29
+          ],
+          "score": 0.6671,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 176,
+      "time_s": 7.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            161.27,
+            5.43,
+            319.66,
+            181.85
+          ],
+          "score": 0.6555,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 177,
+      "time_s": 7.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            165.63,
+            8.13,
+            320.0,
+            175.35
+          ],
+          "score": 0.5723,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            171.67,
+            9.09,
+            211.5,
+            56.93
+          ],
+          "score": 0.1474,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 178,
+      "time_s": 7.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            168.58,
+            10.15,
+            320.0,
+            170.76
+          ],
+          "score": 0.6617,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            174.15,
+            10.75,
+            212.85,
+            58.31
+          ],
+          "score": 0.1265,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 179,
+      "time_s": 7.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.53,
+            10.61,
+            320.0,
+            171.34
+          ],
+          "score": 0.635,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            176.24,
+            11.21,
+            215.77,
+            59.0
+          ],
+          "score": 0.1506,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 180,
+      "time_s": 7.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.94,
+            8.82,
+            320.0,
+            170.65
+          ],
+          "score": 0.6367,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            177.58,
+            9.44,
+            217.68,
+            54.37
+          ],
+          "score": 0.1392,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 181,
+      "time_s": 7.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            170.39,
+            6.44,
+            320.0,
+            168.86
+          ],
+          "score": 0.6738,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            180.24,
+            7.2,
+            220.04,
+            50.87
+          ],
+          "score": 0.1072,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 182,
+      "time_s": 7.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            170.62,
+            3.38,
+            320.0,
+            177.12
+          ],
+          "score": 0.6225,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 183,
+      "time_s": 7.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.83,
+            5.69,
+            320.0,
+            176.37
+          ],
+          "score": 0.6311,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 184,
+      "time_s": 7.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            170.57,
+            9.71,
+            320.0,
+            173.95
+          ],
+          "score": 0.6289,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            185.56,
+            10.48,
+            224.89,
+            52.3
+          ],
+          "score": 0.1089,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 185,
+      "time_s": 7.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            178.6,
+            9.38,
+            320.0,
+            175.29
+          ],
+          "score": 0.5882,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            0.32,
+            49.43,
+            33.86,
+            103.45
+          ],
+          "score": 0.2012,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 186,
+      "time_s": 7.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            179.59,
+            10.09,
+            320.0,
+            179.74
+          ],
+          "score": 0.5995,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            192.02,
+            11.05,
+            232.34,
+            52.81
+          ],
+          "score": 0.1032,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            0.56,
+            49.72,
+            34.96,
+            109.81
+          ],
+          "score": 0.1008,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 187,
+      "time_s": 7.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            171.76,
+            9.74,
+            320.0,
+            184.82
+          ],
+          "score": 0.5406,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 188,
+      "time_s": 7.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            170.1,
+            7.04,
+            320.0,
+            185.11
+          ],
+          "score": 0.584,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 189,
+      "time_s": 7.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.29,
+            4.53,
+            319.96,
+            185.36
+          ],
+          "score": 0.6043,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 190,
+      "time_s": 7.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            168.62,
+            2.57,
+            319.54,
+            184.17
+          ],
+          "score": 0.5995,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 191,
+      "time_s": 7.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            167.47,
+            0.78,
+            318.14,
+            185.34
+          ],
+          "score": 0.5391,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 192,
+      "time_s": 7.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            167.49,
+            4.41,
+            318.16,
+            190.24
+          ],
+          "score": 0.5669,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 193,
+      "time_s": 7.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            170.32,
+            7.06,
+            319.76,
+            193.03
+          ],
+          "score": 0.5955,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 194,
+      "time_s": 7.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            171.48,
+            10.23,
+            318.08,
+            196.65
+          ],
+          "score": 0.5396,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 195,
+      "time_s": 7.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            172.54,
+            13.74,
+            310.68,
+            193.75
+          ],
+          "score": 0.5944,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 196,
+      "time_s": 7.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            172.82,
+            15.47,
+            309.57,
+            191.08
+          ],
+          "score": 0.5355,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 197,
+      "time_s": 7.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            176.85,
+            20.95,
+            318.55,
+            184.69
+          ],
+          "score": 0.5549,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 198,
+      "time_s": 7.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            177.7,
+            24.32,
+            319.47,
+            187.6
+          ],
+          "score": 0.5549,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 199,
+      "time_s": 7.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            177.43,
+            29.39,
+            319.77,
+            193.07
+          ],
+          "score": 0.5175,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 200,
+      "time_s": 8.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            176.48,
+            32.16,
+            319.64,
+            197.51
+          ],
+          "score": 0.4919,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 201,
+      "time_s": 8.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            175.12,
+            33.28,
+            319.52,
+            199.73
+          ],
+          "score": 0.5766,
+          "label": "baby"
+        },
+        {
+          "box_xyxy": [
+            0.0,
+            68.02,
+            24.61,
+            120.41
+          ],
+          "score": 0.1169,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 202,
+      "time_s": 8.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.92,
+            35.15,
+            319.57,
+            200.61
+          ],
+          "score": 0.5597,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 203,
+      "time_s": 8.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            167.74,
+            34.24,
+            319.6,
+            197.44
+          ],
+          "score": 0.5554,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 204,
+      "time_s": 8.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            167.27,
+            32.57,
+            320.0,
+            194.58
+          ],
+          "score": 0.606,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 205,
+      "time_s": 8.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            168.61,
+            30.01,
+            319.69,
+            194.52
+          ],
+          "score": 0.6269,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 206,
+      "time_s": 8.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            169.8,
+            29.92,
+            319.75,
+            195.82
+          ],
+          "score": 0.6109,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 207,
+      "time_s": 8.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            166.55,
+            24.33,
+            320.0,
+            195.19
+          ],
+          "score": 0.6001,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 208,
+      "time_s": 8.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            163.06,
+            23.57,
+            319.51,
+            195.27
+          ],
+          "score": 0.6158,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 209,
+      "time_s": 8.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            162.04,
+            22.47,
+            319.17,
+            192.19
+          ],
+          "score": 0.6143,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 210,
+      "time_s": 8.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            167.25,
+            21.19,
+            320.0,
+            192.54
+          ],
+          "score": 0.6089,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 211,
+      "time_s": 8.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            168.76,
+            20.8,
+            319.78,
+            196.13
+          ],
+          "score": 0.6303,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 212,
+      "time_s": 8.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            176.29,
+            17.25,
+            319.87,
+            198.51
+          ],
+          "score": 0.6498,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 213,
+      "time_s": 8.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            178.39,
+            12.63,
+            318.95,
+            200.17
+          ],
+          "score": 0.6104,
+          "label": "baby"
+        }
+      ]
+    },
+    {
+      "frame": 214,
+      "time_s": 8.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            178.4,
+            13.09,
+            319.98,
+            203.44
+          ],
+          "score": 0.6393,
+          "label": "baby"
+        }
+      ]
+    }
+  ]
+}

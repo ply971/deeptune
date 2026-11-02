@@ -104,11 +104,13 @@ left motion into right motion, which corrupts direction-dependent labels.""")
 # extract_features.py records these in <out>/cli_arguments.json.
 SNIPPET_FEATURE_ARG_NAMES = ('data', 'out', 'streams', 'model_version', 'motion_backbone', 'feature_weights', 'snippet_frames',
                              'snippet_stride', 'cache_tokens', 'batch_size', 'motion_method', 'motion_gain', 'feature_input_size',
-                             'video_backend')
+                             'video_backend', 'accept_weights_licence')
 
 
 def add_snippet_feature_arguments(parser):
     """Flags of extract_features.py (cached snippet features)."""
+    from handlers.video_backbones import add_weights_licence_argument
+    add_weights_licence_argument(parser)
     parser.add_argument('--data', required=True,
                         help="Videos: a CSV/XLSX manifest or a parquet file with a 'videos' column (paths or bytes). An optional 'video_id' column names the feature files.")
     parser.add_argument('--out', required=True, help='Feature folder. Already extracted videos in it are skipped.')

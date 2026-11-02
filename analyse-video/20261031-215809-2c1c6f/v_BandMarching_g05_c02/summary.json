@@ -1,0 +1,19 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\BandMarching\\v_BandMarching_g05_c02.avi",
+  "num_frames": 84,
+  "duration_s": 3.36,
+  "every_n_frames": 1,
+  "prompts": [
+    "person"
+  ],
+  "fps": 25.0,
+  "total_tracks": 0,
+  "labels": {
+    "person": {
+      "count": 0,
+      "first_seen_s": null,
+      "last_seen_s": null,
+      "tracks": []
+    }
+  }
+}

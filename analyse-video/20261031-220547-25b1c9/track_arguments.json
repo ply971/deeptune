@@ -1,0 +1,58 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\Basketball\\v_Basketball_g02_c02.avi",
+  "video_dir": null,
+  "prompt": [
+    "court"
+  ],
+  "out": "C:\\Users\\Ahmed Magdy\\CSCI555-Appendicitis-AI\\deeptune\\analyse-video\\20261031-220547-25b1c9",
+  "detector": "owlv2",
+  "detector_model": "google/owlv2-base-patch16-ensemble",
+  "box_threshold": 0.1,
+  "text_threshold": null,
+  "nms_iou": 0.5,
+  "every_n_frames": 1,
+  "max_frames": null,
+  "batch_size": 4,
+  "device": "auto",
+  "track_high_thresh": 0.2,
+  "track_low_thresh": 0.1,
+  "new_track_thresh": 0.3,
+  "match_thresh": 0.8,
+  "track_buffer": 30,
+  "cross_label_nms": null,
+  "class_agnostic": false,
+  "save_video": true,
+  "tracker_settings": {
+    "high_thresh": 0.2,
+    "low_thresh": 0.1,
+    "new_track_thresh": 0.3,
+    "match_thresh": 0.8,
+    "track_buffer": 30,
+    "class_agnostic": false,
+    "fuse_score": false
+  },
+  "detector_resolved": {
+    "name": "owlv2",
+    "model_id": "google/owlv2-base-patch16-ensemble",
+    "device": "cuda",
+    "box_threshold": 0.1,
+    "nms_iou": 0.5,
+    "licence": "Apache-2.0"
+  },
+  "detector_licence": "Apache-2.0",
+  "created": "2026-10-31T22:06:03",
+  "python": "3.12.10",
+  "command": [
+    "C:\\Users\\Ahmed Magdy\\CSCI555-Appendicitis-AI\\deeptune\\track.py",
+    "--video",
+    "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\Basketball\\v_Basketball_g02_c02.avi",
+    "--out",
+    "C:\\Users\\Ahmed Magdy\\CSCI555-Appendicitis-AI\\deeptune\\analyse-video\\20261031-220547-25b1c9",
+    "--detector",
+    "owlv2",
+    "--every_n_frames",
+    "1",
+    "--save_video",
+    "--prompt=court"
+  ]
+}

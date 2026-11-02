@@ -30,6 +30,7 @@ light.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 import numpy as np
@@ -53,6 +54,7 @@ class Detection:
 
 
 DEFAULT_MODELS = {
+    'pet_fasterrcnn': str(Path(__file__).resolve().parents[1] / 'saved_models' / 'cat-detector' / 'best.pt'),
     'grounding_dino': 'IDEA-Research/grounding-dino-tiny',
     'owlv2': 'google/owlv2-base-patch16-ensemble',
 }
@@ -61,6 +63,7 @@ DEFAULT_MODELS = {
 # so thresholds default per backend. The tracker's high/new-track thresholds are
 # derived from these in track.py's CLI (see DETECTOR_TRACK_DEFAULTS there).
 DETECTOR_DEFAULTS = {
+    'pet_fasterrcnn': {'box_threshold': 0.15, 'text_threshold': None},
     'grounding_dino': {'box_threshold': 0.2, 'text_threshold': 0.25},
     'owlv2': {'box_threshold': 0.1, 'text_threshold': None},
 }
@@ -415,6 +418,9 @@ BACKENDS = {'grounding_dino': GroundingDinoDetector, 'owlv2': Owlv2Detector}
 
 def build_detector(name: str, model_id: str | None = None, **kw) -> Detector:
     """Load a pretrained backend by name (downloads weights on first use)."""
+    if name == 'pet_fasterrcnn':
+        from spatial.pet_detector import PetDetector
+        return PetDetector.from_pretrained(model_id or '', **kw)
     if name not in BACKENDS:
         raise ValueError(f'unknown detector {name!r}; choose from {sorted(BACKENDS)}')
     return BACKENDS[name].from_pretrained(model_id or DEFAULT_MODELS[name], **kw)

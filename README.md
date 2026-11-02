@@ -507,6 +507,77 @@ axis is capped at what the backbone produces, for example `r3d_18` on 16 frames 
 
 Whether the finer grid pays off in accuracy depends on the data, so measure it on yours.
 
+## Modern video backbones and ensembles
+
+Pretrained backbones through `transformers`, as frozen features or with LoRA. Nothing here has run on real weights, real
+video or the GPU yet, so **DeepTune has no accuracy or memory figure for them**. Published numbers for these models use up to
+64 frames and many views per video, so they do not describe a run at DeepTune's 8 or 16 frames with one view.
+
+| `--model_version` | Weights | Licence | Used as |
+|---|---|---|---|
+| `vjepa2_vitl` | `facebook/vjepa2-vitl-fpc64-256` | MIT | clip model; the default recipe. 256 px, any frame count |
+| `siglip2_b16` | `google/siglip2-base-patch16-224` | Apache-2.0 | frame backbone, the appearance stream. 224 px |
+| `siglip` | `google/siglip-so400m-patch14-384` | Apache-2.0 | frame backbone. 384 px |
+| `videomae_b16` | `MCG-NJU/videomae-base` | CC-BY-NC-4.0, **opt-in** | clip model. 224 px, exactly 16 frames |
+| `videomae_v2_b16` | `OpenGVLab/VideoMAEv2-Base` | CC-BY-NC-4.0, **opt-in** | clip model. 224 px, exactly 16 frames. DeepTune reads the weights file into the `transformers` model and never runs the repository's code |
+| `dinov3_vitb16` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 License, **opt-in, gated** | frame backbone. 224 px. Meta must approve your Hugging Face account |
+
+`vjepa2_tiny`, `videomae_tiny`, `siglip2_tiny` and `dinov3_tiny` are small and untrained, for tests and smoke runs.
+V-JEPA 2.1 is not available: `transformers` has no loader for it, and its weights state no licence.
+
+**Licences.** Choosing a model prints the licence of its weights. Opt-in weights also need the licence named, for example
+`--accept_weights_licence CC-BY-NC-4.0`; without it the run stops before loading them. `cli_arguments.json`, feature sidecars,
+probe runs, `inference_run.json` and `ensemble.json` record `weights_licence` and `weights_revision`. The revision is the commit
+of the Hugging Face snapshot in the local cache; if that cannot be read, it says `unknown: ...` and the weights can only be traced
+to their repository name. The non-commercial VideoMAE weights are not for commercial use whatever flag you pass.
+
+**The default recipe: frozen V-JEPA 2 and an attentive probe.** On cached features, so each video is decoded and encoded once:
+
+```powershell
+.venv\Scripts\python.exe extract_features.py --data clips.csv --out features_vjepa --model_version vjepa2_vitl --snippet_frames 16 --cache_tokens 8x4x4 --batch_size 1
+.venv\Scripts\python.exe train_feature_head.py --features features_vjepa --train_df train.csv --val_df val.csv --test_df test.csv --out probe_vjepa --num_classes 5
+```
+
+From pixels, in one command:
+
+```powershell
+.venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version vjepa2_vitl --num_frames 16 --batch_size 1 --precision bf16
+```
+
+Here the encoder stays frozen unless you pass `--unfreeze_backbone` or `--use-peft` (with `--lora_rank`), and the run says so.
+`siglip2_b16` and `dinov3_vitb16` are frozen by default too; `siglip`, which came earlier, is not. `--unfreeze_backbone` is refused
+on any other model and alongside `--freeze-backbone` or `--use-peft`. The head is `--video_arch attentive_probe` (`--probe_width
+--probe_depth --probe_heads`, the default, which the run prints) or `linear_probe`, the plain mean of the tokens. An explicit
+`--pooling mean` or another frame pooling is refused on these clip models, because it would not mean what it says. `--added_layers` and
+`--embed_size` do not shape these heads. Saved weights include the frozen encoder.
+The probe defaults to one cross-attention block, while the V-JEPA 2 paper's evaluation uses four.
+
+**Memory on 8 GB.** Not measured yet: `scripts/smoke_modern_backbones.py` reports the peak at the GPU gate. Expect, in order of
+cost: a probe on cached features, a frozen forward, LoRA on a ViT-B, LoRA on the ViT-L, and full fine-tuning, which is not expected to
+fit. Start `vjepa2_vitl` at batch size 1 or 2 and 8 or 16 frames. Its token count grows with frames: 16 frames at 256 px is 2048 tokens.
+`extract_features.py` runs in float32 with no autocast, and a full `8x16x16` grid is large on disk, so pool it. Frame backbones run
+one image forward per frame, so a clip's cost grows with `--num_frames`.
+
+**Ensembles** average class probabilities across trained runs, not logits. Each member runs with what it recorded, so backbones,
+frame counts, `--test_clips` and preprocessing can differ, and `infer.py --ensemble` refuses flags that would be ignored.
+Members must solve the same task. For classification, index k must be one class in every member: a `deeptune.py` run records the path and
+hash of its label mapping, and each member is checked against its own record. Members known to differ are always refused. A member
+that cannot be verified, such as a run from before this record or one trained without `deeptune.py`, is refused unless you pass
+`--allow_unverified_labels`. Then nothing checks the class order, and `ensemble.json` (`label_check`) says so. Finished tables are
+checked through their `target` column. Opt-in weights need each member's own recorded acceptance or the flag.
+
+```powershell
+.venv\Scripts\python.exe ensemble.py --runs results_a results_b --data clips\ --out both
+.venv\Scripts\python.exe infer.py --modality video --ensemble results_a results_b --data clips\ --out both
+.venv\Scripts\python.exe ensemble.py --predictions probe_vjepa\predictions.csv probe_siglip\predictions.csv --out both
+```
+
+The last form joins finished tables by `video_id`, which is the way to ensemble feature probes. The output has `predictions.csv`
+with a `member_disagreement` column, `ensemble.json`, and `inference_metrics.json` when there are labels that can be scored: names
+with no mapping are not scored, since a prediction is then only an index. It has no
+`expected_error`, because each member's error model describes that member alone. An ensemble is not guaranteed to beat its best
+member, so compare them on your own data.
+
 ## Per-prediction error estimate (video & images)
 
 Every video (and image) prediction can carry an **`expected_error`** column:

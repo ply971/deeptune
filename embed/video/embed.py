@@ -88,6 +88,7 @@ def load_embedding_model(model_weights, use_case, model_version, added_layers, e
         backbone = SnippetBackbone(model_version, pretrained=True)
         args.embedding_source = f'bare backbone {model_version}, weights {backbone.weights_name}, averaged over time and space'
         args.weights_licence = backbone.weights_licence  # some DEFAULT weights are non-commercial, e.g. vit_h_14's
+        args.weights_revision = getattr(backbone, 'weights_revision', None)
         return backbone
 
     use_peft = use_case == "peft"
@@ -112,6 +113,8 @@ def load_embedding_model(model_weights, use_case, model_version, added_layers, e
     )
     model.load_state_dict(torch.load(ckpt_path, weights_only=True, map_location='cpu'))
     args.embedding_source = f'{use_case} weights from {ckpt_path}'
+    from src.video.feature_backbones import record_weights
+    record_weights(args, model_version)
     return model
 
 

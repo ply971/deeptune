@@ -72,7 +72,19 @@ Keep entries short and factual. This is the handoff between sessions.
 
   84 min in total. Single dataset, so the seeds vary only the model and training order. `temporal_transformer` stayed near 50% on training as well as validation on all three seeds, so it did not memorise, unlike its tiny-backbone failures. This run is 5 epochs with the runner's default settings, not B2's `tt_dim=64`, lr 3e-4 oracle settings, and the cause is not investigated: possibly a settings problem or a bug. Phase 3's reworded target says each architecture can learn direction, and on real ResNets `temporal_transformer` has not shown that here. `late_fusion` has not either, as expected at this speed. Results: `.artifacts/gate/b2/direction/`. `scene_bias` and `periodic` are running.
 - **User decision at 21:09:** stop the GPU checks. P-105 to P-109 and R3 move to a later extension (PLAN.md 4b). B2's `scene_bias` seed 0 finished in 24.6 min and seed 1 was stopped. Still open: `scene_bias` seeds 1 and 2, `periodic`, UCF101 through the pipeline and `infer.py`, B3's 5-fold report, and the `temporal_transformer` investigation.
-- **Next:** V1a on a real clip and desktop page 07, then R1 and R2, then Wave 3.
+- **B2 `scene_bias`, seed 0, GPU (biased validation / unbiased test):** `single_frame` 0.935 / 0.505; `mean` 0.910 / 0.493; `attention` 0.940 / 0.500; `late_fusion` 0.815 / 0.483; `cnn_rnn` 0.940 / 0.500; `temporal_transformer` 0.940 / 0.495; `early_fusion`, `tsm`, `slow_fusion:r2plus1d_18` 1.000 / 1.000; `two_stream` farneback 0.990 / 0.985; `two_stream` mv 0.830 / 0.905; `flow_probe` 0.995 / 0.995.
+- **V1a gate, `smoke_track.py` on real UCF101 clips (320x240), GPU:**
+  - **Bug fixed (0879567):** written track boxes ran up to 2.3 px past the frame edge, from the Kalman state. Re-run on the baby clip: `SMOKE TRACK PASS`.
+  - **"baby" on `v_BabyCrawling_g03_c01`, one baby in the clip:** every frame: Grounding DINO 2 tracks (one lasts a single frame, so it is a false extra), OWLv2 1. Every 5th frame: 1 and 1. The main track covers the whole clip. 215 frames in about 55 s with each detector when run at every frame.
+  - **"person" on `v_BandMarching_g05_c02`, a crowd of small people:** 0 tracks from both detectors at both steps, though the frame is full of people. It is a real miss, not a crash: Grounding DINO's top score on frame 40 was 0.178 for "person.", under its 0.2 box threshold, while "people." gave 0.738 and "a person." 0.344. So a count of 0 does not mean none are there, results depend heavily on the wording, and small objects at this resolution are a weak spot.
+- **V1a gate, page 07's own code on a real run and real clips, GPU (no clicks; screen control is not available here):** the same functions its Predict, Track and Stop buttons call, in a torch-free process. 6.4 min in total.
+  - **Predict:** `h_finetune_bn_off` gave BabyCrawling 98.6% and BandMarching 94.9%, both correct, with "3 of 33 validation clips were wrong, an estimate of 11.4% after smoothing", stated as the run-wide rate. The October demo run has no `error_model.json`: "not available", no number.
+  - **Track "baby":** step 1: Grounding DINO 2 (the false one-frame extra), OWLv2 1. Step 5: 1 and 1. The overlay frame checked by eye boxes the baby correctly.
+  - **Track on the band clip, Grounding DINO:** "person" gave 0 with a message giving the best score (0.31), the 0.45 needed to start a track, and what to try. "people" gave 1 track, the whole crowd as one object, which is a wrong count for a crowd.
+  - **Stop:** cancelled in 0.9 s, and GPU memory fell back from 7,501 MB to 1,456 MB.
+  - **Memory:** tracking with Grounding DINO peaked at 7,501 of 8,151 MB in use on the GPU, including about 1,500 MB already in use. This is a total from `nvidia-smi`, and may include cached memory. It leaves little room for another GPU job.
+  - **Still not checked:** the buttons by hand, and how the page displays these results. Not a pass of the V1a step until someone clicks through it.
+- **Next:** R1 and R2 reviews (running), then Wave 3.
 
 ### 2026-10-31 — Wave 2: B1, T1, V1a merged
 - **Merged into `video-analysis`:**
@@ -322,3 +334,50 @@ Keep entries short and factual. This is the handoff between sessions.
 
 ## Known limitations
 -
+
+### 2026-10-31 - Codex custom tracking intake
+- User requests training for a specific object, integration into page 07, and separate videos processed one at a time.
+- Read-only inspection confirms pretrained Grounding DINO/OWLv2 plus ByteTrack; fine-tuned detector integration is described as S1b in the S1a report.
+- Waiting for the object name and training/test data locations. No implementation, training, downloads or GPU jobs performed.
+- Pytest: not run (intake only); no pytest summary exists.
+- Next: identify target and available labelled data, then scope training and page 07 integration under this user request.
+
+
+### 2026-10-31 - Codex animal tracking scope
+- User has no dataset and delegates target choice, suggesting an animal. Proposed cats, using Oxford-IIIT Pet segmentation masks to derive whole-animal boxes (provided XML boxes cover heads only).
+- Proposed compact torchvision Faster R-CNN baseline plus existing ByteTrack, local checkpoint support on page 07, and independently sourced cat clips processed sequentially. Compare pretrained and fine-tuned performance; no accuracy claim yet.
+- Dataset/model/video downloads and bounded GPU training require user OK under AGENTS.md. No downloads, training or implementation performed.
+- Pytest: not run (research only); no pytest summary exists.
+- Next: obtain download/GPU authorization, implement training and local detector loading with CPU tests, then train and evaluate on separate data.
+
+
+### 2026-10-31 - Codex cat detector implementation; dataset download blocked
+- User approved choosing cats, dataset/model/demo downloads, and bounded GPU training. Worked in .claude/wt/cat-tracking on video/cat-tracking; main application code unchanged.
+- Added a local torchvision cat detector backend, page 07 checkpoint field, reproducible Oxford Pet training script, four regression tests, and report docs/video-plan/reports/cat-tracking.md. Whole-animal boxes derive from trimaps; dog negatives; disjoint image splits; validation selects epochs; baseline/test AP50 reports; batch 2, workers 0, GPU allocator cap 55%.
+- CPU verified cpu 0. Targeted suite: 219 passed in 87.73s (0:01:27). pip check: No broken requirements found. git diff --check clean. Earlier default-temp test run had 59 passed, 160 setup errors (sandbox temp access); an attempted --basetemp lacked its parent (2 passed, 1 error); creating the workspace artifact parent resolved this without changing tests.
+- Full CPU suite launched with session 59111, log .claude/wt/cat-tracking/.artifacts/cat-full-pytest.log; still running at handoff, no final summary yet. Do not assume it passed or run another full suite concurrently.
+- Oxford original and alternate thor dataset hosts both failed with WinError 10060 after sandbox network escalation. Stopped retries under the two-attempt rule and asked user whether to proceed using a checksum-verified mirror. No dataset, trained checkpoint, GPU training, demo download, or real video tracking produced.
+- Next: receive direction on mirror; inspect full-suite log; obtain data with known MD5 verification; train/evaluate; run and inspect two independent cat videos sequentially; review and merge only when checks pass. No pushes.
+
+### 2026-11-01 - Cat tracking cancelled by user
+- User said nvm; stopped task-owned train_cat_detector.py processes and removed task lock. Existing code and downloaded artifacts preserved.
+- No trained checkpoint or completed video tracking was produced in this session. Main checkout contains prepared detector/page07 code; full prior CPU suite: 1662 passed, 5 skipped, 92 warnings in 2017.52s; follow-ups: 152 passed in 66.91s and 2 passed in 1.08s.
+- Next: resume only if requested; inspect data preparation before starting training.
+
+### 2026-11-01 - Cat experiment resumed at user's request (verification running)
+- Five bounded GPU epochs completed on 897 training / 239 validation / 300 test photos, seed 42; epoch 4 selected by validation AP50. The original test cohort is unchanged. Four explicit missing/foreground-free annotation exclusions are recorded in .artifacts/cat-tracking/run01/report.json and splits.json.
+- Test AP50 baseline 0.991724606 versus trained 0.993064677; precision@0.5 0.865454545 versus 0.963562753; recall@0.5 0.991666667 for both (238/240 cats detected, 37 versus 9 false positives). Single seed and photo subset; no significance or video accuracy claim.
+- Two real cat videos processed sequentially with each checkpoint; trained overlays saved in .artifacts/cat-tracking/trained-video01 and trained-video02. Track IDs fragment (3 each), so these are not unique-animal counts. Contact sheets inspected; attribution/hash manifests saved. Main page07 discovers installed saved_models/cat-detector/best.pt without importing torch.
+- Code eb18fef on video/cat-tracking; reviews V-054..V-056 accepted code fix, saved splits/checkpoints and experiment report. Preflight/mirror tests: 3 passed in 0.17s; earlier combined targeted run: 9 passed in 11.86s. Pip check clean.
+- First full CPU attempt stopped with disk-full write failures and no final pytest summary. Approved cleanup removed only about 10.8 GiB of generated old/failed pytest temp folders, preserving logs, data, checkpoints and videos. Full CPU rerun active in tool session 33964; .claude/wt/cat-tracking/.artifacts/resume-check/full-pytest.log and full-results.xml. Do not claim completion yet or launch a duplicate full suite.
+- Next: finish full suite, record actual summary, commit report/handoff and release LOCK. No merge or push performed; main's prepared cat integration edits preserved.
+
+
+### 2026-11-02 - Cat experiment verification complete (Codex)
+- Continued the cat-tracking handoff in .claude/wt/cat-tracking, branch video/cat-tracking. The previous full-suite process was no longer running and its XML was incomplete; ran one fresh full CPU suite with CUDA_VISIBLE_DEVICES=-1, OMP_NUM_THREADS=2 and MKL_NUM_THREADS=2. Device preflight: cpu 0.
+- Full pytest summary: 1668 passed, 5 skipped, 92 warnings in 2076.31s (0:34:36). Exit code 0; includes seed_study tests. Log/JUnit: .claude/wt/cat-tracking/.artifacts/final-check-20261102/pytest.log and results.xml. pip check: No broken requirements found. Existing tests were not weakened or newly skipped.
+- Finished the reviewed experiment report with the actual verification result. Added six page 07 usage steps to desktop/README.md. Main checkout's prepared integration now includes the reviewed training-data validation/exclusion fixes and their regression tests, plus the same usage guide.
+- Rechecked installed saved_models/cat-detector/best.pt against experiment.json (matching SHA256) and existence of all four baseline/trained video overlays. Existing V-054 through V-056 cover implementation, saved cohorts/checkpoints, report and real-video observations. No new training, GPU jobs or downloads in this continuation.
+- Explained how to use Trained cat detector with prompt cat, Frames step 1 and Find, track and count. Live GUI demonstration was unavailable because the computer-use native pipe was absent; no new live-GUI verification is claimed.
+- Cat experiment verification is complete. No merge or push in this continuation; main's prepared integration and other existing files are preserved. Next project item remains R1's V-052 fix/review round, followed by R2's V-053 fix/review round; broader B2/B3 GPU gates remain open as recorded in PLAN.md. Do not infer tracking accuracy or unique-animal counts from unlabelled demo videos.
+- Saved the final report, page 07 guide and task handoff in local commit af441fe (video/cat-tracking).

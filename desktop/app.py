@@ -1820,7 +1820,7 @@ def build_ui() -> None:
     on_config_changed()
 
 
-def run_gui() -> None:
+def run_gui(initial_page: str = 'overview', initial_video: Path | None = None) -> None:
     dpg.create_context()
     try:
         dpg.configure_app(manual_callback_management=True)
@@ -1834,6 +1834,10 @@ def run_gui() -> None:
         dpg.setup_dearpygui()
         dpg.set_primary_window("main_window", True)
         dpg.show_viewport()
+        on_nav_selected(user_data='analyse' if initial_video is not None else initial_page)
+        if initial_video is not None:
+            dpg.set_value(analyse_page.VIDEO_INPUT, str(initial_video.resolve()))
+            analyse_page.on_load_video()
         while dpg.is_dearpygui_running():
             dpg.run_callbacks(dpg.get_callback_queue())
             update_layout()
@@ -1945,6 +1949,9 @@ def main() -> int:
     parser.add_argument('--data', type=Path, help='Raw dataset for the self-test.')
     parser.add_argument('--modality', choices=gc.MODALITIES, default='images')
     parser.add_argument('--outdir', type=Path, default=Path('desktop-smoke-results'))
+    parser.add_argument('--page', choices=[key for key, _ in NAV_ITEMS], default='overview',
+                        help='Workspace page to open.')
+    parser.add_argument('--video', type=Path, help='Open page 07 and preview this video.')
     args = parser.parse_args()
     if args.self_test:
         if args.data is None:
@@ -1952,7 +1959,7 @@ def main() -> int:
         if args.modality not in ('images', 'video'):
             parser.error('--self-test uses a raw images or video folder. Test table modalities through the normal app.')
         return run_self_test(args.data, args.modality, args.outdir)
-    run_gui()
+    run_gui(initial_page=args.page, initial_video=args.video)
     return 0
 
 

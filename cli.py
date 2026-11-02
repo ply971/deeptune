@@ -5,7 +5,7 @@ from typing import Optional
 from utils import UseCase, RunType, get_model_architecture, is_native_video_architecture, lora_rank_ignored_reason, set_seed
 from trainers.param_count import parse_param_count
 from handlers.video_args import VIDEO_DATA_ARG_NAMES, add_video_data_arguments
-from handlers.video_arch import VIDEO_ARCH_ARG_NAMES, add_video_arch_arguments, flag_was_given, pooling_argument, pooling_from_args, resolve_model_version, spec_num_frames
+from handlers.video_arch import PROBE_ARCHITECTURES, VIDEO_ARCH_ARG_NAMES, add_video_arch_arguments, flag_was_given, parse_pooling_spec, pooling_argument, pooling_from_args, resolve_model_version, spec_num_frames
 from handlers.training_args import TRAINING_BASICS_ARG_NAMES, add_training_basics_arguments, apply_config_defaults
 from handlers.evaluation_args import (DFANALYZE_ARG_NAMES, DFANALYZE_EMBED_ARG_NAMES, EVALUATION_ARG_NAMES, add_dfanalyze_arguments,
                                       add_evaluation_arguments)
@@ -305,6 +305,48 @@ Other PEFT models ignore this flag and use --embed_size as their rank.""")
             self.num_frames = spec_num_frames(self.pooling, self.num_frames)
         if hasattr(self, 'model_version'):
             self.model_version = resolve_model_version(self, is_native_video_architecture)
+        self._apply_hub_backbone_rules(parsed_args, argv)
+
+    def _apply_hub_backbone_rules(self, parsed_args, argv):
+        """V-JEPA 2, VideoMAE, SigLIP 2, DINOv3 (handlers/video_backbones.py): the licence, and the default recipe."""
+        from handlers.video_backbones import accept_weights_licences, check_frame_count, hub_backbone, require_weights_choice
+        accept_weights_licences(self.accept_weights_licence)
+        version = getattr(self, 'model_version', None)
+        info = hub_backbone(version)
+        if self.unfreeze_backbone:
+            if info is None or not info.frozen_by_default:
+                self.parser.error(f'--unfreeze_backbone does nothing on {version}: it is not frozen by default. Leave the flag out.')
+            if getattr(self, 'freeze_backbone', False) or getattr(self, 'use_peft', False):
+                self.parser.error('--unfreeze_backbone trains the whole encoder, so it cannot go with --freeze-backbone or --use-peft.')
+        if info is None:
+            return
+        try:
+            require_weights_choice(version)
+            check_frame_count(version, parsed_args.num_frames)
+        except ValueError as exc:
+            self.parser.error(str(exc))
+        if info.kind == 'video':
+            self._apply_probe_rule(version, argv)
+        if (info.frozen_by_default and hasattr(self, 'freeze_backbone') and not self.freeze_backbone
+                and not self.unfreeze_backbone and not getattr(self, 'use_peft', False)):
+            print(f'{version}: the backbone stays frozen (the default recipe). --unfreeze_backbone or --use-peft train it.')
+            self.freeze_backbone = True
+
+    def _apply_probe_rule(self, version, argv):
+        """Clip models read their tokens through a probe. The default --pooling is replaced, and the run says so. An explicit
+        frame pooling is refused: an ablation of `mean` against the probe would otherwise compare two identical models."""
+        advice = f'{version} reads its tokens through a probe; for a plain mean of them use --video_arch linear_probe.'
+        if self.video_arch is not None:
+            if self.video_arch not in PROBE_ARCHITECTURES:
+                self.parser.error(f'--video_arch {self.video_arch} does not apply. {advice}')
+            return
+        if parse_pooling_spec(self.pooling)[0] in PROBE_ARCHITECTURES:
+            return
+        if self.pooling != 'mean' or flag_was_given(self.parser, argv, 'pooling'):
+            self.parser.error(f'--pooling {self.pooling} does not apply. {advice}')
+        self.pooling = pooling_from_args({'video_arch': 'attentive_probe', 'pooling': 'mean', 'probe_width': self.probe_width,
+                                          'probe_depth': self.probe_depth, 'probe_heads': self.probe_heads})
+        print(f'{version}: using the head {self.pooling} (the default recipe). --video_arch linear_probe is the plain mean of the tokens.')
 
     def _add_tabpfn_train_args(self):
         p = self.parser
