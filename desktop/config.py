@@ -22,6 +22,7 @@ import pandas as pd
 # Torch-free (the GUI process must never import torch); see trainers/param_count.py.
 from trainers.param_count import param_count_issue
 from handlers.video_arch import parse_pooling_spec
+from handlers.video_backbones import is_hub_video_backbone
 
 # ---------------------------------------------------------------------------
 # What each modality actually accepts as --model_version, and what each
@@ -58,7 +59,9 @@ MODEL_VERSIONS_BY_MODALITY: dict[str, list[str]] = {
     "video": [*VIDEO_FRAME_MODEL_VERSIONS, *VIDEO_NATIVE_MODEL_VERSIONS],
 }
 # Accepted from the command line, not offered in the GUI: SigLIP, and the untrained tiny models for tests and smoke runs.
-VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d"]
+VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d", "siglip2_b16", "siglip2_tiny",
+                                            "vjepa2_vitl", "vjepa2_tiny", "videomae_b16", "videomae_v2_b16", "videomae_tiny",
+                                            "dinov3_vitb16", "dinov3_tiny"]
 
 MODALITIES = ["images", "text", "tabular", "timeseries", "video"]
 
@@ -146,7 +149,11 @@ def build_argv(cfg: RunConfig) -> list[str]:
         argv += ["--trainable_params", cfg.trainable_params.strip()]
 
     if cfg.modality == "video":
-        argv += ["--num_frames", str(cfg.num_frames), "--pooling", cfg.pooling]
+        argv += ["--num_frames", str(cfg.num_frames)]
+        # Clip models (V-JEPA 2, VideoMAE) read tokens through a probe, and cli.py refuses an explicit frame pooling on them.
+        # The GUI's default 'mean' is not a choice the user made, so leave it out and let the CLI apply the probe recipe.
+        if not (cfg.pooling == "mean" and is_hub_video_backbone(cfg.model_version)):
+            argv += ["--pooling", cfg.pooling]
 
     if cfg.modality == "tabular" and cfg.model_version == "gandalf":
         argv += ["--type", cfg.gandalf_type]

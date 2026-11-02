@@ -29,7 +29,8 @@ from src.video.video3d_peft import adjustedPeftVideo3D
 from src.video.frame_pool import VideoFramePoolClassifier
 from src.video.single_frame import VideoSingleFrameClassifier
 from src.video.temporal import build_temporal_model
-from handlers.video_arch import TEMPORAL_ARCHITECTURES, parse_pooling_spec
+from handlers.video_arch import PROBE_ARCHITECTURES, TEMPORAL_ARCHITECTURES, parse_pooling_spec
+from handlers.video_backbones import is_hub_frame_backbone, is_hub_video_backbone
 
 from helpers import fixed_seed
 
@@ -136,8 +137,10 @@ def get_model_architecture(model_version: str):
     # follow the "<family><depth>" naming convention (e.g. "resnet50") the
     # regex below expects, so they're matched directly against the known set
     # rather than falling through to it.
-    if model_version in VIDEO3D_ARCHITECTURES or model_version == "dummy_video3d":
+    if is_native_video_architecture(model_version):
         return model_version
+    if is_hub_frame_backbone(model_version):  # siglip2_b16, dinov3_vitb16: the same frame-backbone class
+        return "siglip"
     match = re.match(r"^[a-zA-Z]+", model_version)
     if match:
         return match.group()
@@ -151,7 +154,7 @@ def is_native_video_architecture(model_version: str) -> bool:
     model built on one of the 2D image backbones under src/vision/ (e.g.
     "resnet50").
     """
-    return model_version in VIDEO3D_ARCHITECTURES or model_version == "dummy_video3d"
+    return model_version in VIDEO3D_ARCHITECTURES or model_version == "dummy_video3d" or is_hub_video_backbone(model_version)
 
 
 def get_video_model_cls(model_version: str, use_peft: bool = False) -> Type[nn.Module]:
@@ -201,6 +204,13 @@ def build_video_model(
     equals embed_size, as in runs recorded before --lora_rank existed. The other
     PEFT models tie the rank to embed_size and ignore it.
     """
+    if is_hub_video_backbone(model_version):  # V-JEPA 2, VideoMAE: a transformers encoder and a probe
+        from src.video.hub_backbones import build_hub_video_model
+        return build_hub_video_model(model_version, num_classes, freeze_backbone, mode, use_peft, pooling, embed_size, lora_rank)
+    if parse_pooling_spec(pooling)[0] in PROBE_ARCHITECTURES:
+        raise ValueError(f"{pooling} applies to clip models with their own tokens (V-JEPA 2, VideoMAE). For {model_version}, "
+                         "train a probe on cached features: extract_features.py, then train_feature_head.py.")
+
     model_cls = get_video_model_cls(model_version, use_peft=use_peft)
 
     if lora_rank is not None and not (use_peft and is_native_video_architecture(model_version)):

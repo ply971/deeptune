@@ -33,7 +33,11 @@ from inference.data import (
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description='Run a trained DeepTune model on new data.', allow_abbrev=False)
     p.add_argument('--modality', required=True, choices=['images', 'text', 'tabular', 'timeseries', 'video'])
-    p.add_argument('--checkpoint', required=True, type=Path, help="The run's checkpoint (file or directory, per modality).")
+    p.add_argument('--checkpoint', type=Path, default=None, help="The run's checkpoint (file or directory, per modality). Required unless --ensemble is given.")
+    p.add_argument('--ensemble', nargs='+', type=Path, default=None, metavar='RUN',
+                   help="Video only: average class probabilities over these trained runs (checkpoint files or their folders), each with the settings it recorded, instead of --checkpoint.")
+    p.add_argument('--allow_unverified_labels', action='store_true',
+                   help="With --ensemble: average runs even if what their class indices mean cannot be verified. The result says so.")
     p.add_argument('--data', required=True, type=Path, help='New data: a folder (images/video) or a CSV/XLSX/parquet file.')
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--batch_size', type=int, default=16)
@@ -72,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--history_df', nargs='*', type=Path, default=[],
                    help="The original run's train/val split parquet files, supplying history for DeepAR.")
     return p
+
+
+# Each member of an ensemble uses what its run recorded, so any other flag would be ignored: such flags are refused.
+ENSEMBLE_FLAGS = {'modality', 'ensemble', 'data', 'out', 'batch_size', 'label_mapping', 'accept_weights_licence', 'allow_unverified_labels'}
 
 
 def _load_new_data(args: argparse.Namespace):
@@ -162,10 +170,29 @@ def _required_stub() -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.ensemble:
+        if args.modality != 'video':
+            parser.error('--ensemble is for the video modality.')
+        ignored = sorted({token.split('=', 1)[0][2:] for token in argv if token.startswith('--')} - ENSEMBLE_FLAGS)
+        if ignored:
+            parser.error(f'--ensemble runs each member with the settings it recorded, so these flags would be ignored: --{", --".join(ignored)}.')
+        from inference.ensemble import ensemble_runs
+        ensemble_runs(args.ensemble, args.data, args.out, args.batch_size, args.label_mapping, args.accept_weights_licence, args.allow_unverified_labels)
+        return 0
+    if args.checkpoint is None:
+        parser.error('--checkpoint is required unless --ensemble is given.')
+    if args.allow_unverified_labels:
+        parser.error('--allow_unverified_labels only applies with --ensemble.')
     args.out.mkdir(parents=True, exist_ok=True)
     if args.modality == 'video':
         used = apply_recorded_video_settings(args, argv)
+        from handlers.video_backbones import accept_weights_licences, is_hub_video_backbone
+        accept_weights_licences(args.accept_weights_licence)  # or the acceptance the run recorded
+        accept_weights_licences(_recorded_run_arguments(args.checkpoint).get('accept_weights_licence'))
+        if args.model_version and is_hub_video_backbone(args.model_version) and args.pooling == 'mean' and 'pooling' in {t.split('=', 1)[0][2:] for t in argv}:
+            parser.error(f'--pooling mean does not apply to {args.model_version}: it reads its tokens through a probe. Use the spec its run recorded.')
         if args.video_arch is not None:  # --video_arch given here; a recorded run's --pooling already holds its architecture
             from utils import is_native_video_architecture
             args.pooling = pooling_from_args(args, num_frames_given='num_frames' in {t.split('=', 1)[0][2:] for t in argv})
@@ -221,6 +248,12 @@ def main(argv: list[str] | None = None) -> int:
 
     predictions_path = args.out / 'predictions.csv'
     predictions.to_csv(predictions_path, index=False)
+    if args.modality == 'video':  # which weights these predictions rest on
+        from src.video.feature_backbones import run_weight_licence
+        from handlers.video_backbones import weights_revision
+        (args.out / 'inference_run.json').write_text(json.dumps(
+            {'checkpoint': str(args.checkpoint), 'model_version': args.model_version, 'weights_licence': run_weight_licence(args.model_version),
+             'weights_revision': weights_revision(args.model_version)}, indent=2), encoding='utf-8')
     print(f'Wrote {len(predictions)} prediction(s) to {predictions_path}')
 
     # summarize_predictions works off column names ('correct' for

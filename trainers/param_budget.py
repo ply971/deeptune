@@ -47,6 +47,11 @@ WRAPPER_PREFIXES = ("backbone.",)
 LORA_MARKER = "lora_"
 
 
+def _head_size_advice(model: nn.Module) -> str:
+    """The flags that shape this model's head; a model with other flags says so in `head_size_advice`."""
+    return getattr(model, "head_size_advice", "shrink the head with --added_layers 1 or a smaller --embed_size")
+
+
 def parameter_group(name: str) -> str:
     """'lora', 'backbone' or 'head' for a parameter name from named_parameters()."""
     if LORA_MARKER in name:
@@ -165,8 +170,7 @@ def apply_top_down_budget(model: nn.Module, budget: int) -> dict:
     if head_size > budget:
         raise ValueError(
             f"The new head alone has {head_size:,} parameters, more than the trainable-parameter "
-            f"budget of {budget:,}. Raise the budget, or shrink the head with --added_layers 1 "
-            f"or a smaller --embed_size."
+            f"budget of {budget:,}. Raise the budget, or {_head_size_advice(model)}."
         )
 
     for _, param in named:
@@ -256,7 +260,7 @@ def choose_lora_rank(build_fn: Callable[[int], nn.Module], budget: int, start_ra
         raise ValueError(
             f"Even LoRA rank 1 needs {count_1:,} trainable parameters, more than the budget of "
             f"{budget:,}, because that count includes the new head. Raise --trainable_params to at least "
-            f"{count_1:,}, or shrink the head with --added_layers 1 or a smaller --embed_size."
+            f"{count_1:,}, or {_head_size_advice(model)}."
         )
     del model
     model, count_2 = build(2)

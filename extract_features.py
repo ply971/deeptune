@@ -110,8 +110,10 @@ class _RgbPreprocess:
         from src.video.video3d import _KINETICS400_WEIGHTS
         # Each native model has its own statistics (r3d 0.43/0.22, mvit 0.45/0.225, swin3d ImageNet). dummy_video3d is r3d_18.
         preset = _KINETICS400_WEIGHTS[version if version in _KINETICS400_WEIGHTS else 'r3d_18'].transforms() if native else None
-        self.mean = torch.tensor(preset.mean if preset else IMAGENET_MEAN).view(1, 3, 1, 1)
-        self.std = torch.tensor(preset.std if preset else IMAGENET_STD).view(1, 3, 1, 1)
+        from handlers.video_backbones import hub_backbone
+        hub = hub_backbone(version)
+        self.mean = torch.tensor(hub.mean if hub else preset.mean if preset else IMAGENET_MEAN).view(1, 3, 1, 1)
+        self.std = torch.tensor(hub.std if hub else preset.std if preset else IMAGENET_STD).view(1, 3, 1, 1)
         self.clip_transform = self.frame_transform = None
         if input_size is None:
             from datasets.video_datasets import native_video_transform
@@ -136,18 +138,28 @@ class _RgbPreprocess:
 def crop_window(version: Optional[str], input_size: Optional[int], width: int, height: int) -> tuple[float, float, float, float]:
     """(x0, x1, y0, y1), as fractions of the display frame: the part `_RgbPreprocess` keeps for this backbone.
     A size override and frame backbones squash the whole frame; native presets resize, then centre-crop."""
+    from handlers.video_backbones import hub_backbone
     from src.video.video3d import _KINETICS400_WEIGHTS, VIDEO3D_ARCHITECTURES
-    if input_size is not None or version not in VIDEO3D_ARCHITECTURES:
+    hub = hub_backbone(version)
+    if input_size is not None or (version not in VIDEO3D_ARCHITECTURES and (hub is None or hub.resize_short is None)):
         return FULL_FRAME
-    preset = _KINETICS400_WEIGHTS[version].transforms()
-    crop_h, crop_w = preset.crop_size
-    if len(preset.resize_size) == 2:
-        resized_h, resized_w = preset.resize_size
-    elif width <= height:  # one number is the short side, with torchvision's rounding
-        resized_w, resized_h = preset.resize_size[0], int(preset.resize_size[0] * height / width)
+    if hub is not None:
+        crop_h, crop_w = hub.input_size, hub.input_size
+        resize_size = [hub.resize_short]
     else:
-        resized_h, resized_w = preset.resize_size[0], int(preset.resize_size[0] * width / height)
-    top, left = int(round((resized_h - crop_h) / 2.0)), int(round((resized_w - crop_w) / 2.0))
+        preset = _KINETICS400_WEIGHTS[version].transforms()
+        crop_h, crop_w = preset.crop_size
+        resize_size = preset.resize_size
+    if len(resize_size) == 2:
+        resized_h, resized_w = resize_size
+    elif width <= height:  # one number is the short side, with torchvision's rounding
+        resized_w, resized_h = resize_size[0], int(resize_size[0] * height / width)
+    else:
+        resized_h, resized_w = resize_size[0], int(resize_size[0] * width / height)
+    if hub is not None:  # the same rounding as HubClipTransform
+        top, left = (resized_h - crop_h) // 2, (resized_w - crop_w) // 2
+    else:
+        top, left = int(round((resized_h - crop_h) / 2.0)), int(round((resized_w - crop_w) / 2.0))
     return left / resized_w, (left + crop_w) / resized_w, top / resized_h, (top + crop_h) / resized_h
 
 
@@ -353,6 +365,7 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
     from datasets.video_io import MotionVectorsUnavailable, VideoReader, describe_source, source_fingerprint
     if device is None:
         from options import DEVICE as device
+    from handlers.video_backbones import require_weights_choice
     streams = [name for name in STREAMS if name in streams]
     if not streams:
         raise ValueError(f'Choose at least one stream from {", ".join(STREAMS)}.')
@@ -363,6 +376,8 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
     for stream in streams:
         backbone = model_version if stream == 'rgb' else motion_backbone
         check_feature_input(stream, backbone, feature_weights == 'pretrained', feature_input_size, snippet_frames)
+        if feature_weights == 'pretrained':  # opt-in weights are refused here, before anything is written
+            require_weights_choice(backbone)
         config = {'format': FORMAT_VERSION, 'stream': stream, 'snippet_frames': snippet_frames, 'stride': stride,
                   'backbone': backbone, 'weights': feature_weights,
                   'input_size': feature_input_size, 'token_grid': list(grid) if grid else None,
@@ -399,7 +414,8 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
             'variable_fps': bool(meta.variable_fps), 'snippet_frames': snippet_frames, 'stride': stride,
             'num_snippets': len(stored), 'last_snippet_valid_frames': info['last_snippet_valid_frames'],
             'backbone': extractor.config['backbone'], 'weights': extractor.backbone.weights_name,
-            'weights_licence': extractor.backbone.weights_licence, 'input_size': extractor.input_size,
+            'weights_licence': extractor.backbone.weights_licence, 'weights_revision': getattr(extractor.backbone, 'weights_revision', None),
+            'input_size': extractor.input_size,
             'field_of_view': list(crop_window(extractor.config.get('geometry_backbone', extractor.config['backbone']),
                                               extractor.config['input_size'], meta.width, meta.height)),
             'dim': int(stored.shape[-1]), 'token_grid': list(extractor.stored_grid) if extractor.stored_grid else None,
@@ -487,6 +503,15 @@ def main(argv=None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(levelname)s | %(message)s')
+    from handlers.video_backbones import WeightsLicenceNotAccepted, accept_weights_licences, require_weights_choice
+    accept_weights_licences(args.accept_weights_licence)
+    if args.feature_weights == 'pretrained':
+        try:
+            for name in (args.model_version, args.motion_backbone if 'motion' in args.streams else None):
+                if name:
+                    require_weights_choice(name)
+        except WeightsLicenceNotAccepted as exc:
+            parser.error(str(exc))
     Path(args.out).mkdir(parents=True, exist_ok=True)
     report = extract_features(args.data, args.out, streams=args.streams, model_version=args.model_version,
                               motion_backbone=args.motion_backbone, feature_weights=args.feature_weights,

@@ -13,15 +13,19 @@ code, cli_arguments.json, the desktop Test page and infer.py already pass along:
 """
 from __future__ import annotations
 
+from handlers.video_backbones import add_weights_licence_argument
+
 FRAME_POOLINGS = ('mean', 'attention', 'single_frame')
 TEMPORAL_ARCHITECTURES = ('late_fusion', 'early_fusion', 'tsm', 'cnn_rnn', 'temporal_transformer', 'two_stream')
-VIDEO_ARCH_CHOICES = ('frame_pool', 'single_frame', 'slow_fusion', *TEMPORAL_ARCHITECTURES)
+# The heads of clip models with their own tokens (V-JEPA 2, VideoMAE): src/video/hub_backbones.py.
+PROBE_ARCHITECTURES = ('attentive_probe', 'linear_probe')
+VIDEO_ARCH_CHOICES = ('frame_pool', 'single_frame', 'slow_fusion', *TEMPORAL_ARCHITECTURES, *PROBE_ARCHITECTURES)
 # Karpathy et al.'s slow fusion is a 3D CNN: --video_arch slow_fusion selects this native model.
 SLOW_FUSION_DEFAULT = 'r2plus1d_18'
 
 _OPTION_TYPES = {'num_frames': int, 'tsm_fold_div': int, 'rnn_type': str, 'rnn_hidden': int, 'rnn_layers': int,
                  'bidirectional': bool, 'tt_layers': int, 'tt_heads': int, 'tt_dim': int, 'fusion': str,
-                 'motion_length': int}
+                 'motion_length': int, 'probe_width': int, 'probe_depth': int, 'probe_heads': int}
 ARCH_OPTIONS = {
     'late_fusion': (),
     'early_fusion': ('num_frames',),
@@ -29,16 +33,19 @@ ARCH_OPTIONS = {
     'cnn_rnn': ('rnn_type', 'rnn_hidden', 'rnn_layers', 'bidirectional'),
     'temporal_transformer': ('num_frames', 'tt_layers', 'tt_heads', 'tt_dim'),
     'two_stream': ('num_frames', 'fusion', 'motion_length'),
+    'attentive_probe': ('probe_depth', 'probe_heads', 'probe_width'),
+    'linear_probe': (),
 }
 _ALLOWED_VALUES = {'rnn_type': ('lstm', 'gru'), 'fusion': ('avg', 'fc')}
 # What an option flag means when neither the flag nor a recorded spec sets it. The flags themselves default to None,
 # so a recorded spec can tell "not given" from "given with the default value".
 ARCH_OPTION_DEFAULTS = {'tsm_fold_div': 8, 'rnn_type': 'lstm', 'rnn_hidden': 256, 'rnn_layers': 1, 'bidirectional': False,
-                        'tt_layers': 2, 'tt_heads': 4, 'tt_dim': 256, 'fusion': 'avg'}
+                        'tt_layers': 2, 'tt_heads': 4, 'tt_dim': 256, 'fusion': 'avg', 'probe_width': 256, 'probe_depth': 1, 'probe_heads': 4}
 
 # Everything add_video_arch_arguments adds; recorded in cli_arguments.json.
 VIDEO_ARCH_ARG_NAMES = ('video_arch', 'tsm_fold_div', 'rnn_type', 'rnn_hidden', 'rnn_layers', 'bidirectional',
-                        'tt_layers', 'tt_heads', 'tt_dim', 'fusion', 'motion_length', 'motion_cache')
+                        'tt_layers', 'tt_heads', 'tt_dim', 'fusion', 'motion_length', 'motion_cache',
+                        'probe_width', 'probe_depth', 'probe_heads', 'accept_weights_licence', 'unfreeze_backbone')
 # Sources of the motion stream, chosen with --motion_source (which also names the --temporal_sampling motion curve).
 CLIP_MOTION_SOURCES = ('farneback', 'mv')
 _TWO_STREAM_SOURCE = {'auto': 'farneback', 'farneback': 'farneback', 'mv': 'mv', 'codec': 'mv'}
@@ -66,8 +73,8 @@ def parse_pooling_spec(spec: str) -> tuple[str, dict]:
     name, _, rest = str(spec).partition(':')
     if name in FRAME_POOLINGS and not rest:
         return name, {}
-    if name not in TEMPORAL_ARCHITECTURES:
-        raise ValueError(f'Unknown pooling {spec!r}; choose one of {", ".join(FRAME_POOLINGS + TEMPORAL_ARCHITECTURES)}.')
+    if name not in TEMPORAL_ARCHITECTURES + PROBE_ARCHITECTURES:
+        raise ValueError(f'Unknown pooling {spec!r}; choose one of {", ".join(FRAME_POOLINGS + TEMPORAL_ARCHITECTURES + PROBE_ARCHITECTURES)}.')
     options = {}
     for item in filter(None, rest.split(',')):
         key, separator, value = item.partition('=')
@@ -81,8 +88,8 @@ def format_pooling_spec(arch: str, **options) -> str:
     """The inverse of parse_pooling_spec. Options the architecture does not use, and None, are dropped."""
     if arch in FRAME_POOLINGS:
         return arch
-    if arch not in TEMPORAL_ARCHITECTURES:
-        raise ValueError(f'Unknown architecture {arch!r}; choose one of {", ".join(TEMPORAL_ARCHITECTURES)}.')
+    if arch not in TEMPORAL_ARCHITECTURES + PROBE_ARCHITECTURES:
+        raise ValueError(f'Unknown architecture {arch!r}; choose one of {", ".join(TEMPORAL_ARCHITECTURES + PROBE_ARCHITECTURES)}.')
     parts = []
     for key in sorted(ARCH_OPTIONS[arch]):
         value = options.get(key)
@@ -193,7 +200,9 @@ slow_fusion: a native 3D CNN (--model_version if it names one, else r2plus1d_18)
 tsm: Temporal Shift Module in each residual block (ResNet family).
 cnn_rnn: per-frame embeddings into an LSTM or GRU.
 temporal_transformer: per-frame embeddings into a small transformer with a CLS token.
-two_stream: RGB middle frame + stacked motion fields (--motion_source; ResNet family).""")
+two_stream: RGB middle frame + stacked motion fields (--motion_source; ResNet family).
+attentive_probe: a learned query reads the encoder's tokens (V-JEPA 2 and VideoMAE; their default).
+linear_probe: the mean of the tokens, then a linear layer (V-JEPA 2 and VideoMAE).""")
     g.add_argument('--tsm_fold_div', type=_positive_int, default=None,
                    help='tsm: shift 1/N of the channels forward and 1/N backward (default 8).')
     g.add_argument('--rnn_type', choices=_ALLOWED_VALUES['rnn_type'], default=None, help='cnn_rnn: recurrent cell (default lstm).')
@@ -210,4 +219,10 @@ two_stream: RGB middle frame + stacked motion fields (--motion_source; ResNet fa
                    help='two_stream: motion fields stacked per clip, taken around the middle frame (default: --num_frames).')
     g.add_argument('--motion_cache', default=None, metavar='DIR',
                    help='two_stream: keep motion fields in this folder, keyed by video hash and parameters (default: off).')
+    g.add_argument('--probe_width', type=_positive_int, default=None, help='attentive_probe: token width, a multiple of --probe_heads (default 256).')
+    g.add_argument('--probe_depth', type=_positive_int, default=None, help='attentive_probe: cross-attention blocks, 1 to 4 (default 1).')
+    g.add_argument('--probe_heads', type=_positive_int, default=None, help='attentive_probe: attention heads (default 4).')
+    g.add_argument('--unfreeze_backbone', action='store_true',
+                   help='V-JEPA 2 and VideoMAE: train the whole encoder. They are frozen by default; see the memory notes in the README.')
+    add_weights_licence_argument(g)
     return g
