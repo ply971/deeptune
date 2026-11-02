@@ -689,6 +689,36 @@ What keeps the numbers honest:
 
 Embedding script: add `--export_dfanalyze` to `python -m embed.video.embed`, with `--dfanalyze_train_df` (needed for `--dfanalyze_dims`) and `--dfanalyze_val_df`. With `--use_case pretrained`, embeddings now come from the bare backbone at its own width, ignoring `--added_layers` and `--embed_size`. Before, they could be the output of a randomly initialised head, so re-extract any you made that way. `weights_licence` in the records states the terms of those weights: some `DEFAULT` weights are non-commercial, such as `vit_h_14`'s.
 
+## Automatic model selection (video)
+
+`select_model.py` trains every candidate of a grid with grouped k-fold cross-validation, ranks them, then refits the winner and scores it once on a sealed test set.
+
+```powershell
+# Check the grid and print the counts, without training anything
+python select_model.py --df clips.parquet --out search --backbones resnet18 r3d_18 vjepa2_vitl --train_modes frozen lora:8 --learning_rates 1e-4 1e-3 --dry_run
+# Run it: a short timed pilot, the estimate, then the search (refused over --max_hours unless --yes)
+python select_model.py --df clips.parquet --out search --backbones resnet18 r3d_18 vjepa2_vitl --train_modes frozen lora:8 --learning_rates 1e-4 1e-3 --k 5
+```
+
+**Exhaustive grids explode.** The number of candidates is the product of the axis lengths, and every candidate trains k times:
+
+    candidates = |backbones| x |video_archs| x |poolings| x |train_modes| x |learning_rates| x |num_frames|
+    trainings  = runnable candidates x k + 1 final refit
+
+Three backbones, two train modes and two learning rates with k = 5 are already 12 x 5 + 1 = 61 trainings. On the 8 GB laptop each can take minutes to hours. The counts and a time estimate are always printed before anything trains.
+
+- **Axes.** `--backbones`, `--video_archs`, `--poolings`, `--train_modes`, `--learning_rates`, `--num_frames`, or a JSON file with these keys (`--grid`; a flag replaces the same key). `default` leaves the deeptune.py flag out. Train modes: `frozen` (head only), `full`, `lora:R` (LoRA rank R) and `partial:COUNT` (the head plus the top layers within COUNT parameters, `--trainable_params`).
+- **Checks.** Every candidate's deeptune.py command line goes through deeptune.py's own parser, and its model is built once on the CPU by the trainer's own builder (`--preflight full`, the default). Invalid combinations are listed as **refused** with deeptune.py's reason. Candidates over `--max_trainable_params`, or over the GPU's memory by a rough estimate (weights, gradients and Adam state, plus measured activations; `handlers/model_selection/checks.py`), are listed as **skipped**. None is dropped silently: all are in `candidates.csv`, the ledger and the leaderboard. The preflight loads each backbone's weights, downloading them if they are not cached; `--preflight off` skips it.
+- **Time estimate.** The cheapest candidate runs for 1 epoch on 2 folds, and that time is scaled to each candidate by its FLOP-based cost, rows, k and epochs (`handlers/model_selection/estimate.py`). It is rough. It leans high, since early stopping (`--early_stopping_patience`, default 3) can only shorten runs. `--dry_run` trains nothing, not even the pilot. `--estimate_only` runs the pilot and stops. Over `--max_hours` (default 8), or over 50 trainings with no estimate, the search refuses to start unless `--yes`.
+- **Sealed test set.** Before anything trains, `--test_fraction` (default 0.2) of the groups is set aside, stratified and grouped (the `group` column, or `--grouper`), with `--seed`. The record is in `data/split.json`. Candidates get only `data/dev.parquet`, and run with `--cv_only`: grouped k-fold over every development row, no test split, no final model. Only the winner trains once more, on all development rows, and is scored once on `data/sealed_test.parquet` through `--test_df`.
+- **What the numbers mean.** The leaderboard ranks by the mean metric over folds (`--metric`, default `accuracy`, or `mae` for regression), with the fold SD and a group-bootstrap interval of the pooled out-of-fold metric. `selection.json` gives the winner, why it won, and the paired difference to the runner-up on the same out-of-fold rows with an interval. **The winner's cross-validation score is optimistically biased** by the choice itself (the winner's curse); the sealed-test score is not. Neither is a promise of accuracy on other data.
+- **Resume.** Each finished candidate is one line of `ledger.jsonl`: done, failed, did_not_fit (out of memory, the search goes on), refused or skipped, with fold metrics, time and reason. Rerunning the same command resumes, and Ctrl+C loses at most the candidate that was running. A changed dataset or changed settings are refused; a changed grid needs `--allow_grid_change`. The sealed test set scores one winner per search folder; `--rescore_sealed_test` allows a second, and `selection.json` then says the score is no longer untouched.
+- **The laptop.** Runs are sequential deeptune.py subprocesses, so each frees its memory, with `--num_workers 0` by default. `--deeptune_args="--precision bf16"` passes more flags to every run (with `=`, since the value starts with dashes).
+
+Outputs in `--out`: `leaderboard.csv`, `selection.json`, `ledger.jsonl`, `candidates.csv`, `data/` (split and record), `runs/<key>/` (each candidate's deeptune.py folder and log) and `final/<key>/`.
+
+deeptune.py gained the two flags this uses, for video: `--cv_only` (with `--validation kfold` or `bootstrap632`, cross-validate every row of `--df` and stop) and `--test_df FILE` (use this Parquet file as the test split; `--df` then gives training and 10% validation, whole groups; a shared group, video or unseen class is refused).
+
 ## "Not sure": abstention with a target error (video classification)
 
 The model can decline to answer. `--target_error` asks it to say "not sure" rather than exceed an error rate among the clips it does answer. **This does not promise any accuracy, and it cannot remove every wrong answer.** A weak model answers little or nothing, and a stronger one answers more at the same target.
