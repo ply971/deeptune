@@ -41,8 +41,9 @@ def _absolute_videos(table: pa.Table, split_path: Path) -> pa.Table:
 
 
 def read_pool(train_path, val_path) -> pa.Table:
-    """The rows this scheme may use, train first. Memory-mapped, so clip bytes are not all read into memory."""
-    tables = [_absolute_videos(pq.read_table(path, memory_map=True), Path(path)) for path in (train_path, val_path)]
+    """The rows this scheme may use, train first. Memory-mapped, so clip bytes are not all read into memory.
+    `val_path` is None with --cv_only, where `train_path` already holds every row (data_splits_*/cv_pool.parquet)."""
+    tables = [_absolute_videos(pq.read_table(path, memory_map=True), Path(path)) for path in (train_path, val_path) if path is not None]
     return pa.concat_tables(tables, promote_options='default')
 
 
@@ -66,7 +67,10 @@ def run_video_validation(args, train_path, val_path, out, train_fn, evaluate_fn,
     root = Path(out) / f'validation_{scheme}'
     mode = train_config['mode']
     count = args.k if scheme == 'kfold' else args.n_boot + 1
-    print(f'--validation {scheme}: training {count} extra models on {pool.num_rows} rows. The test split is not used.')
+    if val_path is None:
+        print(f'--validation {scheme} --cv_only: training {count} models on all {pool.num_rows} rows of --df. There is no test split.')
+    else:
+        print(f'--validation {scheme}: training {count} extra models on {pool.num_rows} rows. The test split is not used.')
 
     def fit_predict(train_rows, val_rows, eval_rows, name, error_model=True) -> FoldScores:
         folder = root / name

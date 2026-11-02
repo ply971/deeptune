@@ -31,7 +31,10 @@ def training_log_dir(ckpt_directory) -> Path:
     return path.parent if path.is_file() else path
 
 
-def main(argv=None):
+def parse_args(argv=None):
+    """Parse and check a deeptune.py command line without running it. Every refusal ends in the parser's error (exit
+    code 2) with its reason, so select_model.py checks each candidate with this function and the rules live in one place.
+    Returns (args, cfg, training_options)."""
     args = DeepTuneVisionOptions(RunType.ONECALL, args=argv)
     from desktop.config import RunConfig, validate_config, effective_mode
     values = {key: getattr(args, key) for key in RunConfig.__dataclass_fields__ if hasattr(args, key)}
@@ -83,8 +86,27 @@ def main(argv=None):
         if args.abstain_score == 'expected_error' and args.no_error_model:
             issues.append('--abstain_score expected_error needs the error model, so it cannot be combined with --no_error_model.')
     # --- end R2 ---
+    # --- model selection support (R3a): CV on every row, or a test split given as a file ---
+    if args.cv_only or args.test_df is not None:
+        if args.modality != 'video':
+            issues.append('--cv_only and --test_df are only supported for the video modality.')
+        if args.cv_only and args.validation == 'holdout':
+            issues.append('--cv_only needs --validation kfold or bootstrap632: without a test split, holdout scores nothing.')
+        if args.cv_only and args.test_df is not None:
+            issues.append('--cv_only carves no test split, so it cannot take --test_df.')
+        if args.cv_only and (args.target_error is not None or args.export_dfanalyze):
+            issues.append('--cv_only trains no final model, so --target_error and --export_dfanalyze do not apply.')
+        if args.test_df is not None and (Path(args.test_df).suffix.lower() != '.parquet' or not Path(args.test_df).is_file()):
+            issues.append(f'--test_df must be an existing .parquet file: {args.test_df}')
+    # --- end R3a ---
     if issues:
         args.parser.error("\n".join(issues))
+    return args, cfg, training_options
+
+
+def main(argv=None):
+    args, cfg, training_options = parse_args(argv)
+    from desktop.config import effective_mode
     args.mode = effective_mode(cfg)
     args.type = cfg.gandalf_type
     defaults = dict(globals()["defaults"], mode=args.mode, fixed_seed=args.fixed_seed, disable_numerical_encoding=args.mode == "reg")
@@ -127,20 +149,31 @@ def main(argv=None):
         import pyarrow.parquet as pq
         GROUPER = args.grouper = resolve_grouper(pq.read_schema(df_path).names, GROUPER, args.modality)
 
-    train_data_path, val_data_path, test_data_path = split_dataset(
-        train_size=defaults['train_size'],
-        val_size=defaults['val_size'],
-        test_size=defaults['test_size'],
-        df_path=df_path,
-        out_dir=Path(args.out)/parent_dir,
-        fixed_seed=defaults['fixed_seed'],
-        disable_numerical_encoding=defaults['disable_numerical_encoding'],
-        target_column=TARGET,
-        modality=args.modality,
-        grouper=GROUPER,
-        mode=args.mode,
-        time_idx_column=args.time_idx_column,
-    )
+    if args.modality == 'video' and args.cv_only:  # R3a: every row is cross-validated, so no split is carved
+        from handlers.split_dataset import prepare_whole_dataset
+        train_data_path = prepare_whole_dataset(df_path, Path(args.out)/parent_dir, defaults['disable_numerical_encoding'], TARGET,
+                                                args.modality, GROUPER, args.mode)
+        val_data_path = test_data_path = None
+    elif args.modality == 'video' and args.test_df is not None:  # R3a: the caller's own test file; --df gives train + validation
+        from handlers.split_dataset import split_with_test_file
+        train_data_path, val_data_path, test_data_path = split_with_test_file(
+            df_path, args.test_df, Path(args.out)/parent_dir, defaults['fixed_seed'], defaults['disable_numerical_encoding'], TARGET,
+            args.modality, GROUPER, args.mode, seed=training_options.seed)  # --seed picks the validation groups too, as in each fold
+    else:
+        train_data_path, val_data_path, test_data_path = split_dataset(
+            train_size=defaults['train_size'],
+            val_size=defaults['val_size'],
+            test_size=defaults['test_size'],
+            df_path=df_path,
+            out_dir=Path(args.out)/parent_dir,
+            fixed_seed=defaults['fixed_seed'],
+            disable_numerical_encoding=defaults['disable_numerical_encoding'],
+            target_column=TARGET,
+            modality=args.modality,
+            grouper=GROUPER,
+            mode=args.mode,
+            time_idx_column=args.time_idx_column,
+        )
 
     # --- abstention (R2): whole groups move from training to a separate calibration split; validation and test do not change ---
     calibration_data_path = None
@@ -338,7 +371,7 @@ def main(argv=None):
 
         # --- evaluation suite (B3) ---
         from evaluators.video.report import shared_source_warning
-        video_split_warning = shared_source_warning(test_data_path, train_data_path, val_data_path)
+        video_split_warning = None if args.cv_only else shared_source_warning(test_data_path, train_data_path, val_data_path)
         if video_split_warning:
             print(f'Warning: {video_split_warning}')
         # The folds run before the final model, and on train + validation rows only.
@@ -355,6 +388,9 @@ def main(argv=None):
             run_video_validation(args, train_data_path, val_data_path, Path(args.out)/parent_dir, train_video, evaluate_video,
                                  video_train_config, video_eval_config, GROUPER)
         # --- end B3 ---
+        if args.cv_only:  # R3a: the cross-validation is the whole run
+            print(" ✅ Cross-validation is complete (--cv_only: no final model and no test score). The results are in validation_*/.")
+            return
 
         ckpt_directory = train_video(
             train_df=train_data_path,

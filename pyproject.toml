@@ -19,7 +19,7 @@ deeptune = "deeptune:main"
 deeptune-desktop = "desktop.app:main"
 
 [tool.setuptools]
-py-modules = ["deeptune", "infer", "cli", "helpers", "utils", "options"]
+py-modules = ["deeptune", "infer", "cli", "helpers", "utils", "options", "select_model"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}

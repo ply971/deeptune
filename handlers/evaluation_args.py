@@ -5,7 +5,7 @@ VALIDATION_SCHEMES = ('holdout', 'kfold', 'bootstrap632')
 DFANALYZE_EXTRAS = ('tta', 'motion', 'ids')
 DEFAULT_REPORT_BOOTSTRAPS = 2000
 
-EVALUATION_ARG_NAMES = ('validation', 'k', 'n_boot', 'keep_fold_models', 'report_boot')
+EVALUATION_ARG_NAMES = ('validation', 'k', 'n_boot', 'keep_fold_models', 'report_boot', 'cv_only', 'test_df')
 DFANALYZE_ARG_NAMES = ('export_dfanalyze', 'dfanalyze_extras', 'dfanalyze_clips', 'dfanalyze_dims', 'dfanalyze_rows')
 DFANALYZE_EMBED_ARG_NAMES = ('dfanalyze_train_df', 'dfanalyze_val_df')
 
@@ -33,6 +33,14 @@ Training time is multiplied by the number of models.""")
                         help='Resamples for --validation bootstrap632, each a full training, plus one on all the rows (default 50).')
     parser.add_argument('--keep_fold_models', action='store_true',
                         help='Keep the weights and data subsets of every fold. By default only scores and metrics stay.')
+    parser.add_argument('--cv_only', action='store_true',
+                        help="""Video only, with --validation kfold or bootstrap632: run the scheme on every row of --df, then stop.
+No test split is carved and no final model is trained, so nothing here is a test score.
+For a caller that keeps its own sealed test set, such as select_model.py.""")
+    parser.add_argument('--test_df', type=Path, default=None, metavar='PARQUET',
+                        help="""Video only. Use this Parquet file as the test split instead of carving one from --df (default: carve 20%%).
+--df is then split into training and validation only, 10%% of its rows (whole groups) to validation.
+Refused if the two files share a group, a video path, or if the test file has a class that --df lacks.""")
     parser.add_argument('--report_boot', type=_at_least(0), default=DEFAULT_REPORT_BOOTSTRAPS,
                         help=f"""Video only. Bootstrap resamples for the intervals in evaluation_report.json (default {DEFAULT_REPORT_BOOTSTRAPS}).
 They resample whole groups when a group column exists. 0 writes no report and skips the extra pass over validation.""")

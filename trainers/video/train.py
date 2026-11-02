@@ -59,6 +59,44 @@ def main():
     )
 
 
+def build_training_model(args, model_version: str, num_classes: int, added_layers: int, embed_size: int, freeze_backbone: bool,
+                         mode: str, use_peft: bool, pooling: str = "mean", trainable_params: int | None = None):
+    """The model `train` trains, with its trainable parameters set: a plain build, or one under a trainable-parameter
+    budget. A budget's choice is written back to `args` (`lora_rank` on native PEFT models, else `embed_size`).
+    select_model.py builds candidates with this function too, to count what they would train."""
+    lora_rank = resolve_lora_rank(args) if use_peft and is_native_video_architecture(model_version) else None
+    if trainable_params is None:
+        return build_video_model(
+            model_version=model_version,
+            num_classes=num_classes,
+            added_layers=added_layers,
+            embed_size=embed_size,
+            freeze_backbone=freeze_backbone,
+            mode=mode,
+            use_peft=use_peft,
+            pooling=pooling,
+            **({} if lora_rank is None else {'lora_rank': lora_rank}),
+        )
+    if use_peft and is_native_video_architecture(model_version):
+        def build_at_rank(rank):
+            return build_video_model(
+                model_version=model_version, num_classes=num_classes, added_layers=added_layers,
+                embed_size=embed_size, freeze_backbone=freeze_backbone, mode=mode, use_peft=True, pooling=pooling,
+                lora_rank=rank,
+            )
+        model, args.lora_rank = build_with_budget(build_at_rank, trainable_params, True, embed_size, freeze_backbone,
+                                                  rank_is_head_width=False)
+        return model
+
+    def build(rank):
+        return build_video_model(
+            model_version=model_version, num_classes=num_classes, added_layers=added_layers,
+            embed_size=rank, freeze_backbone=freeze_backbone, mode=mode, use_peft=use_peft, pooling=pooling,
+        )
+    model, args.embed_size = build_with_budget(build, trainable_params, use_peft, embed_size, freeze_backbone)
+    return model
+
+
 def train(
         train_df: Path,
         val_df: Path,
@@ -129,36 +167,8 @@ def train(
     train_loader = DataLoader(train_dataset, **train_kwargs)
     val_loader = DataLoader(val_dataset, **val_kwargs)
 
-    lora_rank = resolve_lora_rank(args) if use_peft and is_native_video_architecture(model_version) else None
-    if trainable_params is None:
-        model = build_video_model(
-            model_version=model_version,
-            num_classes=num_classes,
-            added_layers=added_layers,
-            embed_size=embed_size,
-            freeze_backbone=freeze_backbone,
-            mode=mode,
-            use_peft=use_peft,
-            pooling=pooling,
-            **({} if lora_rank is None else {'lora_rank': lora_rank}),
-        )
-    elif use_peft and is_native_video_architecture(model_version):
-        def build_at_rank(rank):
-            return build_video_model(
-                model_version=model_version, num_classes=num_classes, added_layers=added_layers,
-                embed_size=embed_size, freeze_backbone=freeze_backbone, mode=mode, use_peft=True, pooling=pooling,
-                lora_rank=rank,
-            )
-        model, args.lora_rank = build_with_budget(build_at_rank, trainable_params, True, embed_size, freeze_backbone,
-                                                  rank_is_head_width=False)
-    else:
-        def build(rank):
-            return build_video_model(
-                model_version=model_version, num_classes=num_classes, added_layers=added_layers,
-                embed_size=rank, freeze_backbone=freeze_backbone, mode=mode, use_peft=use_peft, pooling=pooling,
-            )
-        model, embed_size = build_with_budget(build, trainable_params, use_peft, embed_size, freeze_backbone)
-        args.embed_size = embed_size
+    model = build_training_model(args, model_version, num_classes, added_layers, embed_size, freeze_backbone, mode, use_peft,
+                                 pooling, trainable_params)
 
     TRAINVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
