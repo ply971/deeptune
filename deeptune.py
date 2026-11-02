@@ -153,7 +153,7 @@ def main(argv=None):
 
     df = pd.read_parquet(train_data_path, columns=['labels'])
 
-    if args.modality == 'video':  # lets an ensemble verify what each class index means (inference/ensemble.py)
+    if args.modality == 'video':  # lets an ensemble verify what each class index means (inference/ensemble.py); the R2 carve above leaves the mapping as it was
         from inference.common import label_mapping_record
         args.label_mapping_path, args.label_mapping_sha256 = label_mapping_record(Path(train_data_path).parent / 'label_mapping.json')
 

@@ -552,7 +552,8 @@ def mapping_fingerprint(label_mapping: Optional[dict]) -> Optional[str]:
     """Hash of a {class name: index} mapping, whatever its key order or file format."""
     if label_mapping is None:
         return None
-    return hashlib.sha256(json.dumps({str(k): int(v) for k, v in label_mapping.items()}, sort_keys=True).encode('utf-8')).hexdigest()
+    from inference.common import label_mapping_digest  # one hash for both: R1's ensembles record and check the same digest
+    return label_mapping_digest({str(k): int(v) for k, v in label_mapping.items()})
 
 
 def file_fingerprint(path) -> Optional[str]:

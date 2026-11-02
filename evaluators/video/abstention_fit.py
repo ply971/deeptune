@@ -123,8 +123,23 @@ def run_split_files(checkpoint) -> list[Path]:
     return [path for folder in sorted(run_dir.glob('data_splits_*')) for name in ('train', 'val', 'test') for path in [folder / f'{name}_split.parquet'] if path.is_file()]
 
 
-def run_label_mapping(checkpoint) -> Optional[dict]:
-    """The run's {class name: index}, or None."""
+def recorded_arguments(checkpoint) -> dict:
+    """cli_arguments.json beside the weights, or {} when there is none."""
+    path = Path(checkpoint).parent / 'cli_arguments.json'
+    return json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
+
+
+def run_label_mapping(checkpoint, recorded: Optional[dict] = None) -> Optional[dict]:
+    """The run's {class name: index}, or None. A run that recorded its mapping's hash (label_mapping_sha256, R1) gets the file that matches it,
+    through inference.ensemble.verify_label_mapping, and is refused when none does. Only runs from before that record fall back to the
+    data_splits_* folder beside the weights."""
+    recorded = recorded_arguments(checkpoint) if recorded is None else recorded
+    if recorded.get('label_mapping_sha256'):
+        from inference.ensemble import verify_label_mapping
+        check = verify_label_mapping(Path(checkpoint), recorded)
+        if check['status'] != 'verified':
+            raise ValueError(f"Cannot verify this run's label mapping: {check['reason']}. Calibration labels cannot be read without it.")
+        return check['mapping']
     for folder in sorted(Path(checkpoint).resolve().parent.parent.glob('data_splits_*')):
         path = folder / 'label_mapping.json'
         if path.is_file():
@@ -195,7 +210,8 @@ def fit_on_calibration_split(calib_df, checkpoint, *, target_error: float, delta
     frame = _read_with_paths(calib_df)
     if 'labels' not in frame.columns:
         raise ValueError(f'{calib_df} has no labels column, so it cannot calibrate anything.')
-    mapping = run_label_mapping(checkpoint)
+    recorded = recorded_arguments(checkpoint)
+    mapping = run_label_mapping(checkpoint, recorded)
     labels = integer_labels(frame['labels'], mapping, num_classes, encoded=is_run_calibration_split(calib_df, checkpoint))
     frame['labels'] = labels
     predictions = predict_video(frame, checkpoint, model_version, num_classes, added_layers, embed_size, freeze_backbone, 'cls', use_peft, batch_size, num_frames, pooling,
@@ -206,7 +222,7 @@ def fit_on_calibration_split(calib_df, checkpoint, *, target_error: float, delta
     provenance = {'weights_sha256': weights_fingerprint(torch.load(checkpoint, map_location=DEVICE, weights_only=True)),
                   'pipeline': pipeline_record(video_options, num_frames, pooling), 'calibration_file': data_fingerprint(calib_df),
                   'selection': _selection_record(checkpoint.parent), 'label_mapping_sha256': mapping_fingerprint(mapping),
-                  'error_model_sha256': file_fingerprint(find_error_model(checkpoint))}
+                  'error_model_sha256': file_fingerprint(find_error_model(checkpoint)), **_weights_terms(recorded, model_version)}
     rule = fit_abstention(score_values(predictions, score_name), wrong, groups, sources, target_error=target_error, delta=delta, guarantee=guarantee, num_classes=num_classes,
                           score_name=score_name, split=split, provenance=provenance,
                           void_reasons=[*void_reasons, *_void_reasons(calib_df, grouper, other_splits, disjoint_by_construction)])
@@ -216,6 +232,13 @@ def fit_on_calibration_split(calib_df, checkpoint, *, target_error: float, delta
     for warning in rule.info['warnings']:
         print(f'Warning: {warning}')
     return rule
+
+
+def _weights_terms(recorded: dict, model_version: str) -> dict:
+    """The run's weights_licence and weights_revision (R1), as an ensemble records them for a member; filled in for runs from before that record."""
+    from inference.ensemble import _member_licence, _member_revision
+    values = {**recorded, 'model_version': recorded.get('model_version') or model_version}
+    return {'weights_licence': _member_licence(values), 'weights_revision': _member_revision(values)}
 
 
 def _selection_record(run_dir: Path) -> Optional[dict]:
@@ -275,11 +298,14 @@ def main(argv=None) -> int:
               'Any abstention_report.json there still describes the earlier rule.')
     other_splits = list(dict.fromkeys([*args.other_df, *run_split_files(args.checkpoint)]))
     void_reasons = ["The run used --resume_allow_data_change, so its weights may have trained on these rows."] if recorded.get('resume_allow_data_change') else []
-    fit_on_calibration_split(args.calib_df, args.checkpoint, target_error=args.target_error, delta=args.abstain_delta, guarantee=args.abstain_guarantee, score_name=args.abstain_score,
-                             model_version=recorded['model_version'], num_classes=recorded['num_classes'], added_layers=recorded.get('added_layers') or 2,
-                             embed_size=recorded.get('embed_size') or 1000, freeze_backbone=bool(recorded.get('freeze_backbone')), use_peft=bool(recorded.get('use_peft')),
-                             batch_size=args.batch_size, num_frames=settings.num_frames, pooling=settings.pooling, video_options=video_options_from_args(settings), grouper=grouper,
-                             other_splits=other_splits, lora_rank=settings.lora_rank, split=args.split_name, void_reasons=void_reasons)
+    from handlers.video_backbones import only_accepted_licences
+    with only_accepted_licences(recorded.get('accept_weights_licence')):  # the run's own acceptance, as infer.py and ensemble members rebuild it
+        fit_on_calibration_split(args.calib_df, args.checkpoint, target_error=args.target_error, delta=args.abstain_delta, guarantee=args.abstain_guarantee,
+                                 score_name=args.abstain_score, model_version=recorded['model_version'], num_classes=recorded['num_classes'],
+                                 added_layers=recorded.get('added_layers') or 2, embed_size=recorded.get('embed_size') or 1000,
+                                 freeze_backbone=bool(recorded.get('freeze_backbone')), use_peft=bool(recorded.get('use_peft')), batch_size=args.batch_size,
+                                 num_frames=settings.num_frames, pooling=settings.pooling, video_options=video_options_from_args(settings), grouper=grouper,
+                                 other_splits=other_splits, lora_rank=settings.lora_rank, split=args.split_name, void_reasons=void_reasons)
     return 0
 
 

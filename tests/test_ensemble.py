@@ -494,3 +494,59 @@ def test_tables_refuse_one_file(tmp_path):
     _table(['x'], [[1.0, 0.0]]).to_csv(tmp_path / 'p.csv', index=False)
     with pytest.raises(ValueError, match='at least two'):
         ensemble_tables([tmp_path / 'p.csv'], tmp_path / 'out')
+
+
+# --- R2 abstention with ensembles and licensed backbones (V-053 item 6) -------------------------------------------------
+def _abstention_beside(checkpoint: Path, threshold_target=0.4):
+    """An abstention.json for exactly these weights, as a fitted run would hold it, so a single-model infer.py would apply it."""
+    from evaluators.abstention import fit_abstention, mapping_fingerprint
+    from evaluators.error_model import weights_fingerprint
+    rng = np.random.default_rng(0)
+    score = rng.uniform(0.5, 1.0, 400)
+    rule = fit_abstention(score, rng.random(400) > score, [f'g{i}' for i in range(400)], target_error=threshold_target, num_classes=2,
+                          provenance={'weights_sha256': weights_fingerprint(torch.load(checkpoint, weights_only=True)), 'label_mapping_sha256': mapping_fingerprint(LEFT_RIGHT)})
+    rule.save(checkpoint.parent / 'abstention.json')
+
+
+def test_an_ensemble_applies_no_members_abstention(tmp_path, capsys):
+    """Each member's rule describes that member alone, so averaged probabilities get no decision column and no abstention message."""
+    _videos(tmp_path / 'clips')
+    for seed, name in enumerate('ab'):
+        _save_run(tmp_path / name, 'siglip2_tiny', seed, 4)
+        _abstention_beside(tmp_path / name / 'model_weights.pth')
+    out = tmp_path / 'out'
+    result = ensemble_runs([tmp_path / 'a', tmp_path / 'b'], tmp_path / 'clips', out, batch_size=1)
+    assert 'decision' not in result.columns and 'answered' not in result.columns
+    assert 'decision' not in pd.read_csv(out / 'predictions.csv').columns
+    assert 'Abstention:' not in capsys.readouterr().out and not (out / 'abstention_summary.json').exists()
+    assert json.loads((out / 'ensemble.json').read_text())['abstention'] == 'not applied to ensembles'
+
+
+def test_no_abstain_is_refused_with_an_ensemble(tmp_path, capsys):
+    import infer
+    with pytest.raises(SystemExit):
+        infer.main(['--modality', 'video', '--ensemble', 'a', 'b', '--data', str(tmp_path), '--out', str(tmp_path / 'o'), '--no_abstain'])
+    error = capsys.readouterr().err
+    assert 'would be ignored' in error and '--no_abstain' in error
+
+
+@pytest.mark.parametrize('recorded,passes', [(['CC-BY-NC-4.0'], True), (None, False)])
+def test_a_standalone_abstention_fit_follows_the_runs_licence_record(recorded, passes, tmp_path, opt_in_stub):
+    """A run on opt-in weights can be calibrated later only under its own recorded acceptance, and abstention.json names the weights' terms."""
+    from evaluators.video import abstention_fit
+    paths = _videos(tmp_path / 'clips')
+    _opt_in_run(tmp_path / 'r' / 'x', **({} if recorded is None else {'accept_weights_licence': recorded}))
+    opt_in_stub.clear()
+    calibration = tmp_path / 'held_out.parquet'
+    pd.DataFrame({'videos': [str(p) for p in paths], 'labels': ['left', 'right'], 'group': ['g0', 'g1']}).to_parquet(calibration, index=False)
+    checkpoint = tmp_path / 'r' / 'x' / 'model_weights.pth'
+    argv = ['--checkpoint', str(checkpoint), '--calib_df', str(calibration), '--target_error', '0.4', '--split_name', 'held_out']
+    if passes:
+        assert abstention_fit.main(argv) == 0 and opt_in_stub == ['videomae_b16']
+        info = json.loads((checkpoint.parent / 'abstention.json').read_text())
+        assert 'CC-BY-NC-4.0' in info['weights_licence'] and info['weights_revision']
+        assert info['label_mapping_sha256'] == label_mapping_digest(LEFT_RIGHT)  # names read through the run's verified mapping
+    else:
+        with pytest.raises(WeightsLicenceNotAccepted):
+            abstention_fit.main(argv)
+        assert opt_in_stub == []

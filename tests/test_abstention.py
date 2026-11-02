@@ -913,3 +913,27 @@ def test_fit_abstention_silent_error_study(silent_population):
     interval = realised_coverage_interval(n, alpha)
     inside = ((realised >= interval['low']) & (realised <= interval['high'])).mean()
     assert abs(inside - 0.95) <= _slack(0.95, seeds)
+
+
+def test_run_label_mapping_uses_the_recorded_file_and_hash(tmp_path):
+    """Item 6 (with R1): a run that recorded label_mapping_path and label_mapping_sha256 gets the file matching that hash, wherever it is;
+    a changed file is refused, not read. Runs from before the record still use the data_splits_* folder."""
+    from evaluators.video.abstention_fit import run_label_mapping
+    from inference.common import label_mapping_digest
+    mapping = {'left': 0, 'right': 1}
+    elsewhere = tmp_path / 'kept' / 'label_mapping.json'
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(json.dumps(mapping))
+    run = tmp_path / 'deeptune-x'
+    (run / 'trainval_output_1').mkdir(parents=True)
+    (run / 'data_splits_1').mkdir()
+    (run / 'data_splits_1' / 'label_mapping.json').write_text(json.dumps({'left': 1, 'right': 0}))  # nearby but not the run's: must not win
+    checkpoint = run / 'trainval_output_1' / 'model_weights.pth'
+    recorded = {'label_mapping_path': str(elsewhere), 'label_mapping_sha256': label_mapping_digest(mapping)}
+    assert run_label_mapping(checkpoint, recorded) == mapping
+    (run / 'trainval_output_1' / 'cli_arguments.json').write_text(json.dumps(recorded))
+    assert run_label_mapping(checkpoint) == mapping  # read from cli_arguments.json beside the weights
+    elsewhere.write_text(json.dumps({'left': 1, 'right': 0}))
+    with pytest.raises(ValueError, match="Cannot verify this run's label mapping"):
+        run_label_mapping(checkpoint, recorded)
+    assert run_label_mapping(checkpoint, {}) == {'left': 1, 'right': 0}  # no record: the old search
