@@ -280,10 +280,17 @@ def _checked_target(frame: DataFrame, name: str, target_column: str, grouper: st
     return frame
 
 
-def _video_paths(frame: DataFrame) -> set:
-    if 'videos' not in frame.columns or not len(frame) or not isinstance(frame['videos'].iloc[0], str):
+def _holds_video_paths(frame: DataFrame) -> bool:
+    return 'videos' in frame.columns and len(frame) > 0 and isinstance(frame['videos'].iloc[0], str)
+
+
+def _video_paths(frame: DataFrame, parquet_path: Path) -> set:
+    """Absolute paths of the clips. A relative path is relative to its Parquet file's folder, as the k-fold code reads it
+    (evaluators/video/run_validation.py), not to the current folder."""
+    if not _holds_video_paths(frame):
         return set()  # clip bytes carry no path
-    return {str(Path(value).resolve()) for value in frame['videos']}
+    root = Path(parquet_path).resolve().parent
+    return {str(path.resolve() if path.is_absolute() else (root / path).resolve()) for path in map(Path, frame['videos'])}
 
 
 def prepare_whole_dataset(df_path: Path, out_dir: Path, disable_numerical_encoding: bool, target_column: str, modality: str,
@@ -311,7 +318,7 @@ def prepare_whole_dataset(df_path: Path, out_dir: Path, disable_numerical_encodi
 
 
 def split_with_test_file(df_path: Path, test_df_path: Path, out_dir: Path, fixed_seed: bool, disable_numerical_encoding: bool,
-                         target_column: str, modality: str, grouper: str = None, mode: str = 'cls'):
+                         target_column: str, modality: str, grouper: str = None, mode: str = 'cls', seed: int = None):
     """--test_df: the test split is the given file, and `df_path` is split into training and validation only.
 
     Validation takes INNER_VALIDATION_FRACTION of the rows, whole groups and stratified, exactly as inside each k-fold
@@ -331,13 +338,18 @@ def split_with_test_file(df_path: Path, test_df_path: Path, out_dir: Path, fixed
     if list(dev.columns) != list(test.columns):
         raise ValueError(f'--df and --test_df must have the same columns; found {list(dev.columns)} and {list(test.columns)}.')
     if grouper:
-        shared = sorted(map(str, set(dev[grouper]) & set(test[grouper])))
+        shared = sorted(set(dev[grouper].astype(str)) & set(test[grouper].astype(str)))  # 3 and '3' name one group
         if shared:
             raise ValueError(f'--df and --test_df share {len(shared)} {grouper!r} groups (e.g. {shared[:3]}): clips of one group '
                              'would be both trained on and tested.')
-    shared_paths = _video_paths(dev) & _video_paths(test)
+    shared_paths = _video_paths(dev, df_path) & _video_paths(test, test_df_path)
     if shared_paths:
         raise ValueError(f'--df and --test_df share {len(shared_paths)} video files (e.g. {sorted(shared_paths)[:2]}).')
+    overlap_check = f'by {grouper!r} groups and video paths' if grouper else 'by video paths only (no group column)'
+    if not grouper and not (_holds_video_paths(dev) and _holds_video_paths(test)):
+        overlap_check = ('cannot be checked: the clips are stored as bytes and there is no group column, so a clip or source in both '
+                         'files would go unnoticed')
+        warnings.warn(f'--test_df: overlap between --df and --test_df {overlap_check}. Add a group column.', UserWarning)
     if classification:
         unknown = sorted(set(test[target_column].astype(str)) - set(dev[target_column].astype(str)))
         if unknown:
@@ -349,7 +361,8 @@ def split_with_test_file(df_path: Path, test_df_path: Path, out_dir: Path, fixed
     both = enable_label_numerical_encoding(pd.concat([dev, test], ignore_index=True), split_dir, target_column,
                                            disable_numerical_encoding or not classification, modality, False)
     dev, test = both.iloc[:len(dev)].reset_index(drop=True), both.iloc[len(dev):].reset_index(drop=True)
-    seed = 42 if fixed_seed else int(np.random.randint(low=0, high=1_000))
+    if seed is None:
+        seed = 42 if fixed_seed else int(np.random.randint(low=0, high=1_000))
     groups = dev[grouper].tolist() if grouper else None
     train_rows, val_rows = inner_validation_split(dev['labels'].to_numpy(), np.arange(len(dev)), groups, mode, seed, INNER_VALIDATION_FRACTION)
     parts = {'train': dev.iloc[np.sort(train_rows)].reset_index(drop=True), 'validation': dev.iloc[np.sort(val_rows)].reset_index(drop=True),
@@ -358,7 +371,8 @@ def split_with_test_file(df_path: Path, test_df_path: Path, out_dir: Path, fixed
         summary = check_group_split(parts, grouper, 'labels', classification)
     else:
         summary = {'strategy': 'per_class' if classification else 'random', 'sample_counts': {k: int(len(v)) for k, v in parts.items()}}
-    summary.update(test_source='--test_df', test_file=str(Path(test_df_path).resolve()), validation_fraction_of_df=INNER_VALIDATION_FRACTION)
+    summary.update(test_source='--test_df', test_file=str(Path(test_df_path).resolve()), validation_fraction_of_df=INNER_VALIDATION_FRACTION,
+                   validation_seed=int(seed), overlap_check=overlap_check)
     (split_dir / 'split_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
     print('Split with --test_df: ' + ', '.join(f'{name}={len(part)}' for name, part in parts.items()) + ' clips.')
     paths = tuple(split_dir / f'{name}_split.parquet' for name in ('train', 'val', 'test'))

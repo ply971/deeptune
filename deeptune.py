@@ -158,7 +158,7 @@ def main(argv=None):
         from handlers.split_dataset import split_with_test_file
         train_data_path, val_data_path, test_data_path = split_with_test_file(
             df_path, args.test_df, Path(args.out)/parent_dir, defaults['fixed_seed'], defaults['disable_numerical_encoding'], TARGET,
-            args.modality, GROUPER, args.mode)
+            args.modality, GROUPER, args.mode, seed=training_options.seed)  # --seed picks the validation groups too, as in each fold
     else:
         train_data_path, val_data_path, test_data_path = split_dataset(
             train_size=defaults['train_size'],
