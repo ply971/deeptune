@@ -340,6 +340,20 @@ above. R3 stays protected from cuts.
 **R3 moved up (user, 2026-11-02):** R3 (auto model selection, smart and exhaustive)
 runs now, after the R1 and R2 merges and right before Wave 3. P-105 to P-109 stay
 in the later extension.
+**R3 additions (user, 2026-11-02):**
+- **Augmentation is a search setting** in every mode: off, `--video_augment`
+  (+ `--video_speed_perturb`), and `--video_augment` with mixup/CutMix.
+  `--video_flip` is only searched when the user states the labels do not depend
+  on direction. It applies only to candidates whose weights train; frozen-feature
+  probes never see augmentation, and the leaderboard says so.
+- **Two more strategies** next to `exhaustive` and `smart`: `--search random`
+  (seeded random sampling of the grid, budget by trial count or hours) and
+  `--search bayes` (sequential model-based search, e.g. Optuna's TPE, as an
+  optional dependency that needs the user's OK to install). Same sealed test,
+  ledger and resume, and the regret study compares all three with exhaustive
+  on a small grid.
+- Order: R3a fix round and merge, then R3b = smart + augmentation setting +
+  random + bayes.
 
 Until P-105 lands, every real-data manifest needs a correct `group` column by
 hand: pre-cut clips such as UCF101's get no shared-source warning.
