@@ -316,3 +316,27 @@ def test_target_error_help_shows_the_budget_and_names_the_method():
     text = DeepTuneVisionOptions(RunType.ONECALL, args=['--modality', 'video', '--df', 'x', '--out', 'y']).parser.format_help()
     assert 'preflight line prints it before training' in text and 'certifies only with at most' in text
     assert 'Learn then Test' in text and 'split conformal' in text and 'Prediction sets are not built' in text
+
+
+def test_numeric_class_names_calibrate_in_the_run_and_are_refused_from_another_file(tmp_path, small_pipeline):
+    """Re-check finding 2 end to end: classes named 1 and 10 encode as {'1': 0, '10': 1}. The run's own calibration split holds encoded indices and fits;
+    a copy elsewhere could hold names or indices, so the standalone fit refuses it rather than guess."""
+    import shutil
+    import deeptune
+    from evaluators.video import abstention_fit
+    manifest = pd.read_csv(_manifest(tmp_path))
+    manifest['labels'] = manifest['labels'].map({'left': 1, 'right': 10})
+    manifest.to_csv(tmp_path / 'numeric.csv', index=False)
+    out = tmp_path / 'out'
+    deeptune.main(['--modality', 'video', '--out', str(out), '--model_version', 'dummy_video3d', '--num_epochs', '1', '--batch_size', '4', '--num_frames', '2', '--added_layers', '1',
+                   '--embed_size', '16', '--fixed-seed', '--num_workers', '0', '--df', str(tmp_path / 'numeric.csv'), '--raw-data', '--report_boot', '0',
+                   '--target_error', '0.45', '--abstain_delta', '0.5'])
+    run = next(out.glob('deeptune-*'))
+    mapping = json.loads(next(run.glob('data_splits_*/label_mapping.json')).read_text())
+    assert abstention_fit.ambiguous_numeric_names(mapping)
+    assert next(run.glob('trainval_output_*/abstention.json')).is_file()  # the in-run fit read the encoded labels as indices
+    weights = next(run.glob('trainval_output_*/model_weights.pth'))
+    copy = tmp_path / 'calibration_copy.parquet'
+    shutil.copy(next(run.glob('data_splits_*/calibration_split.parquet')), copy)
+    with pytest.raises(ValueError, match='could be a name or an index'):
+        abstention_fit.main(['--checkpoint', str(weights), '--calib_df', str(copy), '--target_error', '0.45', '--abstain_delta', '0.5', '--split_name', 'held_out'])

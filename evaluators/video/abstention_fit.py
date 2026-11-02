@@ -75,10 +75,21 @@ def _resolved_sources(path, values) -> Optional[set]:
     return {str((Path(value) if Path(value).is_absolute() else base / value).resolve()) for value in values}
 
 
+def text_units(path, grouper) -> tuple[Optional[list], Optional[list]]:
+    """split_units with group ids as text. A CSV read by pandas turns '001' into 1, which then never matches '001' in the run's parquet, so overlap would
+    go unseen. Here a CSV's group column is read as str, and every group id is compared as str."""
+    from evaluators.video.report import split_units
+    groups, sources = split_units(path, grouper)
+    if groups is not None and Path(path).suffix.lower() != '.parquet':
+        column = grouper or 'group'
+        groups = pd.read_csv(path, usecols=[column], dtype={column: str}, keep_default_na=False)[column].tolist()
+    return (None if groups is None else [str(group) for group in groups]), sources
+
+
 def _void_reasons(calib_path, grouper, other_paths, disjoint_by_construction: bool = False) -> list[str]:
     """Why these rows cannot be shown to make a clean calibration set. The fit still writes its table, and says it carries no guarantee.
     With `disjoint_by_construction` (deeptune.py drew them itself) rows that hold nothing to compare are fine; otherwise that leaves disjointness unverified."""
-    from evaluators.video.report import split_units
+    split_units = text_units
     other_paths = list(other_paths)
     if not other_paths and not disjoint_by_construction:
         return ["Disjointness unverified: no data_splits folder was found beside the run and no --other_df was given, so nothing shows the model never saw these rows."]
@@ -121,8 +132,21 @@ def run_label_mapping(checkpoint) -> Optional[dict]:
     return None
 
 
-def integer_labels(values: pd.Series, mapping: Optional[dict], num_classes: int, source='calibration') -> np.ndarray:
-    """Class indices in [0, num_classes), or a refusal. A wrong label reads as a wrong prediction, so bad labels would silently decide the threshold."""
+def ambiguous_numeric_names(mapping: Optional[dict]) -> bool:
+    """Class names that are all numbers, some differing from their index (LabelEncoder on '1', '10', '2' gives {'1': 0, '10': 1, '2': 2}): a label 1 may be either."""
+    return bool(mapping) and all(str(name).lstrip('-').isdigit() for name in mapping) and any(str(index) != str(name) for name, index in mapping.items())
+
+
+def is_run_calibration_split(calib_df, checkpoint) -> bool:
+    """The calibration_split.parquet deeptune.py carved for this run, whose labels it already encoded as indices."""
+    path = Path(calib_df).resolve()
+    return (path.name == CALIBRATION_FILENAME and path.parent.name.startswith('data_splits_')
+            and path.parent.parent == Path(checkpoint).resolve().parent.parent)
+
+
+def integer_labels(values: pd.Series, mapping: Optional[dict], num_classes: int, source='calibration', encoded: bool = False) -> np.ndarray:
+    """Class indices in [0, num_classes), or a refusal. A wrong label reads as a wrong prediction, so bad labels would silently decide the threshold.
+    `encoded`: the labels are known to be indices already (the run's own calibration split)."""
     if values.isna().any():
         raise ValueError(f'{source} labels: {int(values.isna().sum())} are missing.')
     numeric = pd.to_numeric(values, errors='coerce')
@@ -131,8 +155,10 @@ def integer_labels(values: pd.Series, mapping: Optional[dict], num_classes: int,
         if (labels != np.round(labels)).any():
             raise ValueError(f'{source} labels must be whole class indices, found {sorted(set(labels[labels != np.round(labels)]))[:5]}.')
         labels = labels.astype(np.int64)
-        if mapping and any(str(index) != str(name) for name, index in mapping.items()) and all(str(name).lstrip('-').isdigit() for name in mapping):
-            print(f"Warning: this run's class names are numbers that differ from their indices ({dict(list(mapping.items())[:3])}...). {source} labels are read as indices, not names.")
+        if not encoded and ambiguous_numeric_names(mapping):  # refused, not guessed: reading names as indices would mislabel rows and still claim the guarantee
+            raise ValueError(f"This run's class names are numbers that differ from their indices ({dict(list(mapping.items())[:3])}...), so a {source} label like "
+                             f"{int(labels[0])} could be a name or an index. Use the run's own calibration_split.parquet, whose labels deeptune.py encoded, "
+                             'or calibrate a run whose class names are not numbers.')
     else:
         if not mapping:
             raise ValueError(f'{source} labels hold class names, but the run has no label_mapping.json to read them with.')
@@ -163,7 +189,6 @@ def fit_on_calibration_split(calib_df, checkpoint, *, target_error: float, delta
     """One pass over the calibration rows through inference's own path, so scores match what infer.py computes, including --test_clips and --test_crops. Saves next to the checkpoint."""
     import torch
     from evaluators.error_model import find_error_model, weights_fingerprint
-    from evaluators.video.report import split_units
     from inference.video import predict_video
     from options import DEVICE
     checkpoint = Path(checkpoint)
@@ -171,12 +196,12 @@ def fit_on_calibration_split(calib_df, checkpoint, *, target_error: float, delta
     if 'labels' not in frame.columns:
         raise ValueError(f'{calib_df} has no labels column, so it cannot calibrate anything.')
     mapping = run_label_mapping(checkpoint)
-    labels = integer_labels(frame['labels'], mapping, num_classes)
+    labels = integer_labels(frame['labels'], mapping, num_classes, encoded=is_run_calibration_split(calib_df, checkpoint))
     frame['labels'] = labels
     predictions = predict_video(frame, checkpoint, model_version, num_classes, added_layers, embed_size, freeze_backbone, 'cls', use_peft, batch_size, num_frames, pooling,
                                 None, video_options=video_options, lora_rank=lora_rank, abstain=False)
     wrong = predictions['predicted_class'].to_numpy() != labels[:len(predictions)]
-    groups, sources = split_units(calib_df, grouper)
+    groups, sources = text_units(calib_df, grouper)
     from trainers.training_basics import data_fingerprint
     provenance = {'weights_sha256': weights_fingerprint(torch.load(checkpoint, map_location=DEVICE, weights_only=True)),
                   'pipeline': pipeline_record(video_options, num_frames, pooling), 'calibration_file': data_fingerprint(calib_df),

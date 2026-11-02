@@ -593,6 +593,52 @@ def test_a_rule_with_no_recorded_binding_cannot_claim_the_guarantee():
     assert _apply(rule, score, weights_sha256='w1', label_mapping={'cat': 0}, error_model_sha256='e1')[0]['guarantee_holds'] is False
 
 
+@pytest.mark.parametrize('weights_in_use', ['w1', None])
+def test_a_rule_with_no_weights_hash_cannot_claim_the_guarantee(weights_in_use):
+    """Re-check BI3: everything else is bound and matches; only the rule's weights hash is missing. That alone must void, and say why."""
+    rule, score = _bound_rule('expected_error', weights_sha256=None)
+    issues = binding_issues(rule, weights_in_use, {'cat': 0, 'dog': 1}, 'e1')
+    assert issues == ['weights: the rule records no weights hash, so what it was fitted on cannot be verified']
+    summary, _ = _apply(rule, score, weights_sha256=weights_in_use, label_mapping={'cat': 0, 'dog': 1}, error_model_sha256='e1')
+    assert summary['guarantee_holds'] is False and 'records no weights hash' in summary['headline']
+
+
+def test_csv_group_ids_that_look_numeric_still_match_the_runs_parquet(tmp_path):
+    """Re-check finding 1: pandas reads '001' in a CSV as 1, which never matched '001' in the run's parquet, so the overlap went unseen."""
+    from evaluators.video.abstention_fit import _void_reasons, text_units
+    train = _split_file(tmp_path / 'train_split.parquet', ['001', '002', '003'])
+    pd.DataFrame({'labels': [0, 1], 'group': ['001', '002']}).to_csv(tmp_path / 'calib.csv', index=False)
+    pd.DataFrame({'labels': [0, 1], 'group': ['004', '005']}).to_csv(tmp_path / 'new.csv', index=False)
+    assert text_units(tmp_path / 'calib.csv', 'group')[0] == ['001', '002']
+    assert text_units(tmp_path / 'calib.csv', None)[0] == ['001', '002']  # the default 'group' column too
+    assert '2 calibration groups also appear' in _void_reasons(tmp_path / 'calib.csv', 'group', [train])[0]
+    assert _void_reasons(tmp_path / 'new.csv', 'group', [train]) == []
+    # Integer ids in both files still match, as text.
+    _split_file(tmp_path / 'int_train.parquet', [7, 8])
+    pd.DataFrame({'labels': [0], 'group': [7]}).to_csv(tmp_path / 'int.csv', index=False)
+    assert _void_reasons(tmp_path / 'int.csv', 'group', [tmp_path / 'int_train.parquet'])
+
+
+def test_numeric_class_names_that_differ_from_indices_are_refused_unless_encoded(tmp_path):
+    """Re-check finding 2: with {'1': 0, '10': 1, '2': 2} a label 1 may be the name '1' (index 0) or index 1. Guessing would mislabel rows and keep the claim."""
+    from evaluators.video.abstention_fit import ambiguous_numeric_names, integer_labels, is_run_calibration_split
+    mapping = {'1': 0, '10': 1, '2': 2}
+    assert ambiguous_numeric_names(mapping) and not ambiguous_numeric_names({'0': 0, '1': 1}) and not ambiguous_numeric_names({'left': 0, 'right': 1})
+    for values in (pd.Series([1, 2, 2]), pd.Series(['1', '10', '2'])):
+        with pytest.raises(ValueError, match='could be a name or an index'):
+            integer_labels(values, mapping, 3)
+    assert integer_labels(pd.Series([1, 2, 2]), mapping, 3, encoded=True).tolist() == [1, 2, 2]
+    assert integer_labels(pd.Series([1, 0]), {'0': 0, '1': 1}, 2).tolist() == [1, 0]  # names equal to indices: no ambiguity
+    run = tmp_path / 'deeptune-x'
+    (run / 'data_splits_1').mkdir(parents=True)
+    checkpoint = run / 'trainval_output_1' / 'model_weights.pth'
+    assert is_run_calibration_split(run / 'data_splits_1' / 'calibration_split.parquet', checkpoint)
+    assert not is_run_calibration_split(tmp_path / 'calibration_split.parquet', checkpoint)
+    assert not is_run_calibration_split(run / 'data_splits_1' / 'train_split.parquet', checkpoint)
+    other = tmp_path / 'deeptune-y' / 'data_splits_1' / 'calibration_split.parquet'
+    assert not is_run_calibration_split(other, checkpoint)
+
+
 def test_the_error_model_is_bound_only_when_it_is_the_score():
     rule, score = _bound_rule('max_prob')
     assert binding_issues(rule, 'w1', None, 'something else') == []
