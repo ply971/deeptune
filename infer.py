@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             args.embed_size, args.freeze_backbone, args.mode, args.use_peft, args.batch_size,
             args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
             **({} if args.lora_rank is None else {'lora_rank': args.lora_rank}),
-            abstain=not args.no_abstain,
+            **({'abstain': False} if args.no_abstain else {}),  # predict_video abstains by default; pass only the opt-out, like lora_rank
         )
     elif args.modality == 'text':
         from inference.text import predict_text
