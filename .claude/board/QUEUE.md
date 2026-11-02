@@ -195,3 +195,4 @@ Update: A1 fix round done (3ec722c, 97202c1, c7c5b02; V-025) → the Critic is r
 - User, 2026-11-02: YES to augmentation as an R3 search setting and to random and Bayesian search strategies (PLAN.md 4b, "R3 additions"). They go in R3b, after the R3a merge. Optuna's install needs the user's OK when R3b reaches it.
 - 2026-11-03: the R3a builder was stopped by the usage limit mid fix round (its merge of video-analysis is committed as 668f480; its new tests are uncommitted). Resumed.
 - User, 2026-11-03: **every feature goes in the desktop app.** Recorded in PLAN.md 4b with a GUI coverage test (every CLI flag must be reachable, apart from a documented allow-list). From now on, a feature is not done until it has its GUI control. The catch-up of features that have already landed needs scheduling (proposed: after R3, before Wave 3).
+- User, 2026-11-03: order = R3a, then R3b, then **G1 GUI catch-up** (everything landed so far, plus the coverage test), then Wave 3.

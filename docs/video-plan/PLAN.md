@@ -366,6 +366,9 @@ extract_features.py, train_feature_head.py and track.py must be reachable from
 the GUI, except a short documented allow-list of internal or test-only flags.
 From now on a feature is not done until its GUI control exists (rule 1 of the
 professional-quality rules still applies). The GUI stays torch-free.
+**Order (user, 2026-11-03):** R3 (R3a, then R3b), then **G1, the GUI catch-up**
+for everything that has landed, plus the coverage test, then Wave 3. Wave 4 keeps
+only the GUI for Wave 3's own features, which ship with their controls anyway.
 
 Until P-105 lands, every real-data manifest needs a correct `group` column by
 hand: pre-cut clips such as UCF101's get no shared-source warning.
