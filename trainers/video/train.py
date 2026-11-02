@@ -190,8 +190,8 @@ def train(
     output_dir = f'{TRAINVAL_OUTPUT_DIR}/model_weights.pth'
 
     trainer.saveModel(path=output_dir)
-    from src.video.feature_backbones import run_weight_licences
-    args.weights_licence = run_weight_licences(model_version)
+    from src.video.feature_backbones import record_weights
+    record_weights(args, model_version)
     args.save_args(TRAINVAL_OUTPUT_DIR)
 
     return output_dir

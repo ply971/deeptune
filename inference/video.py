@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from datasets.video_datasets import (VideoDataOptions, native_video_transform, open_video_dataset, video_loader_kwargs)
 from helpers import transformations
-from inference.common import attach_expected_error
+from inference.common import attach_expected_error, labels_are_comparable
 from options import DEVICE, PIN_MEM
 from src.video.multi_clip import clip_disagreement, error_model_clips_mismatch, multi_clip_scores
 from src.video.multi_crop import wrap_for_test_crops
@@ -115,7 +115,10 @@ def predict_video(
         raw_labels = raw_labels[:len(predicted)]
         if mode == 'cls':
             result['true_label'] = raw_labels
-            result['correct'] = [str(t) == str(p) for t, p in zip(raw_labels, result['predicted_label'])]
+            if labels_are_comparable(raw_labels, label_mapping):
+                result['correct'] = [str(t) == str(p) for t, p in zip(raw_labels, result['predicted_label'])]
+            else:
+                print('Not scored: these labels are names and no --label_mapping says which index each one is, so there is no accuracy to report.')
         else:
             result['true_value'] = raw_labels
             result['abs_error'] = [abs(float(t) - float(p)) for t, p in zip(raw_labels, predicted)]

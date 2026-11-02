@@ -61,7 +61,7 @@ def check_one(version: str, frames: int, batch_size: int, precision: str, backbo
     if torch.equal(grid[:1].float(), different.float()):
         raise RuntimeError(f'{version}: two different clips gave identical tokens.')
     return {'version': version, 'frames': frames, 'batch_size': batch_size, 'device': device.type,
-            'precision': precision if device.type == 'cuda' else 'fp32', 'weights': backbone.weights_name, 'weights_licence': backbone.weights_licence,
+            'precision': precision if device.type == 'cuda' else 'fp32', 'weights': backbone.weights_name, 'weights_revision': backbone.weights_revision, 'weights_licence': backbone.weights_licence,
             'token_grid': list(grid.shape[1:4]), 'token_dim': int(grid.shape[-1]), 'parameters': sum(p.numel() for p in backbone.parameters()),
             'seconds_first_forward': round(seconds, 3),
             'peak_gpu_memory_mb': round(torch.cuda.max_memory_allocated() / 2 ** 20, 1) if device.type == 'cuda' else None}

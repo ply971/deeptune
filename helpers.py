@@ -410,8 +410,9 @@ def print_metrics_table(metrics_dict, embed_shape, modality, mapping_path=None):
 
 
 def _percent_or_dash(value) -> str:
+    import numbers
     """Regression runs log the text 'Regression: No Accuracy' in the accuracy columns."""
-    return f"{value:.2f} %" if isinstance(value, (int, float)) else "-"
+    return f"{value:.2f} %" if isinstance(value, numbers.Number) else "-"
 
 
 def print_training_log_table(csv_path):

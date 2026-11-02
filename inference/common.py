@@ -6,6 +6,29 @@ from typing import Optional
 import pandas as pd
 
 
+def label_mapping_digest(mapping: dict) -> str:
+    """A hash of what each class index means, independent of how the file was formatted."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(mapping, sort_keys=True).encode('utf-8')).hexdigest()
+
+
+def label_mapping_record(path) -> tuple:
+    """(absolute path, hash) of a split's label_mapping.json, or (None, None) if it wrote none."""
+    import json
+    from pathlib import Path
+    path = Path(path)
+    if not path.is_file():
+        return None, None
+    return str(path.resolve()), label_mapping_digest(json.loads(path.read_text(encoding='utf-8-sig')))
+
+
+def labels_are_comparable(labels, label_mapping: Optional[dict]) -> bool:
+    """Whether true labels can be compared with predictions. With no mapping a prediction is only an index, so a label
+    such as 'left' can never equal it: comparing them would report a false accuracy of 0."""
+    return bool(label_mapping) or all(str(label).isdecimal() for label in labels)
+
+
 def summarize_predictions(predictions: pd.DataFrame, mode: str) -> Optional[dict]:
     """Aggregate accuracy (classification) or MAE/RMSE (regression) across
     `predictions`, or None if it has no ground truth to compare against."""

@@ -77,7 +77,8 @@ def _read_raw_weights(hub_id: str) -> dict:
 
 _V2_RENAMES = (('attn.proj.', 'attention.output.dense.'), ('mlp.fc1.', 'intermediate.dense.'), ('mlp.fc2.', 'output.dense.'), ('norm1.', 'layernorm_before.'),
                ('norm2.', 'layernorm_after.'))
-_NOT_ENCODER = ('decoder', 'encoder_to_decoder', 'mask_token', 'head', 'classifier', 'fc_norm', 'pos_embed', 'position_embeddings')
+_NOT_ENCODER = ('decoder', 'encoder_to_decoder', 'mask_token', 'head', 'classifier', 'fc_norm')
+_LEARNED_POSITIONS = ('pos_embed', 'position_embeddings')
 
 
 def convert_videomae_state(state: dict) -> dict:
@@ -95,6 +96,9 @@ def convert_videomae_state(state: dict) -> dict:
             if name.startswith(prefix):
                 name = name[len(prefix):]
                 break
+        if any(part in name for part in _LEARNED_POSITIONS):
+            raise ValueError(f'This file stores position embeddings ({key}), but transformers.VideoMAEModel builds fixed '
+                             'sin-cos ones and has nowhere to put them: loading it would silently discard what it learned.')
         if name.startswith(_NOT_ENCODER):
             continue
         name = name.replace('patch_embed.proj.', 'embeddings.patch_embeddings.projection.')
@@ -205,7 +209,7 @@ class HubClipTransform:
             size = (short, int(short * width / height)) if height <= width else (int(short * height / width), short)
         frames = F.interpolate(clip.float() / 255.0, size=size, mode='bilinear', align_corners=False, antialias=True).clamp(0.0, 1.0)
         if info.resize_short is not None:
-            top, left = int(round((size[0] - info.input_size) / 2.0)), int(round((size[1] - info.input_size) / 2.0))
+            top, left = (size[0] - info.input_size) // 2, (size[1] - info.input_size) // 2  # rounds down, as the processors do
             frames = frames[..., top:top + info.input_size, left:left + info.input_size]
         mean = torch.tensor(info.mean, dtype=frames.dtype).view(1, 3, 1, 1)
         std = torch.tensor(info.std, dtype=frames.dtype).view(1, 3, 1, 1)
@@ -238,6 +242,7 @@ class HubVideoModel(nn.Module):
         if info is None or info.kind != 'video':
             raise ValueError(f'{version} is not a clip model.')
         self.version = version
+        self.head_size_advice = 'shrink the head with --probe_width, --probe_depth or --video_arch linear_probe'
         self.model = load_hub_model(version, gradient_checkpointing=use_peft)
         width = self.model.config.hidden_size
         if freeze_backbone or use_peft:

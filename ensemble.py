@@ -23,6 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--batch_size', type=int, default=16, help='With --runs: batch size for each member (default 16).')
     p.add_argument('--mode', choices=['cls', 'reg'], default='cls', help='With --predictions: classification or regression (default cls). --runs reads it from the runs.')
     p.add_argument('--label_mapping', type=Path, default=None, help="A run's data_splits_*/label_mapping.json, for class names.")
+    p.add_argument('--allow_unverified_labels', action='store_true',
+                   help='Average members even if what their class indices mean cannot be verified. ensemble.json says so.')
     p.add_argument('--accept_weights_licence', nargs='+', default=None, metavar='LICENCE',
                    help='With --runs: accept the licence of opt-in weights by name. Runs that recorded their acceptance need no repeat.')
     return p
@@ -35,9 +37,9 @@ def main(argv=None) -> int:
     if args.runs:
         if args.data is None:
             parser.error('--runs needs --data.')
-        ensemble_runs(args.runs, args.data, args.out, args.batch_size, args.label_mapping, args.accept_weights_licence)
+        ensemble_runs(args.runs, args.data, args.out, args.batch_size, args.label_mapping, args.accept_weights_licence, args.allow_unverified_labels)
     else:
-        ensemble_tables(args.predictions, args.out, args.mode, args.label_mapping)
+        ensemble_tables(args.predictions, args.out, args.mode, args.label_mapping, args.allow_unverified_labels)
     return 0
 
 

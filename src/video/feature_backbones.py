@@ -26,7 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as tv_models
 
-from handlers.video_backbones import hub_backbone, licence_text
+from handlers.video_backbones import hub_backbone, licence_text, weights_revision
 from src.video.video3d import _KINETICS400_WEIGHTS, VIDEO3D_ARCHITECTURES
 
 DUMMY_VIDEO_BACKBONE = 'dummy_video3d'  # r3d_18 without weights, for tests
@@ -63,15 +63,21 @@ def _frame_weights(version: str):
     return available.IMAGENET1K_V1 if version.startswith(('resnet', 'swin_')) else available.DEFAULT
 
 
-def run_weight_licences(version: str) -> dict:
-    """``{version: licence}`` for a run record: the terms of every set of weights a model of this version loads."""
+def run_weight_licence(version: str) -> str:
+    """The terms of the weights a model of this version loads, as a run records them."""
     if hub_backbone(version) is not None:
-        return {version: licence_text(version)}
+        return licence_text(version)
     if version in VIDEO3D_ARCHITECTURES:
-        return {version: weight_licence(_KINETICS400_WEIGHTS[version])}
+        return weight_licence(_KINETICS400_WEIGHTS[version])
     if frame_family(version) is not None:
-        return {version: weight_licence(_frame_weights(version))}
-    return {version: weight_licence(None)}
+        return weight_licence(_frame_weights(version))
+    return weight_licence(None)
+
+
+def record_weights(args, version: str) -> None:
+    """Put the licence and exact revision of `version`'s weights on a run's arguments, so its record holds them."""
+    args.weights_licence = run_weight_licence(version)
+    args.weights_revision = weights_revision(version)
 
 
 def _grid_resnet(model, x):
@@ -187,6 +193,7 @@ class SnippetBackbone(nn.Module):
             self.model = tv_models.get_model(builder_name, weights=weights)
         self.weights_name = str(weights) if weights is not None else None
         self.weights_licence = weight_licence(weights)
+        self.weights_revision = weights_revision(version)
         if builder_name in _R3D_FAMILY:
             self.default_input_size = 112
         else:
@@ -205,6 +212,7 @@ class SnippetBackbone(nn.Module):
         self.native = False
         self.weights_name = self.hub.hub_id
         self.weights_licence = licence_text(self.version)
+        self.weights_revision = weights_revision(self.version)
         self.default_input_size = self.hub.input_size
         self.eval()
         for parameter in self.parameters():

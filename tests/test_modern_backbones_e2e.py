@@ -12,6 +12,7 @@ pytest.importorskip('av')
 from datasets.snippet_features import FeatureStore
 from datasets.video_synth import translating_clip
 from handlers.video_backbones import reset_accepted_licences
+from inference.common import label_mapping_digest
 
 SMALL = torchvision.transforms.Compose([torchvision.transforms.Resize((32, 32)), torchvision.transforms.ToTensor()])
 
@@ -43,8 +44,8 @@ def _weights(out: Path) -> Path:
     ('vjepa2_tiny', '6', ['--video_arch', 'linear_probe'], 'linear_probe'),
     ('vjepa2_tiny', '4', ['--use-peft', '--lora_rank', '2'], 'attentive_probe:probe_depth=1,probe_heads=4,probe_width=256'),
     ('videomae_tiny', '4', [], 'attentive_probe:probe_depth=1,probe_heads=4,probe_width=256'),
-    ('siglip2_tiny', '4', ['--freeze-backbone'], 'mean'),
-    ('dinov3_tiny', '4', ['--freeze-backbone'], 'mean'),
+    ('siglip2_tiny', '4', [], 'mean'),
+    ('dinov3_tiny', '4', [], 'mean'),
 ])
 def test_deeptune_then_a_new_infer_rebuilds_from_the_record(version, frames, flags, head, tmp_path):
     import deeptune
@@ -56,7 +57,10 @@ def test_deeptune_then_a_new_infer_rebuilds_from_the_record(version, frames, fla
     checkpoint = _weights(out)
     recorded = json.loads((checkpoint.parent / 'cli_arguments.json').read_text(encoding='utf-8-sig'))
     assert recorded['pooling'] == head and recorded['num_frames'] == int(frames)
-    assert recorded['weights_licence'][version].startswith('none')
+    assert recorded['weights_licence'].startswith('none') and recorded['weights_revision'].startswith('none')
+    mapping = recorded['label_mapping_path']
+    assert Path(mapping).parent == next(out.rglob('data_splits_*')), 'the mapping of this run'
+    assert recorded['label_mapping_sha256'] == label_mapping_digest(json.loads(Path(mapping).read_text(encoding='utf-8')))
     assert list(out.rglob('embed*/*')) or list(out.rglob('*embed*')), 'the embedding step ran'
     predictions = tmp_path / 'infer'
     code = infer.main(['--modality', 'video', '--checkpoint', str(checkpoint), '--data', str(tmp_path / 'left_0.mp4'), '--out', str(predictions),
@@ -64,6 +68,7 @@ def test_deeptune_then_a_new_infer_rebuilds_from_the_record(version, frames, fla
                        *(['--use-peft'] if '--use-peft' in flags else [])])
     assert code == 0
     assert len(pd.read_csv(predictions / 'predictions.csv')) == 1
+    assert json.loads((predictions / 'inference_run.json').read_text())['weights_licence'].startswith('none')
 
 
 def _extract(manifest, out, version, snippet_frames='4'):
@@ -106,6 +111,7 @@ def test_the_default_recipe_on_cached_features_and_an_ensemble_of_two_streams(tm
     result = pd.read_csv(out / 'predictions.csv').set_index('video_id')
     assert result['probability_1'].to_dict() == pytest.approx(((tables[0]['probability_1'] + tables[1]['probability_1']) / 2).to_dict())
     assert [next(iter(m['weights_licence'].values())) for m in json.loads((out / 'ensemble.json').read_text())['members']][0].startswith('none')
+    assert json.loads((out / 'ensemble.json').read_text())['label_check']['result'].startswith('verified')
 
 
 def test_extraction_refuses_opt_in_weights_before_writing_anything(tmp_path, capsys):
@@ -134,8 +140,41 @@ def test_pretrained_embeddings_use_the_bare_tiny_backbone():
     from embed.video.embed import load_embedding_model
     args = Namespace()
     backbone = load_embedding_model(None, 'pretrained', 'vjepa2_tiny', 2, 8, 2, args, 'cls')
-    assert args.weights_licence.startswith('none')
+    assert args.weights_licence.startswith('none') and args.weights_revision.startswith('none')
     assert backbone.default_input_size == 32
+
+
+def test_two_deeptune_runs_ensemble_with_their_records(tmp_path):
+    """The real record, not a hand-written one: two runs through deeptune.py, then ensemble.py on them."""
+    import deeptune
+    import ensemble
+    manifest = _manifest(tmp_path)
+    runs = []
+    for version in ('vjepa2_tiny', 'siglip2_tiny'):
+        out = tmp_path / f'run_{version}'
+        deeptune.main(['--modality', 'video', '--out', str(out), '--model_version', version, '--num_epochs', '1', '--batch_size', '2', '--num_frames', '4',
+                       '--added_layers', '2', '--embed_size', '8', '--fixed-seed', '--df', str(manifest), '--raw-data', '--report_boot', '0'])
+        runs.append(str(_weights(out)))
+    both = tmp_path / 'both'
+    assert ensemble.main(['--runs', *runs, '--data', str(tmp_path / 'left_0.mp4'), '--out', str(both), '--batch_size', '1']) == 0
+    record = json.loads((both / 'ensemble.json').read_text())
+    assert record['label_check']['result'].startswith('verified')
+    assert pd.read_csv(both / 'predictions.csv')['predicted_label'].iloc[0] in ('left', 'right')
+
+
+def test_embeddings_record_the_licence_in_one_shape(tmp_path):
+    from argparse import Namespace
+
+    import torch
+    from embed.video.embed import load_embedding_model
+    from utils import build_video_model
+    weights = tmp_path / 'model_weights.pth'
+    torch.save(build_video_model('vjepa2_tiny', 2, 2, 8, True, 'cls').state_dict(), weights)
+    pretrained, finetuned = Namespace(), Namespace()
+    load_embedding_model(None, 'pretrained', 'vjepa2_tiny', 2, 8, 2, pretrained, 'cls')
+    load_embedding_model(weights, 'finetuned', 'vjepa2_tiny', 2, 8, 2, finetuned, 'cls')
+    assert pretrained.weights_licence == finetuned.weights_licence and isinstance(finetuned.weights_licence, str)
+    assert pretrained.weights_revision == finetuned.weights_revision
 
 
 def test_the_real_weights_smoke_script_runs_on_tiny_models(tmp_path):

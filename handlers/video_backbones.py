@@ -13,7 +13,9 @@ through ``torch.hub``, and its README states no checkpoint licence (P-115, F-015
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Optional
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -37,6 +39,7 @@ class HubBackbone:
     std: tuple = IMAGENET_STD
     fixed_frames: Optional[int] = None  # None: any frame count
     memory_note: str = ''
+    frozen_by_default: bool = True  # the CLI freezes it unless --unfreeze_backbone or --use-peft (P-101)
 
     @property
     def is_untrained(self) -> bool:
@@ -58,7 +61,7 @@ HUB_BACKBONES = {b.version: b for b in (
                 input_size=224, resize_short=224, fixed_frames=16,
                 memory_note='ViT-B, about 87M parameters, 16 frames only.'),
     HubBackbone('siglip', 'siglip', 'frame', 'google/siglip-so400m-patch14-384', 'Apache-2.0', 'model card, read 2026-10-31',
-                input_size=384, mean=HALF, std=HALF,
+                input_size=384, mean=HALF, std=HALF, frozen_by_default=False,  # as B2 shipped it
                 memory_note='384 px frames and a large ViT: every frame costs far more than at 224 px.'),
     HubBackbone('siglip2_b16', 'siglip', 'frame', 'google/siglip2-base-patch16-224', 'Apache-2.0', 'model card, board F-002',
                 input_size=224, mean=HALF, std=HALF,
@@ -68,7 +71,7 @@ HUB_BACKBONES = {b.version: b for b in (
                 input_size=224, memory_note='ViT-B on each frame: about one image forward per frame.'),
     HubBackbone('vjepa2_tiny', 'vjepa2', 'video', None, input_size=32, resize_short=36),
     HubBackbone('videomae_tiny', 'videomae', 'video', None, input_size=32, resize_short=36, fixed_frames=4),
-    HubBackbone('siglip_tiny', 'siglip', 'frame', None, input_size=32, mean=HALF, std=HALF),
+    HubBackbone('siglip_tiny', 'siglip', 'frame', None, input_size=32, mean=HALF, std=HALF, frozen_by_default=False),
     HubBackbone('siglip2_tiny', 'siglip', 'frame', None, input_size=32, mean=HALF, std=HALF),
     HubBackbone('dinov3_tiny', 'dinov3', 'frame', None, input_size=32),
 )}
@@ -116,17 +119,75 @@ def licence_text(version) -> str:
     return f'{info.licence} ({use}{info.hub_id}; source: {info.licence_source}){gated}'
 
 
+def _as_names(licences) -> set:
+    if isinstance(licences, str):
+        licences = [licences]
+    return {str(name).casefold() for name in licences or ()}
+
+
+def weights_choice_problem(version, accepted=None) -> Optional[str]:
+    """Why `version`'s weights may not load with these accepted licences (default: this process's), or None."""
+    info = hub_backbone(version)
+    if info is None or info.is_untrained or not info.opt_in:
+        return None
+    names = _accepted if accepted is None else _as_names(accepted)
+    if info.licence.casefold() in names:
+        return None
+    return (f'{version} is opt-in: its weights are under {info.licence}' + (f', and {info.gated}' if info.gated else '')
+            + f'. To use them, read the licence and add --accept_weights_licence {info.licence}.')
+
+
 def require_weights_choice(version) -> None:
     """Print the licence of `version`'s weights. Opt-in weights also need the licence named."""
     info = hub_backbone(version)
     if info is None or info.is_untrained:
         return
     print(f'Weights of {version}: {licence_text(version)}')
-    if info.opt_in and info.licence.casefold() not in _accepted:
-        raise WeightsLicenceNotAccepted(
-            f'{version} is opt-in: its weights are under {info.licence}'
-            + (f', and {info.gated}' if info.gated else '')
-            + f'. To use them, read the licence and add --accept_weights_licence {info.licence}.')
+    problem = weights_choice_problem(version)
+    if problem:
+        raise WeightsLicenceNotAccepted(problem)
+
+
+@contextmanager
+def only_accepted_licences(licences):
+    """Inside this block exactly these licences count, whatever the process accepted before. Ensemble members use it,
+    so one member's recorded acceptance cannot open the gate for another."""
+    before = set(_accepted)
+    _accepted.clear()
+    _accepted.update(_as_names(licences))
+    try:
+        yield
+    finally:
+        _accepted.clear()
+        _accepted.update(before)
+
+
+def hub_snapshot_sha(hub_id: str, cache_dir=None) -> Optional[str]:
+    """The commit of the local Hugging Face cache's current snapshot of `hub_id`, or None if it is not there. Reads
+    only local files. The weights files are tried too: VideoMAE V2 has no usable config.json to fetch."""
+    from huggingface_hub import try_to_load_from_cache
+    for filename in ('config.json', 'model.safetensors', 'pytorch_model.bin'):
+        try:
+            found = try_to_load_from_cache(hub_id, filename, cache_dir=cache_dir)
+        except ValueError:  # hub_id is a local path, not a repository name
+            return None
+        if isinstance(found, str):
+            parts = Path(found).parts
+            if 'snapshots' in parts:
+                return parts[parts.index('snapshots') + 1]
+    return None
+
+
+def weights_revision(version) -> str:
+    """Which exact weights a run used, for its record next to `weights_licence`. Never guesses: if the snapshot cannot
+    be read locally the record says so, and the weights cannot be traced further than their repository name."""
+    info = hub_backbone(version)
+    if info is None:
+        return 'not applicable: torchvision weights are named in weights_licence'
+    if info.is_untrained:
+        return 'none: random initialisation, no pretrained weights'
+    sha = hub_snapshot_sha(info.hub_id)
+    return sha if sha else f'unknown: no snapshot of {info.hub_id} in the local Hugging Face cache'
 
 
 def check_frame_count(version, num_frames) -> None:

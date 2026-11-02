@@ -10,7 +10,7 @@ import torch
 import handlers.video_backbones as registry
 from handlers.video_backbones import (HUB_BACKBONES, WeightsLicenceNotAccepted, accept_weights_licences, licence_text,
                                       require_weights_choice, reset_accepted_licences)
-from src.video.feature_backbones import SnippetBackbone, fixed_input, run_weight_licences
+from src.video.feature_backbones import SnippetBackbone, fixed_input, run_weight_licence
 from src.video.feature_heads import AttentiveProbe, LinearProbe
 from src.video.hub_backbones import (HubClipTransform, HubVideoModel, checked_from_pretrained, convert_videomae_state, encoder_token_grid,
                                      load_hub_model, probe_from_pooling)
@@ -223,7 +223,7 @@ def _noise_clip(height, width):
     return torch.nn.functional.interpolate(torch.from_numpy(coarse).float(), size=(height, width), mode='bilinear').round().to(torch.uint8)
 
 
-@pytest.mark.parametrize('height,width', [(320, 480), (480, 320), (300, 300)])
+@pytest.mark.parametrize('height,width', [(320, 480), (480, 320), (300, 300), (360, 640), (1080, 1920), (1920, 1080)])
 def test_vjepa_transform_matches_the_transformers_processor(height, width):
     from transformers import VJEPA2VideoProcessor
     clip = _noise_clip(height, width)
@@ -233,7 +233,7 @@ def test_vjepa_transform_matches_the_transformers_processor(height, width):
     assert (ours - theirs).abs().max() < 0.03, 'within the rounding of their uint8 resize'
 
 
-@pytest.mark.parametrize('height,width', [(320, 480), (480, 320)])
+@pytest.mark.parametrize('height,width', [(320, 480), (480, 320), (300, 533)])
 def test_videomae_transform_matches_the_transformers_processor(height, width):
     from transformers import VideoMAEVideoProcessor
     clip = _noise_clip(height, width)
@@ -241,6 +241,28 @@ def test_videomae_transform_matches_the_transformers_processor(height, width):
         videos=[clip], return_tensors='pt')['pixel_values'][0]
     ours = HubClipTransform('videomae_b16')(clip)
     assert ours.shape == theirs.shape == (2, 3, 224, 224)
+    assert (ours - theirs).abs().max() < 0.03
+
+
+def test_the_crop_rounds_down_like_the_processor_when_it_falls_between_pixels():
+    """16:9 at V-JEPA 2's sizes leaves 131.5 pixels on each side. A ramp's value is its position, so it shows the crop."""
+    from extract_features import crop_window
+    from transformers import VJEPA2VideoProcessor
+    ramp = torch.linspace(0, 255, 640).round().to(torch.uint8).expand(1, 3, 360, 640)
+    theirs = VJEPA2VideoProcessor()(videos=[ramp], return_tensors='pt')['pixel_values_videos'][0]
+    ours = HubClipTransform('vjepa2_vitl')(ramp)
+    wrong_side = HubClipTransform('vjepa2_vitl')(torch.cat([ramp[..., :1], ramp[..., :-1]], dim=-1))
+    assert (ours - theirs).abs().mean() < (wrong_side - theirs).abs().mean()
+    x0, x1, _, _ = crop_window('vjepa2_vitl', None, 640, 360)
+    assert (x0, x1) == (pytest.approx(131 / 519), pytest.approx(387 / 519))
+
+
+def test_dinov3_transform_matches_the_transformers_processor():
+    from transformers import DINOv3ViTImageProcessor
+    clip = _noise_clip(320, 480)
+    theirs = DINOv3ViTImageProcessor()(images=[frame for frame in clip], return_tensors='pt')['pixel_values']
+    ours = HubClipTransform('dinov3_vitb16')(clip)
+    assert ours.shape == theirs.shape == (2, 3, 224, 224), 'the whole frame squashed, no centre crop'
     assert (ours - theirs).abs().max() < 0.03
 
 
@@ -309,13 +331,13 @@ def test_licence_free_defaults_need_no_acceptance_but_are_printed(capsys):
 
 
 def test_run_records_name_the_terms_of_each_family():
-    assert run_weight_licences('vjepa2_vitl') == {'vjepa2_vitl': licence_text('vjepa2_vitl')}
-    assert 'non-commercial' in run_weight_licences('videomae_b16')['videomae_b16']
-    assert run_weight_licences('vjepa2_tiny')['vjepa2_tiny'].startswith('none')
-    assert 'KINETICS400' in run_weight_licences('r3d_18')['r3d_18']
-    assert 'IMAGENET1K_V1' in run_weight_licences('resnet18')['resnet18'], 'the weights src/vision/resnet.py pins'
-    assert 'non-commercial' in run_weight_licences('vit_h_14')['vit_h_14'], 'a DEFAULT with its own terms'
-    assert run_weight_licences('resnet_tiny')['resnet_tiny'].startswith('none')
+    assert run_weight_licence('vjepa2_vitl') == licence_text('vjepa2_vitl')
+    assert 'non-commercial' in run_weight_licence('videomae_b16')
+    assert run_weight_licence('vjepa2_tiny').startswith('none')
+    assert 'KINETICS400' in run_weight_licence('r3d_18')
+    assert 'IMAGENET1K_V1' in run_weight_licence('resnet18'), 'the weights src/vision/resnet.py pins'
+    assert 'non-commercial' in run_weight_licence('vit_h_14'), 'a DEFAULT with its own terms'
+    assert run_weight_licence('resnet_tiny').startswith('none')
 
 
 def test_torchvision_frame_weights_match_what_src_vision_builds():
@@ -358,7 +380,16 @@ def test_partial_checkpoint_is_refused_not_left_random(tmp_path):
 
 
 def _tiny_videomae():
-    return load_hub_model('videomae_tiny').eval()
+    """With non-zero query and value biases, which random init leaves at zero: a test on zeros cannot see a lost or swapped
+    bias. The key layer's stays zero, since no old layout has one."""
+    model = load_hub_model('videomae_tiny').eval()
+    with torch.no_grad():
+        for name, parameter in model.named_parameters():
+            if name.endswith('attention.attention.query.bias'):
+                parameter.copy_(torch.linspace(0.5, 1.5, parameter.numel()))
+            elif name.endswith('attention.attention.value.bias'):
+                parameter.copy_(torch.linspace(-2.0, -1.0, parameter.numel()))
+    return model
 
 
 def _old_transformers_layout(state):
@@ -403,10 +434,7 @@ def _upstream_v2_layout(state):
 def test_every_videomae_layout_gives_the_same_network(layout):
     source = _tiny_videomae()
     state = source.state_dict()
-    for name, value in state.items():
-        if name.endswith('key.bias'):
-            value.zero_()  # neither old layout has one
-    target = _tiny_videomae()
+    target = load_hub_model('videomae_tiny').eval()
     target.load_state_dict(convert_videomae_state(layout(state)), strict=True)
     x = _clip('videomae_tiny', batch=1)
     with torch.no_grad():
@@ -433,9 +461,6 @@ def test_videomae_real_path_reads_a_local_file(tmp_path, monkeypatch):
     import src.video.hub_backbones as hub
     source = _tiny_videomae()
     state = {k: v.clone() for k, v in source.state_dict().items()}
-    for name, value in state.items():
-        if name.endswith('key.bias'):
-            value.zero_()
     save_file(_old_transformers_layout(state), str(tmp_path / 'model.safetensors'))
     VideoMAEConfig(image_size=32, patch_size=8, num_frames=4, hidden_size=16, num_hidden_layers=1, num_attention_heads=2, intermediate_size=32).save_pretrained(tmp_path)
     _with_hub_id(monkeypatch, 'videomae_b16', tmp_path)
@@ -443,6 +468,98 @@ def test_videomae_real_path_reads_a_local_file(tmp_path, monkeypatch):
     loaded = hub.load_hub_model('videomae_b16')
     assert torch.equal(loaded.state_dict()['encoder.layer.0.attention.attention.value.bias'],
                        state['encoder.layer.0.attention.attention.value.bias'])
+    assert state['encoder.layer.0.attention.attention.value.bias'].abs().min() > 0
+
+
+def _save_videomae_folder(folder, state, filename='model.safetensors'):
+    from safetensors.torch import save_file
+    from transformers import VideoMAEConfig
+    folder.mkdir(parents=True, exist_ok=True)
+    if filename.endswith('.bin'):
+        torch.save(state, folder / filename)
+    else:
+        save_file(state, str(folder / filename))
+    VideoMAEConfig(image_size=32, patch_size=8, num_frames=4, hidden_size=16, num_hidden_layers=1, num_attention_heads=2, intermediate_size=32).save_pretrained(folder)
+
+
+def _weights_of(source):
+    return {k: v.clone() for k, v in source.state_dict().items()}
+
+
+def test_a_partial_videomae_file_is_refused_through_the_real_loader(tmp_path, monkeypatch):
+    state = _old_transformers_layout(_weights_of(_tiny_videomae()))
+    del state['videomae.encoder.layer.0.intermediate.dense.weight']
+    _save_videomae_folder(tmp_path, state)
+    _with_hub_id(monkeypatch, 'videomae_b16', tmp_path)
+    accept_weights_licences(['CC-BY-NC-4.0'])
+    with pytest.raises(RuntimeError, match='intermediate.dense.weight'):
+        load_hub_model('videomae_b16')
+
+
+def test_a_file_with_an_unforeseen_key_is_refused_through_the_real_loader(tmp_path, monkeypatch):
+    state = _old_transformers_layout(_weights_of(_tiny_videomae()))
+    state['videomae.encoder.layer.0.gamma_1'] = torch.zeros(16)
+    _save_videomae_folder(tmp_path, state)
+    _with_hub_id(monkeypatch, 'videomae_b16', tmp_path)
+    accept_weights_licences(['CC-BY-NC-4.0'])
+    with pytest.raises(RuntimeError, match='gamma_1'):
+        load_hub_model('videomae_b16')
+
+
+@pytest.mark.parametrize('key', ['model.pos_embed', 'videomae.embeddings.position_embeddings'])
+def test_learned_positions_are_refused_rather_than_dropped(key):
+    state = _weights_of(_tiny_videomae())
+    state[key] = torch.ones(1, 32, 16)
+    with pytest.raises(ValueError, match='position embeddings'):
+        convert_videomae_state(state)
+
+
+def test_the_bin_branch_reads_the_weights(tmp_path, monkeypatch):
+    source = _tiny_videomae()
+    state = _weights_of(source)
+    _save_videomae_folder(tmp_path, _old_transformers_layout(state), 'pytorch_model.bin')
+    _with_hub_id(monkeypatch, 'videomae_b16', tmp_path)
+    accept_weights_licences(['CC-BY-NC-4.0'])
+    loaded = load_hub_model('videomae_b16').eval()
+    x = _clip('videomae_tiny', batch=1)
+    with torch.no_grad():
+        assert torch.equal(loaded(pixel_values=x).last_hidden_state, source(pixel_values=x).last_hidden_state)
+
+
+class _NotWeights:
+    """Anything pickle would rebuild. A weights file must not be able to do this."""
+
+
+def test_a_bin_file_cannot_run_pickled_objects(tmp_path):
+    from src.video.hub_backbones import _read_raw_weights
+    torch.save({'x': _NotWeights()}, tmp_path / 'pytorch_model.bin')
+    with pytest.raises(Exception, match='(?i)weights.?only|unsupported'):
+        _read_raw_weights(str(tmp_path))
+
+
+def test_a_folder_without_weights_is_a_clear_error(tmp_path):
+    from src.video.hub_backbones import _read_raw_weights
+    with pytest.raises(FileNotFoundError, match='model.safetensors'):
+        _read_raw_weights(str(tmp_path))
+
+
+def test_a_hub_repository_with_only_a_bin_file_falls_back_to_it(tmp_path, monkeypatch):
+    """The download call is replaced, so nothing leaves the machine."""
+    import huggingface_hub
+    from huggingface_hub.errors import EntryNotFoundError
+    from src.video.hub_backbones import _read_raw_weights
+    torch.save({'x': torch.ones(2)}, tmp_path / 'pytorch_model.bin')
+    asked = []
+
+    def fake_download(repo, filename):
+        asked.append(filename)
+        if filename == 'model.safetensors':
+            raise EntryNotFoundError('no such file')
+        return str(tmp_path / filename)
+
+    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', fake_download)
+    assert torch.equal(_read_raw_weights('some/repo')['x'], torch.ones(2))
+    assert asked == ['model.safetensors', 'pytorch_model.bin']
 
 
 # --- the CLI --------------------------------------------------------------------------------------------------------
@@ -475,6 +592,45 @@ def test_cli_leaves_other_models_alone():
     assert options.pooling == 'mean' and options.freeze_backbone is False
 
 
+def test_cli_says_when_it_replaces_the_default_pooling(capsys):
+    options = _options('--model_version', 'vjepa2_tiny')
+    assert options.pooling.startswith('attentive_probe')
+    assert 'attentive_probe' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('flags', [['--pooling', 'mean'], ['--pooling', 'attention'], ['--video_arch', 'frame_pool'],
+                                   ['--video_arch', 'slow_fusion'], ['--video_arch', 'tsm']])
+def test_cli_refuses_an_explicit_frame_pooling_on_a_clip_model(flags, capsys):
+    """Otherwise an ablation of mean against the attentive probe compares two identical models."""
+    with pytest.raises(SystemExit):
+        _options('--model_version', 'vjepa2_tiny', *flags)
+    assert '--video_arch linear_probe' in capsys.readouterr().err
+
+
+def test_cli_keeps_an_explicit_mean_on_other_models():
+    assert _options('--model_version', 'resnet18', '--pooling', 'mean').pooling == 'mean'
+    assert _options('--model_version', 'vjepa2_tiny', '--pooling', 'linear_probe').pooling == 'linear_probe'
+
+
+@pytest.mark.parametrize('flags', [['--model_version', 'resnet18'], ['--model_version', 'r3d_18'], ['--model_version', 'siglip_tiny'],
+                                   ['--model_version', 'vjepa2_tiny', '--freeze-backbone'], ['--model_version', 'vjepa2_tiny', '--use-peft'],
+                                   ['--model_version', 'siglip2_tiny', '--freeze-backbone']])
+def test_cli_refuses_unfreeze_where_it_means_nothing_or_contradicts(flags, capsys):
+    with pytest.raises(SystemExit):
+        _options(*flags, '--unfreeze_backbone')
+    assert '--unfreeze_backbone' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('version,frozen', [('siglip2_tiny', True), ('dinov3_tiny', True), ('vjepa2_tiny', True), ('videomae_tiny', True),
+                                            ('siglip_tiny', False), ('resnet18', False)])
+def test_cli_frozen_defaults_follow_p101_and_leave_older_models_alone(version, frozen):
+    assert _options('--model_version', version, '--num_frames', '4').freeze_backbone is frozen
+
+
+def test_cli_can_unfreeze_the_appearance_stream():
+    assert _options('--model_version', 'siglip2_tiny', '--unfreeze_backbone').freeze_backbone is False
+
+
 def test_cli_refuses_opt_in_weights_without_the_licence_and_says_how(capsys):
     with pytest.raises(SystemExit):
         _options('--model_version', 'videomae_b16', '--num_frames', '16')
@@ -505,4 +661,46 @@ def test_registry_is_torch_free():
     code = "import sys, handlers.video_backbones, handlers.video_arch; sys.exit(1 if 'torch' in sys.modules else 0)"
     assert subprocess.run([sys.executable, '-c', code]).returncode == 0
     assert registry.HUB_VIDEO_VERSIONS
-    json.dumps(run_weight_licences('vjepa2_vitl'))
+
+
+# --- exact weights ----------------------------------------------------------------------------------------------------
+def _fake_cache(root, repo, sha, filename='config.json'):
+    folder = root / ('models--' + repo.replace('/', '--'))
+    (folder / 'refs').mkdir(parents=True)
+    (folder / 'refs' / 'main').write_text(sha)
+    (folder / 'snapshots' / sha).mkdir(parents=True)
+    (folder / 'snapshots' / sha / filename).write_text('{}')
+
+
+@pytest.mark.parametrize('filename', ['config.json', 'model.safetensors'])
+def test_the_snapshot_commit_is_read_from_the_local_cache(tmp_path, filename):
+    from handlers.video_backbones import hub_snapshot_sha
+    _fake_cache(tmp_path, 'facebook/some-model', 'a' * 40, filename)
+    assert hub_snapshot_sha('facebook/some-model', cache_dir=tmp_path) == 'a' * 40
+    assert hub_snapshot_sha('facebook/another-model', cache_dir=tmp_path) is None
+
+
+def test_a_revision_that_cannot_be_read_says_so(tmp_path, monkeypatch):
+    from handlers.video_backbones import weights_revision
+    monkeypatch.setitem(HUB_BACKBONES, 'vjepa2_vitl', replace(HUB_BACKBONES['vjepa2_vitl'], hub_id=str(tmp_path)))
+    assert weights_revision('vjepa2_vitl').startswith('unknown:')
+    assert weights_revision('vjepa2_tiny').startswith('none')
+    assert weights_revision('r3d_18').startswith('not applicable')
+
+
+# --- budgets ----------------------------------------------------------------------------------------------------------
+def test_budget_errors_name_the_flags_that_shape_this_head():
+    from trainers.param_budget import apply_top_down_budget, build_with_budget
+    model = build_video_model('vjepa2_tiny', 3, 2, 8, True, 'cls')
+    with pytest.raises(ValueError, match='--probe_width') as error:
+        apply_top_down_budget(model, 10)
+    assert '--embed_size' not in str(error.value)
+    with pytest.raises(ValueError, match='--probe_width') as error:
+        build_with_budget(lambda rank: build_video_model('vjepa2_tiny', 3, 2, 8, True, 'cls', use_peft=True, lora_rank=rank), 10, True, 8, True, rank_is_head_width=False)
+    assert '--embed_size' not in str(error.value)
+
+
+def test_budget_errors_of_other_models_are_unchanged():
+    from trainers.param_budget import apply_top_down_budget
+    with pytest.raises(ValueError, match='--embed_size'):
+        apply_top_down_budget(build_video_model('resnet_tiny', 3, 2, 8, True, 'cls'), 10)

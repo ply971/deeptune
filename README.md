@@ -526,9 +526,10 @@ video or the GPU yet, so **DeepTune has no accuracy or memory figure for them**.
 V-JEPA 2.1 is not available: `transformers` has no loader for it, and its weights state no licence.
 
 **Licences.** Choosing a model prints the licence of its weights. Opt-in weights also need the licence named, for example
-`--accept_weights_licence CC-BY-NC-4.0`; without it the run stops before loading them. `cli_arguments.json` (`weights_licence`),
-feature sidecars, probe runs and `ensemble.json` record the terms of the weights behind them. The non-commercial VideoMAE
-weights are not for commercial use whatever flag you pass.
+`--accept_weights_licence CC-BY-NC-4.0`; without it the run stops before loading them. `cli_arguments.json`, feature sidecars,
+probe runs, `inference_run.json` and `ensemble.json` record `weights_licence` and `weights_revision`. The revision is the commit
+of the Hugging Face snapshot in the local cache; if that cannot be read, it says `unknown: ...` and the weights can only be traced
+to their repository name. The non-commercial VideoMAE weights are not for commercial use whatever flag you pass.
 
 **The default recipe: frozen V-JEPA 2 and an attentive probe.** On cached features, so each video is decoded and encoded once:
 
@@ -543,9 +544,12 @@ From pixels, in one command:
 .venv\Scripts\python.exe deeptune.py --modality video --df clips.csv --raw-data --out results --model_version vjepa2_vitl --num_frames 16 --batch_size 1 --precision bf16
 ```
 
-Here the encoder stays frozen unless you pass `--unfreeze_backbone` or `--use-peft` (with `--lora_rank`), and the head is
-`--video_arch attentive_probe` (`--probe_width --probe_depth --probe_heads`) or `linear_probe`. `--added_layers` and
-`--embed_size` do not shape these heads. Frame poolings do not apply to these clip models. Saved weights include the frozen encoder.
+Here the encoder stays frozen unless you pass `--unfreeze_backbone` or `--use-peft` (with `--lora_rank`), and the run says so.
+`siglip2_b16` and `dinov3_vitb16` are frozen by default too; `siglip`, which came earlier, is not. `--unfreeze_backbone` is refused
+on any other model and alongside `--freeze-backbone` or `--use-peft`. The head is `--video_arch attentive_probe` (`--probe_width
+--probe_depth --probe_heads`, the default, which the run prints) or `linear_probe`, the plain mean of the tokens. An explicit
+`--pooling mean` or another frame pooling is refused on these clip models, because it would not mean what it says. `--added_layers` and
+`--embed_size` do not shape these heads. Saved weights include the frozen encoder.
 The probe defaults to one cross-attention block, while the V-JEPA 2 paper's evaluation uses four.
 
 **Memory on 8 GB.** Not measured yet: `scripts/smoke_modern_backbones.py` reports the peak at the GPU gate. Expect, in order of
@@ -555,7 +559,12 @@ fit. Start `vjepa2_vitl` at batch size 1 or 2 and 8 or 16 frames. Its token coun
 one image forward per frame, so a clip's cost grows with `--num_frames`.
 
 **Ensembles** average class probabilities across trained runs, not logits. Each member runs with what it recorded, so backbones,
-frame counts, `--test_clips` and preprocessing can differ. Members must have the same task and class meanings, or the run is refused.
+frame counts, `--test_clips` and preprocessing can differ, and `infer.py --ensemble` refuses flags that would be ignored.
+Members must solve the same task. For classification, index k must be one class in every member: a `deeptune.py` run records the path and
+hash of its label mapping, and each member is checked against its own record. Members known to differ are always refused. A member
+that cannot be verified, such as a run from before this record or one trained without `deeptune.py`, is refused unless you pass
+`--allow_unverified_labels`. Then nothing checks the class order, and `ensemble.json` (`label_check`) says so. Finished tables are
+checked through their `target` column. Opt-in weights need each member's own recorded acceptance or the flag.
 
 ```powershell
 .venv\Scripts\python.exe ensemble.py --runs results_a results_b --data clips\ --out both
@@ -564,7 +573,8 @@ frame counts, `--test_clips` and preprocessing can differ. Members must have the
 ```
 
 The last form joins finished tables by `video_id`, which is the way to ensemble feature probes. The output has `predictions.csv`
-with a `member_disagreement` column, `ensemble.json`, and `inference_metrics.json` when there are labels. It has no
+with a `member_disagreement` column, `ensemble.json`, and `inference_metrics.json` when there are labels that can be scored: names
+with no mapping are not scored, since a prediction is then only an index. It has no
 `expected_error`, because each member's error model describes that member alone. An ensemble is not guaranteed to beat its best
 member, so compare them on your own data.
 

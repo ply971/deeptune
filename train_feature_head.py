@@ -127,8 +127,9 @@ def feature_provenance(dataset):
     streams = dataset.store.info()['streams']
     provenance = {'feature_config_hash': {name: streams[name].get('config_hash') for name in dataset.streams if name in streams}}
     # Every set of weights behind these features, from the sidecars extraction wrote.
-    provenance['weights_licence'] = {name: (dataset.store.read_sidecar(name, dataset.video_ids[0]) or {}).get('weights_licence')
-                                     for name in dataset.streams}
+    sidecars = {name: dataset.store.read_sidecar(name, dataset.video_ids[0]) or {} for name in dataset.streams}
+    provenance['weights_licence'] = {name: sidecar.get('weights_licence') for name, sidecar in sidecars.items()}
+    provenance['weights_revision'] = {name: sidecar.get('weights_revision') for name, sidecar in sidecars.items()}
     if 'motion' in dataset.streams:
         sidecar = dataset.store.read_sidecar('motion', dataset.video_ids[0]) or {}
         provenance['motion_weights_trained_on_motion'] = sidecar.get('motion_weights_trained_on_motion')

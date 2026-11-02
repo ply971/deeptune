@@ -156,7 +156,10 @@ def crop_window(version: Optional[str], input_size: Optional[int], width: int, h
         resized_w, resized_h = resize_size[0], int(resize_size[0] * height / width)
     else:
         resized_h, resized_w = resize_size[0], int(resize_size[0] * width / height)
-    top, left = int(round((resized_h - crop_h) / 2.0)), int(round((resized_w - crop_w) / 2.0))
+    if hub is not None:  # the same rounding as HubClipTransform
+        top, left = (resized_h - crop_h) // 2, (resized_w - crop_w) // 2
+    else:
+        top, left = int(round((resized_h - crop_h) / 2.0)), int(round((resized_w - crop_w) / 2.0))
     return left / resized_w, (left + crop_w) / resized_w, top / resized_h, (top + crop_h) / resized_h
 
 
@@ -411,7 +414,8 @@ def extract_features(data, out, streams: Sequence[str] = ('rgb',), model_version
             'variable_fps': bool(meta.variable_fps), 'snippet_frames': snippet_frames, 'stride': stride,
             'num_snippets': len(stored), 'last_snippet_valid_frames': info['last_snippet_valid_frames'],
             'backbone': extractor.config['backbone'], 'weights': extractor.backbone.weights_name,
-            'weights_licence': extractor.backbone.weights_licence, 'input_size': extractor.input_size,
+            'weights_licence': extractor.backbone.weights_licence, 'weights_revision': getattr(extractor.backbone, 'weights_revision', None),
+            'input_size': extractor.input_size,
             'field_of_view': list(crop_window(extractor.config.get('geometry_backbone', extractor.config['backbone']),
                                               extractor.config['input_size'], meta.width, meta.height)),
             'dim': int(stored.shape[-1]), 'token_grid': list(extractor.stored_grid) if extractor.stored_grid else None,

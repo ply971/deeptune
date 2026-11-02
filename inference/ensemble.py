@@ -9,6 +9,11 @@ columns are not carried over, because each error model was fitted on one model's
 the average. ``member_disagreement`` is the same measure as ``clip_disagreement``: the mean total-variation distance
 between each member's probabilities and the average, 0 when they all agree. For regression it is the members' standard
 deviation.
+
+Class order: an average only means something if index k is the same class in every member. A deeptune.py run records the
+path and hash of its label mapping, and each member is checked against its own record. A member that cannot be verified
+is refused unless ``allow_unverified_labels`` is given, and members known to disagree are always refused. Finished tables
+are checked through their ``target`` column, which holds the class index itself. ``ensemble.json`` states the result.
 """
 from __future__ import annotations
 
@@ -19,6 +24,8 @@ from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
+
+from inference.common import label_mapping_digest, labels_are_comparable
 
 _PROBABILITY = re.compile(r'^probability_(\d+)$')
 ENSEMBLE_RECORD = 'ensemble.json'
@@ -93,7 +100,10 @@ def combine_tables(tables: Sequence[pd.DataFrame], mode: str = 'cls', label_mapp
             result['correct'] = result['target'].astype(float).to_numpy() == predicted
         elif truth is not None:
             result['true_label'] = tables[0][truth].to_numpy()
-            result['correct'] = [str(t) == str(p) for t, p in zip(result['true_label'], result['predicted_label'])]
+            if labels_are_comparable(result['true_label'], label_mapping):
+                result['correct'] = [str(t) == str(p) for t, p in zip(result['true_label'], result['predicted_label'])]
+            else:
+                print('Not scored: these labels are names and no label mapping says which index each one is, so there is no accuracy to report.')
         return result
     values = [next((table[c] for c in ('predicted_value', 'prediction') if c in table.columns), None) for table in tables]
     if any(v is None for v in values):
@@ -132,43 +142,88 @@ def resolve_checkpoint(run: Path) -> Path:
     return found[0]
 
 
-def find_label_mapping(checkpoint: Path) -> Optional[dict]:
-    """The run's ``data_splits_*/label_mapping.json``, if it can be found near its checkpoint."""
-    for folder in list(Path(checkpoint).parents)[:3]:
-        for path in sorted(folder.glob('data_splits_*/label_mapping.json')):
-            return json.loads(path.read_text(encoding='utf-8-sig'))
-    return None
+def verify_label_mapping(checkpoint: Path, recorded: dict) -> dict:
+    """Check a member's label mapping against its own record. Only the hash decides: the recorded path is tried first, then
+    the folders a moved run would keep it in. Nothing is trusted for being nearby, so an unrelated run's file cannot match."""
+    digest = recorded.get('label_mapping_sha256')
+    if not digest:
+        return {'status': 'unverified', 'reason': 'the run recorded no label mapping', 'mapping': None, 'sha256': None}
+    candidates = [Path(recorded['label_mapping_path'])] if recorded.get('label_mapping_path') else []
+    for folder in list(Path(checkpoint).parents)[:2]:
+        candidates.extend(sorted(folder.glob('data_splits_*/label_mapping.json')))
+    for path in candidates:
+        if path.is_file():
+            mapping = json.loads(path.read_text(encoding='utf-8-sig'))
+            if label_mapping_digest(mapping) == digest:
+                return {'status': 'verified', 'path': str(path), 'mapping': mapping, 'sha256': digest}
+    return {'status': 'unverified', 'reason': f'no file matching the recorded hash {digest[:12]} was found', 'mapping': None, 'sha256': digest}
+
+
+def check_label_mappings(checkpoints: Sequence[Path], recorded: Sequence[dict], given: Optional[dict], allow_unverified: bool) -> tuple:
+    """(mapping to name classes with, the check's result for ensemble.json). Raises unless index k is known to be one class."""
+    checks = [verify_label_mapping(c, v) for c, v in zip(checkpoints, recorded)]
+    verified = [check for check in checks if check['status'] == 'verified']
+    if len({check['sha256'] for check in verified}) > 1:
+        raise ValueError('Members map class names to indices differently, so averaging would mix classes: '
+                         f'{[check["mapping"] for check in verified]}. Retrain them on one split.')
+    if verified and given is not None and label_mapping_digest(given) != verified[0]['sha256']:
+        raise ValueError(f'--label_mapping differs from the mapping the runs recorded: {verified[0]["mapping"]}.')
+    unverified = [(str(c), check['reason']) for c, check in zip(checkpoints, checks) if check['status'] != 'verified']
+    if unverified and not allow_unverified:
+        raise ValueError(f'Cannot verify what the class indices of {len(unverified)} member(s) mean, so averaging could mix classes: {unverified}. '
+                         'Retrain through deeptune.py, which records it, or pass --allow_unverified_labels if you know the order is the same.')
+    result = {'result': 'not verified, allowed by --allow_unverified_labels' if unverified else 'verified: every member has the same mapping',
+              'members': [{'checkpoint': str(c), **{k: v for k, v in check.items() if k != 'mapping'}} for c, check in zip(checkpoints, checks)]}
+    return (verified[0]['mapping'] if verified else given), result
+
+
+def check_table_labels(tables: Sequence[pd.DataFrame], allow_unverified: bool) -> dict:
+    """Probe tables hold the class index itself in `target`, so the same target on the same rows means the same order.
+    Whether the rows agree is checked by combine_tables."""
+    missing = [index for index, table in enumerate(tables) if 'target' not in table.columns]
+    if missing and not allow_unverified:
+        raise ValueError(f'Members {missing} have no target column, so what their class indices mean cannot be verified. '
+                         'Pass --allow_unverified_labels if you know the order is the same.')
+    return {'result': 'not verified, allowed by --allow_unverified_labels' if missing else 'verified: every member has the same target on the same rows',
+            'members_without_target': missing}
 
 
 def _predict_member(checkpoint: Path, recorded: dict, df: pd.DataFrame, batch_size: int, label_mapping: Optional[dict]) -> pd.DataFrame:
-    """One member through the same code as a single-model infer.py, rebuilt from what its run recorded."""
+    """One member through the same code as a single-model infer.py, rebuilt from what its run recorded. Only the licences
+    in `recorded` count while it loads, so a member cannot use another's acceptance."""
     from datasets.video_datasets import video_options_from_args
-    from handlers.video_backbones import accept_weights_licences
+    from handlers.video_backbones import only_accepted_licences
     from infer import apply_recorded_video_settings, build_parser
     from inference.video import predict_video
     argv = ['--modality', 'video', '--checkpoint', str(checkpoint), '--data', '.', '--out', '.']
     args = build_parser().parse_args(argv)
     apply_recorded_video_settings(args, argv)
-    accept_weights_licences(recorded.get('accept_weights_licence'))
     extra = {} if args.lora_rank is None else {'lora_rank': args.lora_rank}
-    return predict_video(df, checkpoint, recorded['model_version'], int(recorded.get('num_classes') or 2),
-                         int(recorded.get('added_layers') or 2), int(recorded.get('embed_size') or 1000),
-                         bool(recorded.get('freeze_backbone', False)), recorded.get('mode') or 'cls', bool(recorded.get('use_peft', False)),
-                         batch_size, args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
-                         with_probabilities=True, **extra)
+    with only_accepted_licences(recorded.get('accept_weights_licence')):
+        return predict_video(df, checkpoint, recorded['model_version'], int(recorded.get('num_classes') or 2),
+                             int(recorded.get('added_layers') or 2), int(recorded.get('embed_size') or 1000),
+                             bool(recorded.get('freeze_backbone', False)), recorded.get('mode') or 'cls', bool(recorded.get('use_peft', False)),
+                             batch_size, args.num_frames, args.pooling, label_mapping, video_options=video_options_from_args(args),
+                             with_probabilities=True, **extra)
+
+
+def _with_flag_acceptance(recorded: dict, accept_licences) -> dict:
+    """The member's own recorded acceptance plus what this command line named, and nothing from any other member."""
+    own = recorded.get('accept_weights_licence') or []
+    own = [own] if isinstance(own, str) else list(own)
+    return {**recorded, 'accept_weights_licence': own + list(accept_licences or [])}
 
 
 def ensemble_runs(runs: Sequence[Path], data: Path, out: Path, batch_size: int = 16, label_mapping_path: Optional[Path] = None,
-                  accept_licences: Optional[Sequence[str]] = None) -> pd.DataFrame:
-    """Average trained runs' predictions on new data. A run with no recorded settings, or members that disagree on the
-    task, the number of classes or the meaning of a class index, are refused before any model loads."""
+                  accept_licences: Optional[Sequence[str]] = None, allow_unverified_labels: bool = False) -> pd.DataFrame:
+    """Average trained runs' predictions on new data. A run with no recorded settings, members that disagree on the task or
+    the number of classes, unverifiable class meanings and unaccepted opt-in weights are refused before any model loads."""
     from argparse import Namespace
 
-    from handlers.video_backbones import accept_weights_licences
+    from handlers.video_backbones import WeightsLicenceNotAccepted, weights_choice_problem
     from infer import _load_new_data, _recorded_run_arguments
-    accept_weights_licences(accept_licences)
     checkpoints = [resolve_checkpoint(run) for run in runs]
-    recorded = [_recorded_run_arguments(c) for c in checkpoints]
+    recorded = [_with_flag_acceptance(_recorded_run_arguments(c), accept_licences) for c in checkpoints]
     if len(checkpoints) < 2:
         raise ValueError('An ensemble needs at least two runs.')
     for checkpoint, values in zip(checkpoints, recorded):
@@ -176,23 +231,19 @@ def ensemble_runs(runs: Sequence[Path], data: Path, out: Path, batch_size: int =
             raise ValueError(f'{checkpoint}: no cli_arguments.json beside it, so its model cannot be rebuilt.')
         if values.get('modality', 'video') != 'video':
             raise ValueError(f'{checkpoint} is a {values["modality"]} run; ensembles are for video runs.')
+        problem = weights_choice_problem(values['model_version'], values['accept_weights_licence'])
+        if problem:
+            raise WeightsLicenceNotAccepted(f'{checkpoint}: {problem}')
     modes = {values.get('mode') or 'cls' for values in recorded}
     classes = {int(values.get('num_classes') or 2) for values in recorded}
     if len(modes) > 1 or (modes == {'cls'} and len(classes) > 1):
         raise ValueError(f'Members must solve the same task; found modes {sorted(modes)} and class counts {sorted(classes)}.')
     mode = modes.pop()
-    mappings = [find_label_mapping(c) for c in checkpoints]
-    known = [m for m in mappings if m is not None]
-    if any(m != known[0] for m in known):
-        raise ValueError('Members map class names to indices differently, so averaging would mix classes: '
-                         f'{[m for m in known]}. Retrain them on one split.')
-    if label_mapping_path is not None:
-        given = json.loads(Path(label_mapping_path).read_text(encoding='utf-8-sig'))
-        if known and given != known[0]:
-            raise ValueError(f'--label_mapping differs from the mapping the runs recorded: {known[0]}.')
-        mapping = given
+    given = json.loads(Path(label_mapping_path).read_text(encoding='utf-8-sig')) if label_mapping_path is not None else None
+    if mode == 'cls':
+        mapping, label_check = check_label_mappings(checkpoints, recorded, given, allow_unverified_labels)
     else:
-        mapping = known[0] if known else None
+        mapping, label_check = given, {'result': 'not applicable: regression has no class order'}
     df, _ = _load_new_data(Namespace(modality='video', data=Path(data)))
     tables = []
     for checkpoint, values in zip(checkpoints, recorded):
@@ -201,9 +252,10 @@ def ensemble_runs(runs: Sequence[Path], data: Path, out: Path, batch_size: int =
         _release_gpu_memory()
     result = combine_tables(tables, mode, mapping)
     record = {'method': 'mean of class probabilities' if mode == 'cls' else 'mean of predicted values', 'mode': mode, 'data': str(data),
+              'label_check': label_check,
               'members': [{'checkpoint': str(c), 'model_version': v['model_version'], 'pooling': v.get('pooling'),
                            'num_frames': v.get('num_frames'), 'test_clips': v.get('test_clips'), 'test_crops': v.get('test_crops'),
-                           'weights_licence': _member_licence(v)} for c, v in zip(checkpoints, recorded)],
+                           'weights_licence': _member_licence(v), 'weights_revision': _member_revision(v)} for c, v in zip(checkpoints, recorded)],
               'expected_error': "not given: each member's error model describes that member alone"}
     return _write(result, out, record, mode)
 
@@ -211,8 +263,15 @@ def ensemble_runs(runs: Sequence[Path], data: Path, out: Path, batch_size: int =
 def _member_licence(recorded: dict):
     if recorded.get('weights_licence'):
         return recorded['weights_licence']
-    from src.video.feature_backbones import run_weight_licences  # run from before licences were recorded
-    return run_weight_licences(recorded['model_version'])
+    from src.video.feature_backbones import run_weight_licence  # run from before licences were recorded
+    return run_weight_licence(recorded['model_version'])
+
+
+def _member_revision(recorded: dict):
+    if recorded.get('weights_revision'):
+        return recorded['weights_revision']
+    from handlers.video_backbones import weights_revision  # not what the run used: it recorded nothing
+    return f'not recorded by the run; the local cache now has {weights_revision(recorded["model_version"])}'
 
 
 def _release_gpu_memory() -> None:
@@ -221,16 +280,21 @@ def _release_gpu_memory() -> None:
         torch.cuda.empty_cache()
 
 
-def ensemble_tables(paths: Sequence[Path], out: Path, mode: str = 'cls', label_mapping_path: Optional[Path] = None) -> pd.DataFrame:
+def ensemble_tables(paths: Sequence[Path], out: Path, mode: str = 'cls', label_mapping_path: Optional[Path] = None,
+                    allow_unverified_labels: bool = False) -> pd.DataFrame:
     """Average finished ``predictions.csv`` files. Each must have per-class probabilities and the same rows."""
     tables = [pd.read_csv(path) for path in paths]
     mapping = json.loads(Path(label_mapping_path).read_text(encoding='utf-8-sig')) if label_mapping_path else None
+    if len(tables) < 2:
+        raise ValueError('An ensemble needs at least two members.')
+    label_check = check_table_labels(tables, allow_unverified_labels) if mode == 'cls' else {'result': 'not applicable: regression has no class order'}
     result = combine_tables(tables, mode, mapping)
     members = []
     for path in paths:
         arguments = Path(path).parent / 'cli_arguments.json'
         recorded = json.loads(arguments.read_text(encoding='utf-8-sig')) if arguments.is_file() else {}
-        members.append({'predictions': str(path), 'weights_licence': recorded.get('weights_licence', 'not recorded next to this file')})
-    record = {'method': 'mean of class probabilities' if mode == 'cls' else 'mean of predicted values', 'mode': mode, 'members': members,
+        members.append({'predictions': str(path), 'weights_licence': recorded.get('weights_licence', 'not recorded next to this file'),
+                        'weights_revision': recorded.get('weights_revision', 'not recorded next to this file')})
+    record = {'method': 'mean of class probabilities' if mode == 'cls' else 'mean of predicted values', 'mode': mode, 'label_check': label_check, 'members': members,
               'expected_error': "not given: each member's error model describes that member alone"}
     return _write(result, out, record, mode)

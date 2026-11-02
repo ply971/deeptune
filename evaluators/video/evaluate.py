@@ -68,8 +68,8 @@ def evaluate(eval_df, out, model_weights, num_classes, model_version, mode, adde
     lora_rank = resolve_lora_rank(args, ckpt_path) if use_peft and is_native_video_architecture(model_version) else None
     if lora_rank is not None:
         args.lora_rank = lora_rank
-    from src.video.feature_backbones import run_weight_licences
-    args.weights_licence = run_weight_licences(model_version)
+    from src.video.feature_backbones import record_weights
+    record_weights(args, model_version)
     args.save_args(EVAL_OUTPUT_DIR)
 
     MODEL = build_video_model(
