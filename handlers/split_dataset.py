@@ -260,6 +260,113 @@ def split_dataset(train_size: float, val_size: float, test_size:float, df_path: 
     return train_dataset_path, val_dataset_path, test_dataset_path
 
 
+def _checked_target(frame: DataFrame, name: str, target_column: str, grouper: str, classification: bool) -> DataFrame:
+    """The checks split_dataset makes on one file, for the two entry points below that take whole files."""
+    if target_column not in frame.columns:
+        raise ValueError(f'Target column {target_column!r} was not found in {name}.')
+    if target_column != 'labels' and 'labels' in frame.columns:
+        raise ValueError(f'{name} already contains labels; choose labels as the target or rename that column.')
+    if frame[target_column].isna().any():
+        raise ValueError(f'{name} has missing target values.')
+    if grouper and (grouper not in frame.columns or frame[grouper].isna().any()):
+        raise ValueError(f'Grouper column {grouper!r} must exist in {name} and contain no missing values.')
+    if grouper == target_column:
+        raise ValueError('The grouper must be different from the target column.')
+    if not classification:
+        values = pd.to_numeric(frame[target_column], errors='coerce')
+        if not np.isfinite(values.to_numpy(dtype=float)).all():
+            raise ValueError(f'Regression targets in {name} must be finite numeric values.')
+        frame = frame.assign(**{target_column: values})
+    return frame
+
+
+def _video_paths(frame: DataFrame) -> set:
+    if 'videos' not in frame.columns or not len(frame) or not isinstance(frame['videos'].iloc[0], str):
+        return set()  # clip bytes carry no path
+    return {str(Path(value).resolve()) for value in frame['videos']}
+
+
+def prepare_whole_dataset(df_path: Path, out_dir: Path, disable_numerical_encoding: bool, target_column: str, modality: str,
+                          grouper: str = None, mode: str = 'cls') -> Path:
+    """--cv_only: every row of `df_path` goes to cross-validation, so nothing is split off here. The file gets the same
+    label encoding and checks as split_dataset and is written as data_splits_*/cv_pool.parquet. No test file exists."""
+    split_dir = Path(out_dir) / f"data_splits_{UNIQUE_ID}"
+    df = pd.read_parquet(df_path)
+    grouper = resolve_grouper(df.columns, grouper, modality)
+    target_column = target_column or 'labels'
+    classification = mode == 'cls'
+    df = _checked_target(df, '--df', target_column, grouper, classification)
+    if classification and df[target_column].nunique() < 2:
+        raise ValueError(f'Classification needs at least 2 classes; found {df[target_column].nunique()}.')
+    split_dir.mkdir(parents=True, exist_ok=True)
+    df = enable_label_numerical_encoding(df, split_dir, target_column, disable_numerical_encoding or not classification, modality, False)
+    path = split_dir / 'cv_pool.parquet'
+    df.reset_index(drop=True).to_parquet(path, index=False)
+    summary = {'strategy': 'cv_only', 'note': 'every row is cross-validated; no test split was carved', 'sample_counts': {'cv_pool': int(len(df))}}
+    if grouper:
+        summary.update(grouper=grouper, group_counts={'cv_pool': int(df[grouper].nunique())})
+    (split_dir / 'split_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+    print(f'--cv_only: all {len(df)} clips of --df are cross-validated; no test split.')
+    return path
+
+
+def split_with_test_file(df_path: Path, test_df_path: Path, out_dir: Path, fixed_seed: bool, disable_numerical_encoding: bool,
+                         target_column: str, modality: str, grouper: str = None, mode: str = 'cls'):
+    """--test_df: the test split is the given file, and `df_path` is split into training and validation only.
+
+    Validation takes INNER_VALIDATION_FRACTION of the rows, whole groups and stratified, exactly as inside each k-fold
+    model (evaluators/video/validation.py), so a refit on these rows is trained the way its cross-validation folds were.
+    Labels are encoded on both files together; the test file may not hold a class that `df_path` lacks, nor share a
+    group or a video path with it. Returns (train, validation, test) paths like split_dataset."""
+    from evaluators.video.validation import INNER_VALIDATION_FRACTION, inner_validation_split
+    split_dir = Path(out_dir) / f"data_splits_{UNIQUE_ID}"
+    dev, test = pd.read_parquet(df_path), pd.read_parquet(test_df_path)
+    grouper = resolve_grouper(dev.columns, grouper, modality)
+    target_column = target_column or 'labels'
+    classification = mode == 'cls'
+    dev = _checked_target(dev, '--df', target_column, grouper, classification)
+    test = _checked_target(test, '--test_df', target_column, grouper, classification)
+    if not len(test):
+        raise ValueError('--test_df has no rows.')
+    if list(dev.columns) != list(test.columns):
+        raise ValueError(f'--df and --test_df must have the same columns; found {list(dev.columns)} and {list(test.columns)}.')
+    if grouper:
+        shared = sorted(map(str, set(dev[grouper]) & set(test[grouper])))
+        if shared:
+            raise ValueError(f'--df and --test_df share {len(shared)} {grouper!r} groups (e.g. {shared[:3]}): clips of one group '
+                             'would be both trained on and tested.')
+    shared_paths = _video_paths(dev) & _video_paths(test)
+    if shared_paths:
+        raise ValueError(f'--df and --test_df share {len(shared_paths)} video files (e.g. {sorted(shared_paths)[:2]}).')
+    if classification:
+        unknown = sorted(set(test[target_column].astype(str)) - set(dev[target_column].astype(str)))
+        if unknown:
+            raise ValueError(f'--test_df has classes that --df lacks: {unknown[:10]}. The model could never predict them.')
+        counts = dev[target_column].value_counts()
+        if len(counts) < 2:
+            raise ValueError(f'Classification needs at least 2 classes; found {len(counts)}.')
+    split_dir.mkdir(parents=True, exist_ok=True)
+    both = enable_label_numerical_encoding(pd.concat([dev, test], ignore_index=True), split_dir, target_column,
+                                           disable_numerical_encoding or not classification, modality, False)
+    dev, test = both.iloc[:len(dev)].reset_index(drop=True), both.iloc[len(dev):].reset_index(drop=True)
+    seed = 42 if fixed_seed else int(np.random.randint(low=0, high=1_000))
+    groups = dev[grouper].tolist() if grouper else None
+    train_rows, val_rows = inner_validation_split(dev['labels'].to_numpy(), np.arange(len(dev)), groups, mode, seed, INNER_VALIDATION_FRACTION)
+    parts = {'train': dev.iloc[np.sort(train_rows)].reset_index(drop=True), 'validation': dev.iloc[np.sort(val_rows)].reset_index(drop=True),
+             'test': test}
+    if grouper:
+        summary = check_group_split(parts, grouper, 'labels', classification)
+    else:
+        summary = {'strategy': 'per_class' if classification else 'random', 'sample_counts': {k: int(len(v)) for k, v in parts.items()}}
+    summary.update(test_source='--test_df', test_file=str(Path(test_df_path).resolve()), validation_fraction_of_df=INNER_VALIDATION_FRACTION)
+    (split_dir / 'split_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+    print('Split with --test_df: ' + ', '.join(f'{name}={len(part)}' for name, part in parts.items()) + ' clips.')
+    paths = tuple(split_dir / f'{name}_split.parquet' for name in ('train', 'val', 'test'))
+    for part, path in zip(parts.values(), paths):
+        part.to_parquet(path, index=False)
+    return paths
+
+
 def enable_label_numerical_encoding(
         df: DataFrame,
         split_dir:Path,
