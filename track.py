@@ -1,4 +1,4 @@
-"""Zero-shot detection + tracking of objects in video.
+"""Detection + tracking of objects in video.
 
 Example::
 
@@ -28,17 +28,18 @@ from spatial import io as sio
 # Tracker thresholds per detector score scale (ByteTrack's 0.5/0.6 assume a
 # trained closed-set detector; zero-shot scores are lower).
 TRACK_DEFAULTS = {
+    'pet_fasterrcnn': {'track_high_thresh': 0.4},
     'grounding_dino': {'track_high_thresh': 0.35},
     'owlv2': {'track_high_thresh': 0.2},
 }
 # Fusing multiplies IoU by the box score, and confirming a new track needs the result
 # above 0.3. A zero-shot score under 0.3 could then never confirm, whatever the thresholds.
-ZERO_SHOT_DETECTORS = frozenset(TRACK_DEFAULTS)
+ZERO_SHOT_DETECTORS = frozenset(('grounding_dino', 'owlv2'))
 
 
 def get_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog='track.py', description='Zero-shot (open-vocabulary) detection and ByteTrack tracking on video.')
+        prog='track.py', description='Pretrained or local fine-tuned detection and ByteTrack tracking on video.')
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument('--video', type=str, help='Path to one video file.')
     src.add_argument('--video_dir', type=str, help='Folder of videos (non-recursive: '
@@ -47,7 +48,7 @@ def get_parser() -> argparse.ArgumentParser:
                    help='Object to find, in words (e.g. "lobster"). Repeat for several objects.')
     p.add_argument('--out', type=str, required=True, help='Output folder (one sub-folder per video).')
     p.add_argument('--detector', choices=sorted(DEFAULT_MODELS), default='grounding_dino',
-                   help='Zero-shot detector backend (default: grounding_dino).')
+                   help='Detector backend; pet_fasterrcnn requires a local --detector_model checkpoint.')
     p.add_argument('--detector_model', type=str, default=None,
                    help='Hugging Face model id or local folder; default per detector: '
                    + ', '.join(f'{k}={v}' for k, v in DEFAULT_MODELS.items()) + '.')
@@ -93,6 +94,12 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
     if any(not str(p).strip() for p in args.prompt):
         parser.error('--prompt must not be blank')
     args.prompt = clean_prompts(args.prompt)
+    if args.detector == 'pet_fasterrcnn':
+        args.detector_model = args.detector_model or DEFAULT_MODELS[args.detector]
+        if not args.detector_model or not Path(args.detector_model).is_file():
+            parser.error('--detector_model must be a local trained cat checkpoint')
+        if any(p.lower() != 'cat' for p in args.prompt):
+            parser.error('The trained cat detector supports only --prompt cat')
     if args.detector == 'grounding_dino':
         try:
             check_grounding_dino_prompts(args.prompt)
@@ -140,9 +147,13 @@ def tracker_kwargs(args: argparse.Namespace) -> dict:
 
 
 def save_track_args(args: argparse.Namespace, out: Path, detector: Detector) -> Path:
+    description = detector.describe() if detector is not None else None
+    licence = LICENCES.get(args.detector_model, 'see the model card')
+    if args.detector == 'pet_fasterrcnn' and description:
+        licence = description.get('provenance', {}).get('weights_terms', 'see checkpoint provenance')
     record = {**vars(args), 'tracker_settings': tracker_kwargs(args),
-              'detector_resolved': detector.describe() if detector is not None else None,
-              'detector_licence': LICENCES.get(args.detector_model, 'see the model card'),
+              'detector_resolved': description,
+              'detector_licence': licence,
               'created': datetime.now().isoformat(timespec='seconds'),
               'python': platform.python_version(), 'command': sys.argv}
     return sio.write_json(out / 'track_arguments.json', record)

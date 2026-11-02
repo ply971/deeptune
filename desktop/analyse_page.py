@@ -410,6 +410,9 @@ def on_track_clicked(sender: Any = 0, app_data: Any = None) -> None:
     cfg = analyse.TrackConfig(video=video, prompts=prompts, out=analyse.new_output_folder(Path(base).expanduser()),
                               detector=detector, every_n_frames=int(dpg.get_value('analyse_every_n_input')),
                               track_score=round(float(dpg.get_value('analyse_score_input')), 4))
+    if detector == 'pet_fasterrcnn':
+        text = str(dpg.get_value('analyse_checkpoint_input') or '').strip().strip('"')
+        cfg.detector_model = Path(text).expanduser() if text else None
     issues = analyse.validate_track_config(cfg)
     if issues:
         _problem(TRACK, issues[0])
@@ -436,6 +439,9 @@ def on_detector_changed(sender: Any = 0, app_data: Any = None) -> None:
     """Each detector scores on its own scale, so its threshold starts at its own default."""
     key = analyse.detector_by_label(dpg.get_value('analyse_detector_combo')).key
     dpg.set_value('analyse_score_input', analyse.default_track_score(key))
+    dpg.configure_item('analyse_checkpoint_input', show=key == 'pet_fasterrcnn')
+    if key == 'pet_fasterrcnn':
+        dpg.set_value('analyse_prompt_input', 'cat')
     _refresh_detector_notice()
 
 
@@ -642,7 +648,9 @@ def _render_tracking(results: analyse.TrackResults) -> None:
         dpg.add_text(analyse.FRAMES_STEP_NOTE, parent=parent, color=_colors().warning, wrap=0)
     if results.overlay is None:
         dpg.add_text('No overlay video was written for this run.', parent=parent, color=_colors().warning, wrap=0)
-    dpg.add_text(f'Produced by the detector, not your trained model: {results.model}', parent=parent,
+    source = ('Produced by your trained cat detector' if results.trained_detector
+              else 'Produced by the detector, not your trained model')
+    dpg.add_text(f'{source}: {results.model}', parent=parent,
                  color=_colors().analysis, wrap=0)
     dpg.add_text(analyse.TRACKER_NOTE, parent=parent, color=_colors().muted, wrap=0)
 
@@ -730,10 +738,12 @@ def _build_model_card(shell: Shell) -> None:
 
 def _build_track_card(shell: Shell) -> None:
     colors = shell.palette
-    first = analyse.DETECTORS[0]
+    checkpoint = analyse.installed_cat_checkpoint()
+    first = analyse.detector_by_key('pet_fasterrcnn') if checkpoint else analyse.DETECTORS[0]
     with shell.card('FIND, TRACK AND COUNT'):
         dpg.add_text('Type what to find. Separate several things with commas.', color=colors.muted, wrap=850)
-        dpg.add_input_text(tag='analyse_prompt_input', hint='person, car', width=-1)
+        dpg.add_input_text(tag='analyse_prompt_input', hint='person, car', width=-1,
+                           default_value='cat' if checkpoint else '')
         with ui.group(horizontal=True):
             dpg.add_combo(tag='analyse_detector_combo', items=[d.label for d in analyse.DETECTORS],
                           default_value=first.label, width=200, label='Detector', callback=on_detector_changed)
@@ -749,6 +759,9 @@ def _build_track_card(shell: Shell) -> None:
                 dpg.add_text('The score a box needs to start a track. Lower finds more, and finds more wrong things.',
                              wrap=380)
         dpg.add_text(analyse.FRAMES_STEP_NOTE, color=colors.muted, wrap=850)
+        dpg.add_input_text(tag='analyse_checkpoint_input', label='Cat checkpoint',
+                           hint='Full path to best.pt', width=-160, show=bool(checkpoint),
+                           default_value=str(checkpoint) if checkpoint else '')
         dpg.add_text(analyse.detector_note(first.key), tag='analyse_detector_note', color=colors.muted, wrap=850)
         with ui.group(horizontal=True):
             button = dpg.add_button(tag='analyse_track_button', label=analyse.track_button_label(first.key), height=44,

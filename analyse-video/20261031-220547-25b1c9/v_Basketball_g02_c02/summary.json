@@ -1,0 +1,29 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\Basketball\\v_Basketball_g02_c02.avi",
+  "num_frames": 56,
+  "duration_s": 1.8685,
+  "every_n_frames": 1,
+  "prompts": [
+    "court"
+  ],
+  "fps": 29.97002997002997,
+  "total_tracks": 1,
+  "labels": {
+    "court": {
+      "count": 1,
+      "first_seen_s": 0.0,
+      "last_seen_s": 1.8352,
+      "tracks": [
+        {
+          "track_id": 1,
+          "first_frame": 0,
+          "last_frame": 55,
+          "first_seen_s": 0.0,
+          "last_seen_s": 1.8352,
+          "duration_s": 1.8685,
+          "num_observations": 56
+        }
+      ]
+    }
+  }
+}

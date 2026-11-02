@@ -1,0 +1,5417 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\Archery\\v_Archery_g16_c01.avi",
+  "fps": 25.0,
+  "width": 320,
+  "height": 240,
+  "num_frames": 151,
+  "every_n_frames": 1,
+  "prompts": [
+    "house"
+  ],
+  "detector": {
+    "name": "owlv2",
+    "model_id": "google/owlv2-base-patch16-ensemble",
+    "device": "cuda",
+    "box_threshold": 0.1,
+    "nms_iou": 0.5,
+    "licence": "Apache-2.0"
+  },
+  "frames": [
+    {
+      "frame": 0,
+      "time_s": 0.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.44,
+            0.65,
+            251.86,
+            214.33
+          ],
+          "score": 0.5579,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            263.8,
+            14.44,
+            320.0,
+            80.02
+          ],
+          "score": 0.4023,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            296.7,
+            23.95,
+            319.46,
+            72.46
+          ],
+          "score": 0.1344,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            244.36,
+            6.35,
+            320.0,
+            111.55
+          ],
+          "score": 0.1298,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 1,
+      "time_s": 0.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.86,
+            1.39,
+            252.54,
+            215.19
+          ],
+          "score": 0.53,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            245.77,
+            4.97,
+            320.0,
+            82.96
+          ],
+          "score": 0.3441,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            295.02,
+            18.88,
+            320.0,
+            77.07
+          ],
+          "score": 0.2162,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 2,
+      "time_s": 0.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.74,
+            3.12,
+            247.4,
+            214.39
+          ],
+          "score": 0.5319,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            266.78,
+            17.69,
+            320.0,
+            83.86
+          ],
+          "score": 0.291,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            244.09,
+            1.64,
+            320.0,
+            107.18
+          ],
+          "score": 0.2493,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            294.31,
+            26.95,
+            319.89,
+            75.67
+          ],
+          "score": 0.1599,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 3,
+      "time_s": 0.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.56,
+            0.97,
+            250.46,
+            214.34
+          ],
+          "score": 0.5673,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            267.83,
+            14.26,
+            320.0,
+            80.52
+          ],
+          "score": 0.378,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            243.83,
+            0.76,
+            320.0,
+            101.42
+          ],
+          "score": 0.2156,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.62,
+            14.53,
+            298.75,
+            81.17
+          ],
+          "score": 0.1627,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            297.81,
+            25.41,
+            319.8,
+            72.73
+          ],
+          "score": 0.1241,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 4,
+      "time_s": 0.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.57,
+            0.91,
+            255.08,
+            218.31
+          ],
+          "score": 0.55,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            269.98,
+            12.35,
+            319.25,
+            79.15
+          ],
+          "score": 0.2804,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            243.8,
+            2.04,
+            320.0,
+            93.56
+          ],
+          "score": 0.2435,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 5,
+      "time_s": 0.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.35,
+            264.07,
+            216.52
+          ],
+          "score": 0.5486,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            266.92,
+            14.64,
+            320.0,
+            82.42
+          ],
+          "score": 0.3887,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            243.59,
+            0.79,
+            319.9,
+            109.56
+          ],
+          "score": 0.197,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            299.34,
+            26.62,
+            320.0,
+            74.72
+          ],
+          "score": 0.1157,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 6,
+      "time_s": 0.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.06,
+            0.78,
+            258.09,
+            215.87
+          ],
+          "score": 0.5741,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.01,
+            17.03,
+            319.69,
+            81.16
+          ],
+          "score": 0.313,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            244.1,
+            0.97,
+            319.91,
+            109.19
+          ],
+          "score": 0.1388,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 7,
+      "time_s": 0.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.46,
+            1.11,
+            254.21,
+            218.12
+          ],
+          "score": 0.5601,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            244.24,
+            1.4,
+            319.92,
+            104.76
+          ],
+          "score": 0.2545,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            267.52,
+            17.52,
+            320.0,
+            83.61
+          ],
+          "score": 0.2253,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 8,
+      "time_s": 0.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.04,
+            3.01,
+            258.65,
+            221.41
+          ],
+          "score": 0.5624,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.47,
+            12.69,
+            320.0,
+            85.06
+          ],
+          "score": 0.2748,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            298.63,
+            24.79,
+            320.0,
+            75.79
+          ],
+          "score": 0.1434,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 9,
+      "time_s": 0.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.68,
+            264.53,
+            221.69
+          ],
+          "score": 0.5708,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.26,
+            13.48,
+            320.0,
+            86.21
+          ],
+          "score": 0.3607,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            298.39,
+            19.29,
+            320.0,
+            77.12
+          ],
+          "score": 0.2372,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 10,
+      "time_s": 0.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.85,
+            4.12,
+            259.13,
+            221.55
+          ],
+          "score": 0.55,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.57,
+            16.28,
+            320.0,
+            80.83
+          ],
+          "score": 0.3816,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 11,
+      "time_s": 0.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.25,
+            263.57,
+            217.88
+          ],
+          "score": 0.5732,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.58,
+            16.55,
+            320.0,
+            85.31
+          ],
+          "score": 0.3121,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            298.77,
+            24.54,
+            319.64,
+            76.69
+          ],
+          "score": 0.1223,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 12,
+      "time_s": 0.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            3.2,
+            262.55,
+            220.27
+          ],
+          "score": 0.5638,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.75,
+            19.43,
+            320.0,
+            81.57
+          ],
+          "score": 0.2306,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 13,
+      "time_s": 0.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.39,
+            1.18,
+            258.55,
+            218.14
+          ],
+          "score": 0.5454,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.25,
+            17.56,
+            320.0,
+            81.45
+          ],
+          "score": 0.1767,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 14,
+      "time_s": 0.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.34,
+            1.96,
+            260.03,
+            220.46
+          ],
+          "score": 0.5785,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.78,
+            18.34,
+            320.0,
+            83.5
+          ],
+          "score": 0.402,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 15,
+      "time_s": 0.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.13,
+            3.11,
+            260.71,
+            221.68
+          ],
+          "score": 0.5311,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.89,
+            19.09,
+            320.0,
+            86.32
+          ],
+          "score": 0.3895,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.69,
+            20.92,
+            302.29,
+            79.41
+          ],
+          "score": 0.1404,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            298.44,
+            23.23,
+            319.7,
+            84.18
+          ],
+          "score": 0.1196,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.28,
+            15.82,
+            320.0,
+            116.95
+          ],
+          "score": 0.1022,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 16,
+      "time_s": 0.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.09,
+            0.55,
+            259.79,
+            219.49
+          ],
+          "score": 0.5184,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.69,
+            22.48,
+            319.5,
+            90.56
+          ],
+          "score": 0.2318,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 17,
+      "time_s": 0.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            3.17,
+            260.29,
+            219.41
+          ],
+          "score": 0.5199,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.3,
+            19.64,
+            319.4,
+            88.99
+          ],
+          "score": 0.3506,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.44,
+            23.19,
+            304.0,
+            80.18
+          ],
+          "score": 0.1169,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 18,
+      "time_s": 0.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.04,
+            256.08,
+            218.48
+          ],
+          "score": 0.5406,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.1,
+            19.26,
+            320.0,
+            90.52
+          ],
+          "score": 0.3155,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.3,
+            25.55,
+            320.0,
+            83.39
+          ],
+          "score": 0.1617,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 19,
+      "time_s": 0.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.82,
+            262.55,
+            218.34
+          ],
+          "score": 0.5458,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.57,
+            21.26,
+            319.82,
+            87.44
+          ],
+          "score": 0.3538,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 20,
+      "time_s": 0.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.83,
+            261.48,
+            220.78
+          ],
+          "score": 0.553,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            266.09,
+            16.69,
+            320.0,
+            87.62
+          ],
+          "score": 0.2757,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 21,
+      "time_s": 0.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.23,
+            0.9,
+            266.29,
+            219.56
+          ],
+          "score": 0.5552,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.14,
+            21.28,
+            320.0,
+            86.7
+          ],
+          "score": 0.2892,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            247.58,
+            15.75,
+            320.0,
+            91.81
+          ],
+          "score": 0.2011,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 22,
+      "time_s": 0.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.14,
+            0.94,
+            268.63,
+            220.73
+          ],
+          "score": 0.5605,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.36,
+            21.03,
+            320.0,
+            85.28
+          ],
+          "score": 0.3146,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 23,
+      "time_s": 0.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.33,
+            266.75,
+            221.88
+          ],
+          "score": 0.5842,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.76,
+            21.14,
+            319.96,
+            87.09
+          ],
+          "score": 0.3146,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            246.36,
+            19.72,
+            309.68,
+            89.15
+          ],
+          "score": 0.1037,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 24,
+      "time_s": 0.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.15,
+            266.94,
+            221.51
+          ],
+          "score": 0.5777,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.34,
+            19.66,
+            319.62,
+            86.56
+          ],
+          "score": 0.3164,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 25,
+      "time_s": 1.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.31,
+            265.3,
+            220.97
+          ],
+          "score": 0.5772,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.99,
+            21.29,
+            319.98,
+            84.76
+          ],
+          "score": 0.3362,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            245.72,
+            16.87,
+            320.0,
+            88.06
+          ],
+          "score": 0.1075,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 26,
+      "time_s": 1.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.87,
+            263.84,
+            219.01
+          ],
+          "score": 0.5745,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.35,
+            21.42,
+            319.54,
+            88.92
+          ],
+          "score": 0.2676,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.51,
+            30.3,
+            319.6,
+            82.45
+          ],
+          "score": 0.1054,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 27,
+      "time_s": 1.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.59,
+            1.35,
+            260.38,
+            220.75
+          ],
+          "score": 0.5402,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.7,
+            20.49,
+            319.44,
+            85.48
+          ],
+          "score": 0.3512,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            249.9,
+            2.34,
+            319.59,
+            121.02
+          ],
+          "score": 0.1069,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 28,
+      "time_s": 1.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.97,
+            262.06,
+            219.8
+          ],
+          "score": 0.5663,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.31,
+            21.21,
+            319.71,
+            87.04
+          ],
+          "score": 0.2553,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 29,
+      "time_s": 1.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.19,
+            258.3,
+            219.44
+          ],
+          "score": 0.5566,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            262.47,
+            16.69,
+            320.0,
+            84.98
+          ],
+          "score": 0.3236,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 30,
+      "time_s": 1.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.72,
+            257.1,
+            220.29
+          ],
+          "score": 0.5505,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            252.91,
+            13.98,
+            320.0,
+            86.11
+          ],
+          "score": 0.2899,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.18,
+            19.04,
+            304.23,
+            79.43
+          ],
+          "score": 0.1842,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.37,
+            21.28,
+            301.02,
+            33.68
+          ],
+          "score": 0.1053,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 31,
+      "time_s": 1.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.86,
+            3.81,
+            262.83,
+            220.98
+          ],
+          "score": 0.5523,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.86,
+            18.84,
+            319.41,
+            81.64
+          ],
+          "score": 0.3248,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.2,
+            24.15,
+            300.81,
+            61.71
+          ],
+          "score": 0.1103,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 32,
+      "time_s": 1.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.3,
+            3.38,
+            258.85,
+            220.17
+          ],
+          "score": 0.5515,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.91,
+            20.71,
+            319.5,
+            82.9
+          ],
+          "score": 0.2756,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.63,
+            25.0,
+            300.81,
+            50.42
+          ],
+          "score": 0.1358,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.22,
+            22.41,
+            299.91,
+            33.5
+          ],
+          "score": 0.1208,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 33,
+      "time_s": 1.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.91,
+            260.64,
+            217.9
+          ],
+          "score": 0.55,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            259.62,
+            15.73,
+            319.75,
+            83.59
+          ],
+          "score": 0.3075,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.36,
+            22.25,
+            301.22,
+            35.69
+          ],
+          "score": 0.1499,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.2,
+            23.26,
+            301.97,
+            65.85
+          ],
+          "score": 0.1494,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 34,
+      "time_s": 1.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.38,
+            262.19,
+            219.09
+          ],
+          "score": 0.5524,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.21,
+            17.37,
+            318.68,
+            79.9
+          ],
+          "score": 0.2563,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.44,
+            21.87,
+            302.38,
+            55.13
+          ],
+          "score": 0.1714,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.9,
+            21.7,
+            301.68,
+            33.63
+          ],
+          "score": 0.1375,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 35,
+      "time_s": 1.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.5,
+            261.04,
+            221.88
+          ],
+          "score": 0.5563,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.25,
+            17.91,
+            319.85,
+            80.91
+          ],
+          "score": 0.3002,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            245.6,
+            1.09,
+            314.82,
+            121.41
+          ],
+          "score": 0.139,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 36,
+      "time_s": 1.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.17,
+            0.82,
+            265.58,
+            219.81
+          ],
+          "score": 0.5847,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.58,
+            19.47,
+            319.98,
+            85.73
+          ],
+          "score": 0.2418,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.67,
+            19.53,
+            301.83,
+            33.29
+          ],
+          "score": 0.1678,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.44,
+            16.69,
+            319.5,
+            41.5
+          ],
+          "score": 0.112,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 37,
+      "time_s": 1.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.39,
+            264.52,
+            217.47
+          ],
+          "score": 0.5741,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.5,
+            19.3,
+            319.59,
+            85.71
+          ],
+          "score": 0.2522,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.1,
+            19.97,
+            302.81,
+            32.17
+          ],
+          "score": 0.1218,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 38,
+      "time_s": 1.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.54,
+            273.5,
+            217.98
+          ],
+          "score": 0.5576,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.09,
+            19.13,
+            319.37,
+            87.53
+          ],
+          "score": 0.2626,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.71,
+            21.16,
+            304.07,
+            44.77
+          ],
+          "score": 0.1609,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.19,
+            2.48,
+            318.93,
+            117.06
+          ],
+          "score": 0.1282,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 39,
+      "time_s": 1.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.31,
+            0.9,
+            268.9,
+            218.08
+          ],
+          "score": 0.5704,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.84,
+            19.04,
+            320.0,
+            81.17
+          ],
+          "score": 0.2657,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            283.3,
+            22.05,
+            305.22,
+            47.63
+          ],
+          "score": 0.1701,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.11,
+            0.91,
+            320.0,
+            117.25
+          ],
+          "score": 0.1355,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.55,
+            21.99,
+            304.08,
+            34.56
+          ],
+          "score": 0.1158,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 40,
+      "time_s": 1.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.07,
+            0.64,
+            267.23,
+            220.29
+          ],
+          "score": 0.5588,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.94,
+            20.39,
+            319.54,
+            82.29
+          ],
+          "score": 0.2465,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.3,
+            20.78,
+            305.19,
+            35.46
+          ],
+          "score": 0.1644,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.09,
+            1.52,
+            319.46,
+            116.06
+          ],
+          "score": 0.1481,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 41,
+      "time_s": 1.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.78,
+            272.08,
+            218.28
+          ],
+          "score": 0.568,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.08,
+            19.85,
+            319.56,
+            80.84
+          ],
+          "score": 0.3084,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.94,
+            21.95,
+            305.27,
+            36.31
+          ],
+          "score": 0.2008,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.1,
+            1.82,
+            318.98,
+            120.43
+          ],
+          "score": 0.1196,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.59,
+            24.12,
+            319.58,
+            76.07
+          ],
+          "score": 0.1063,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 42,
+      "time_s": 1.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.64,
+            273.56,
+            221.59
+          ],
+          "score": 0.5839,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.59,
+            20.16,
+            319.42,
+            82.47
+          ],
+          "score": 0.2788,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.68,
+            22.18,
+            304.52,
+            36.55
+          ],
+          "score": 0.215,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.71,
+            21.51,
+            304.84,
+            71.84
+          ],
+          "score": 0.1528,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.32,
+            22.32,
+            319.54,
+            77.26
+          ],
+          "score": 0.1221,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.32,
+            1.22,
+            319.74,
+            117.71
+          ],
+          "score": 0.1211,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 43,
+      "time_s": 1.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.09,
+            2.58,
+            269.74,
+            220.6
+          ],
+          "score": 0.5575,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            280.6,
+            19.43,
+            319.33,
+            85.28
+          ],
+          "score": 0.2792,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.37,
+            22.26,
+            303.87,
+            36.94
+          ],
+          "score": 0.2402,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.13,
+            2.57,
+            320.0,
+            113.23
+          ],
+          "score": 0.1757,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.35,
+            25.04,
+            319.4,
+            80.46
+          ],
+          "score": 0.1076,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 44,
+      "time_s": 1.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.38,
+            275.73,
+            219.02
+          ],
+          "score": 0.6404,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.85,
+            21.85,
+            318.83,
+            87.37
+          ],
+          "score": 0.2333,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            285.48,
+            22.3,
+            303.29,
+            35.07
+          ],
+          "score": 0.1778,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.72,
+            22.68,
+            303.73,
+            75.51
+          ],
+          "score": 0.1178,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.75,
+            3.12,
+            319.14,
+            113.2
+          ],
+          "score": 0.1127,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 45,
+      "time_s": 1.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.34,
+            3.22,
+            270.16,
+            219.1
+          ],
+          "score": 0.5804,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            264.92,
+            16.57,
+            320.0,
+            85.29
+          ],
+          "score": 0.2698,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            280.87,
+            22.17,
+            304.06,
+            72.81
+          ],
+          "score": 0.149,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.29,
+            22.24,
+            303.39,
+            36.31
+          ],
+          "score": 0.1475,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.87,
+            23.72,
+            319.49,
+            80.6
+          ],
+          "score": 0.1403,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 46,
+      "time_s": 1.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.96,
+            252.12,
+            217.38
+          ],
+          "score": 0.5372,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            280.3,
+            23.18,
+            320.0,
+            83.41
+          ],
+          "score": 0.3653,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.01,
+            0.0,
+            319.51,
+            117.94
+          ],
+          "score": 0.1195,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 47,
+      "time_s": 1.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.82,
+            261.67,
+            218.29
+          ],
+          "score": 0.5547,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.31,
+            21.17,
+            319.67,
+            82.61
+          ],
+          "score": 0.379,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 48,
+      "time_s": 1.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.89,
+            260.34,
+            221.13
+          ],
+          "score": 0.5821,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.86,
+            19.55,
+            319.09,
+            87.93
+          ],
+          "score": 0.3713,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.15,
+            24.28,
+            300.6,
+            46.79
+          ],
+          "score": 0.1166,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.1,
+            29.77,
+            319.38,
+            81.39
+          ],
+          "score": 0.1032,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 49,
+      "time_s": 1.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            3.81,
+            254.99,
+            220.49
+          ],
+          "score": 0.5593,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.62,
+            20.58,
+            319.45,
+            88.01
+          ],
+          "score": 0.3641,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.79,
+            0.37,
+            319.03,
+            115.93
+          ],
+          "score": 0.1243,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            300.6,
+            25.11,
+            319.56,
+            81.05
+          ],
+          "score": 0.1038,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 50,
+      "time_s": 2.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            3.48,
+            257.56,
+            221.05
+          ],
+          "score": 0.5716,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.87,
+            20.49,
+            319.48,
+            87.69
+          ],
+          "score": 0.3066,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 51,
+      "time_s": 2.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.99,
+            256.15,
+            220.06
+          ],
+          "score": 0.5864,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.74,
+            20.35,
+            320.0,
+            85.92
+          ],
+          "score": 0.3577,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 52,
+      "time_s": 2.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.21,
+            1.43,
+            259.06,
+            219.04
+          ],
+          "score": 0.5602,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.29,
+            20.36,
+            320.0,
+            84.68
+          ],
+          "score": 0.3301,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            243.15,
+            2.73,
+            320.0,
+            109.98
+          ],
+          "score": 0.1202,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 53,
+      "time_s": 2.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            3.24,
+            262.81,
+            219.8
+          ],
+          "score": 0.5997,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            267.57,
+            21.64,
+            319.37,
+            86.46
+          ],
+          "score": 0.3481,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 54,
+      "time_s": 2.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.29,
+            3.29,
+            263.94,
+            217.54
+          ],
+          "score": 0.56,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            264.56,
+            16.76,
+            320.0,
+            85.97
+          ],
+          "score": 0.1627,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 55,
+      "time_s": 2.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.67,
+            3.36,
+            262.46,
+            216.05
+          ],
+          "score": 0.5686,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.22,
+            20.82,
+            320.0,
+            84.14
+          ],
+          "score": 0.3074,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 56,
+      "time_s": 2.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.76,
+            2.7,
+            263.44,
+            216.21
+          ],
+          "score": 0.575,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.08,
+            18.19,
+            320.0,
+            83.16
+          ],
+          "score": 0.3983,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 57,
+      "time_s": 2.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.7,
+            267.03,
+            215.87
+          ],
+          "score": 0.614,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.17,
+            20.22,
+            319.21,
+            84.19
+          ],
+          "score": 0.3511,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            220.82,
+            0.0,
+            270.24,
+            180.03
+          ],
+          "score": 0.115,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 58,
+      "time_s": 2.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.26,
+            261.17,
+            215.06
+          ],
+          "score": 0.6025,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            254.42,
+            15.58,
+            320.0,
+            83.54
+          ],
+          "score": 0.2655,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 59,
+      "time_s": 2.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.62,
+            2.36,
+            259.01,
+            215.07
+          ],
+          "score": 0.562,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.64,
+            18.23,
+            319.45,
+            82.23
+          ],
+          "score": 0.3459,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 60,
+      "time_s": 2.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.74,
+            2.6,
+            253.41,
+            214.9
+          ],
+          "score": 0.595,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.98,
+            18.15,
+            319.37,
+            84.01
+          ],
+          "score": 0.3679,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            300.04,
+            21.11,
+            320.0,
+            78.63
+          ],
+          "score": 0.1778,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.32,
+            1.87,
+            319.17,
+            101.4
+          ],
+          "score": 0.1202,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.38,
+            22.23,
+            302.08,
+            77.87
+          ],
+          "score": 0.1176,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 61,
+      "time_s": 2.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            3.27,
+            255.91,
+            215.75
+          ],
+          "score": 0.5696,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.65,
+            18.07,
+            319.85,
+            78.23
+          ],
+          "score": 0.3729,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 62,
+      "time_s": 2.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.91,
+            3.27,
+            257.53,
+            215.98
+          ],
+          "score": 0.5807,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.72,
+            18.78,
+            320.0,
+            80.21
+          ],
+          "score": 0.3391,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 63,
+      "time_s": 2.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.91,
+            260.69,
+            214.52
+          ],
+          "score": 0.5699,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.68,
+            18.27,
+            320.0,
+            80.0
+          ],
+          "score": 0.345,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 64,
+      "time_s": 2.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.06,
+            2.87,
+            254.71,
+            215.41
+          ],
+          "score": 0.5723,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.68,
+            17.14,
+            320.0,
+            82.35
+          ],
+          "score": 0.3026,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            258.44,
+            11.46,
+            318.64,
+            111.12
+          ],
+          "score": 0.1207,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 65,
+      "time_s": 2.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.25,
+            3.08,
+            257.35,
+            213.21
+          ],
+          "score": 0.5734,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.91,
+            16.92,
+            319.95,
+            80.78
+          ],
+          "score": 0.344,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.87,
+            1.46,
+            320.0,
+            107.32
+          ],
+          "score": 0.1095,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 66,
+      "time_s": 2.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.66,
+            2.91,
+            257.1,
+            215.7
+          ],
+          "score": 0.5692,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.66,
+            16.73,
+            319.65,
+            82.98
+          ],
+          "score": 0.4048,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.13,
+            0.52,
+            319.32,
+            98.6
+          ],
+          "score": 0.1933,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 67,
+      "time_s": 2.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.72,
+            2.86,
+            259.22,
+            216.32
+          ],
+          "score": 0.5634,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.36,
+            17.76,
+            319.3,
+            81.44
+          ],
+          "score": 0.3141,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.59,
+            0.92,
+            319.0,
+            109.26
+          ],
+          "score": 0.1159,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 68,
+      "time_s": 2.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.82,
+            2.58,
+            262.89,
+            217.11
+          ],
+          "score": 0.5619,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.62,
+            16.45,
+            320.0,
+            83.42
+          ],
+          "score": 0.3085,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.02,
+            21.05,
+            319.71,
+            78.95
+          ],
+          "score": 0.1356,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.41,
+            19.28,
+            305.76,
+            74.91
+          ],
+          "score": 0.1263,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.64,
+            1.1,
+            319.95,
+            102.8
+          ],
+          "score": 0.1209,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 69,
+      "time_s": 2.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.09,
+            3.08,
+            260.47,
+            218.56
+          ],
+          "score": 0.5818,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.57,
+            14.48,
+            319.81,
+            83.37
+          ],
+          "score": 0.3282,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            302.99,
+            22.05,
+            319.68,
+            76.78
+          ],
+          "score": 0.1254,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.01,
+            18.37,
+            304.65,
+            32.78
+          ],
+          "score": 0.1058,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 70,
+      "time_s": 2.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.46,
+            3.22,
+            257.31,
+            217.04
+          ],
+          "score": 0.5388,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.65,
+            15.16,
+            320.0,
+            84.11
+          ],
+          "score": 0.3738,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            249.04,
+            0.93,
+            318.79,
+            108.1
+          ],
+          "score": 0.1621,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 71,
+      "time_s": 2.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.19,
+            2.8,
+            252.45,
+            216.95
+          ],
+          "score": 0.519,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.07,
+            15.48,
+            319.85,
+            82.5
+          ],
+          "score": 0.2747,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            304.87,
+            20.17,
+            319.88,
+            75.03
+          ],
+          "score": 0.1001,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 72,
+      "time_s": 2.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.88,
+            252.19,
+            216.29
+          ],
+          "score": 0.5701,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.35,
+            15.82,
+            319.88,
+            82.05
+          ],
+          "score": 0.2781,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 73,
+      "time_s": 2.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.17,
+            258.73,
+            218.13
+          ],
+          "score": 0.5693,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.54,
+            15.47,
+            319.81,
+            81.64
+          ],
+          "score": 0.3083,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 74,
+      "time_s": 2.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.27,
+            2.9,
+            260.15,
+            217.23
+          ],
+          "score": 0.5576,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.55,
+            14.71,
+            319.68,
+            81.72
+          ],
+          "score": 0.3043,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 75,
+      "time_s": 3.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.13,
+            2.77,
+            261.89,
+            215.22
+          ],
+          "score": 0.5685,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.88,
+            16.32,
+            319.59,
+            79.32
+          ],
+          "score": 0.2284,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 76,
+      "time_s": 3.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.23,
+            2.03,
+            263.05,
+            213.15
+          ],
+          "score": 0.5556,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.84,
+            14.5,
+            320.0,
+            81.64
+          ],
+          "score": 0.3843,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.53,
+            19.64,
+            319.58,
+            76.18
+          ],
+          "score": 0.1382,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 77,
+      "time_s": 3.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.2,
+            2.45,
+            259.72,
+            212.69
+          ],
+          "score": 0.5532,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.7,
+            15.72,
+            320.0,
+            82.47
+          ],
+          "score": 0.3723,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.62,
+            19.07,
+            319.64,
+            76.64
+          ],
+          "score": 0.1597,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 78,
+      "time_s": 3.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.35,
+            265.37,
+            214.58
+          ],
+          "score": 0.5262,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            270.28,
+            16.29,
+            319.65,
+            82.74
+          ],
+          "score": 0.3317,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.91,
+            19.0,
+            304.82,
+            77.1
+          ],
+          "score": 0.1257,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            304.02,
+            21.72,
+            319.92,
+            75.33
+          ],
+          "score": 0.1109,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 79,
+      "time_s": 3.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.98,
+            264.05,
+            217.24
+          ],
+          "score": 0.587,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.95,
+            17.34,
+            319.5,
+            83.02
+          ],
+          "score": 0.304,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            263.12,
+            14.09,
+            303.58,
+            79.79
+          ],
+          "score": 0.1057,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 80,
+      "time_s": 3.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.58,
+            2.64,
+            258.49,
+            215.42
+          ],
+          "score": 0.5787,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.95,
+            17.27,
+            319.48,
+            83.08
+          ],
+          "score": 0.3037,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 81,
+      "time_s": 3.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.14,
+            2.83,
+            261.1,
+            213.23
+          ],
+          "score": 0.5759,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.64,
+            17.08,
+            319.31,
+            79.03
+          ],
+          "score": 0.229,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 82,
+      "time_s": 3.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.53,
+            3.15,
+            263.02,
+            213.26
+          ],
+          "score": 0.5554,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            266.79,
+            14.85,
+            318.54,
+            81.73
+          ],
+          "score": 0.2943,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.55,
+            19.8,
+            319.79,
+            75.62
+          ],
+          "score": 0.1192,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 83,
+      "time_s": 3.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.83,
+            260.8,
+            212.58
+          ],
+          "score": 0.5629,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            253.02,
+            2.66,
+            319.48,
+            88.0
+          ],
+          "score": 0.2641,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            264.35,
+            17.12,
+            305.73,
+            80.79
+          ],
+          "score": 0.1841,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.59,
+            21.48,
+            319.67,
+            75.01
+          ],
+          "score": 0.1136,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 84,
+      "time_s": 3.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.57,
+            266.04,
+            214.06
+          ],
+          "score": 0.5568,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            267.95,
+            15.2,
+            317.97,
+            82.48
+          ],
+          "score": 0.2239,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 85,
+      "time_s": 3.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.1,
+            3.16,
+            259.63,
+            214.64
+          ],
+          "score": 0.5574,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.5,
+            13.1,
+            319.44,
+            83.16
+          ],
+          "score": 0.3143,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 86,
+      "time_s": 3.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.54,
+            3.23,
+            262.5,
+            216.21
+          ],
+          "score": 0.5655,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.99,
+            17.76,
+            320.0,
+            84.43
+          ],
+          "score": 0.268,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            252.05,
+            1.2,
+            319.23,
+            104.49
+          ],
+          "score": 0.1579,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 87,
+      "time_s": 3.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.85,
+            3.42,
+            263.46,
+            216.79
+          ],
+          "score": 0.5576,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            269.93,
+            16.79,
+            319.38,
+            83.07
+          ],
+          "score": 0.3127,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.34,
+            1.43,
+            319.31,
+            101.85
+          ],
+          "score": 0.1221,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 88,
+      "time_s": 3.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.24,
+            2.28,
+            265.25,
+            215.73
+          ],
+          "score": 0.5694,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.18,
+            18.86,
+            318.45,
+            85.68
+          ],
+          "score": 0.2329,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.61,
+            1.52,
+            318.86,
+            103.95
+          ],
+          "score": 0.2164,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 89,
+      "time_s": 3.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.26,
+            263.28,
+            214.25
+          ],
+          "score": 0.2639,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.17,
+            18.97,
+            318.39,
+            86.22
+          ],
+          "score": 0.2132,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.34,
+            1.01,
+            318.44,
+            108.6
+          ],
+          "score": 0.1897,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 90,
+      "time_s": 3.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.62,
+            0.86,
+            266.13,
+            214.38
+          ],
+          "score": 0.6082,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.93,
+            18.0,
+            318.51,
+            85.08
+          ],
+          "score": 0.2653,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.76,
+            1.13,
+            318.71,
+            107.48
+          ],
+          "score": 0.1959,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 91,
+      "time_s": 3.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.33,
+            3.26,
+            268.94,
+            215.64
+          ],
+          "score": 0.5697,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.1,
+            18.16,
+            319.36,
+            84.44
+          ],
+          "score": 0.2919,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 92,
+      "time_s": 3.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.03,
+            2.93,
+            268.27,
+            216.12
+          ],
+          "score": 0.5569,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.95,
+            18.68,
+            319.18,
+            83.99
+          ],
+          "score": 0.2781,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 93,
+      "time_s": 3.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.18,
+            2.9,
+            269.04,
+            215.72
+          ],
+          "score": 0.5454,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.99,
+            18.43,
+            319.34,
+            82.15
+          ],
+          "score": 0.344,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 94,
+      "time_s": 3.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.15,
+            2.23,
+            263.98,
+            216.3
+          ],
+          "score": 0.5545,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.18,
+            18.25,
+            319.33,
+            81.5
+          ],
+          "score": 0.3488,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 95,
+      "time_s": 3.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.77,
+            267.86,
+            214.76
+          ],
+          "score": 0.5692,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.96,
+            20.76,
+            319.53,
+            82.93
+          ],
+          "score": 0.245,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 96,
+      "time_s": 3.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.2,
+            2.89,
+            264.14,
+            214.77
+          ],
+          "score": 0.5817,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.93,
+            17.91,
+            319.87,
+            83.34
+          ],
+          "score": 0.2829,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            249.64,
+            0.66,
+            319.47,
+            101.96
+          ],
+          "score": 0.1345,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 97,
+      "time_s": 3.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.8,
+            4.21,
+            263.64,
+            214.62
+          ],
+          "score": 0.5672,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.87,
+            19.0,
+            319.87,
+            84.52
+          ],
+          "score": 0.3391,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            249.0,
+            1.0,
+            319.7,
+            102.87
+          ],
+          "score": 0.1387,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 98,
+      "time_s": 3.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.59,
+            3.82,
+            261.84,
+            215.46
+          ],
+          "score": 0.5707,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            280.0,
+            18.12,
+            319.57,
+            82.88
+          ],
+          "score": 0.1714,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.77,
+            0.65,
+            319.39,
+            105.34
+          ],
+          "score": 0.125,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            246.46,
+            1.0,
+            272.84,
+            104.0
+          ],
+          "score": 0.1,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 99,
+      "time_s": 3.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.7,
+            3.31,
+            261.03,
+            214.25
+          ],
+          "score": 0.5758,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.48,
+            17.29,
+            319.65,
+            83.48
+          ],
+          "score": 0.3014,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.85,
+            0.68,
+            319.43,
+            103.86
+          ],
+          "score": 0.145,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 100,
+      "time_s": 4.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.26,
+            2.79,
+            261.65,
+            214.93
+          ],
+          "score": 0.5751,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.79,
+            20.34,
+            319.18,
+            82.19
+          ],
+          "score": 0.2775,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            247.72,
+            0.9,
+            319.98,
+            105.87
+          ],
+          "score": 0.1172,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 101,
+      "time_s": 4.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.69,
+            270.02,
+            213.64
+          ],
+          "score": 0.5831,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            264.56,
+            15.96,
+            320.0,
+            82.76
+          ],
+          "score": 0.35,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            280.83,
+            21.05,
+            303.7,
+            78.47
+          ],
+          "score": 0.169,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.62,
+            22.65,
+            320.0,
+            76.23
+          ],
+          "score": 0.1297,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 102,
+      "time_s": 4.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.8,
+            268.14,
+            213.82
+          ],
+          "score": 0.6031,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.42,
+            18.89,
+            318.71,
+            83.42
+          ],
+          "score": 0.3231,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.93,
+            21.17,
+            303.73,
+            77.21
+          ],
+          "score": 0.1738,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            303.81,
+            22.16,
+            320.0,
+            78.76
+          ],
+          "score": 0.1288,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            285.38,
+            21.3,
+            304.14,
+            34.82
+          ],
+          "score": 0.1212,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 103,
+      "time_s": 4.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.02,
+            267.98,
+            213.95
+          ],
+          "score": 0.6041,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            265.65,
+            17.72,
+            320.0,
+            85.6
+          ],
+          "score": 0.2806,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            283.37,
+            22.36,
+            303.02,
+            74.95
+          ],
+          "score": 0.1471,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            286.23,
+            22.44,
+            302.98,
+            32.7
+          ],
+          "score": 0.1256,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 104,
+      "time_s": 4.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.93,
+            268.03,
+            215.67
+          ],
+          "score": 0.6261,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.56,
+            19.77,
+            319.34,
+            84.06
+          ],
+          "score": 0.2986,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            254.08,
+            5.1,
+            319.53,
+            89.94
+          ],
+          "score": 0.192,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            285.5,
+            21.27,
+            303.61,
+            33.88
+          ],
+          "score": 0.1336,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.42,
+            21.8,
+            303.23,
+            75.57
+          ],
+          "score": 0.1276,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 105,
+      "time_s": 4.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.33,
+            268.15,
+            217.94
+          ],
+          "score": 0.5915,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            253.18,
+            9.19,
+            317.64,
+            86.82
+          ],
+          "score": 0.2665,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.25,
+            21.75,
+            319.56,
+            85.49
+          ],
+          "score": 0.2257,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.11,
+            22.66,
+            303.06,
+            77.93
+          ],
+          "score": 0.1284,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.33,
+            21.05,
+            303.55,
+            41.77
+          ],
+          "score": 0.1156,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 106,
+      "time_s": 4.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.07,
+            268.16,
+            212.15
+          ],
+          "score": 0.4499,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.56,
+            21.7,
+            319.35,
+            85.88
+          ],
+          "score": 0.2574,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.68,
+            23.4,
+            303.04,
+            76.94
+          ],
+          "score": 0.1365,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 107,
+      "time_s": 4.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.63,
+            3.43,
+            266.91,
+            215.04
+          ],
+          "score": 0.579,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.89,
+            20.67,
+            319.14,
+            86.96
+          ],
+          "score": 0.2583,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.54,
+            22.35,
+            304.1,
+            79.37
+          ],
+          "score": 0.141,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 108,
+      "time_s": 4.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.34,
+            267.13,
+            213.34
+          ],
+          "score": 0.4934,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.2,
+            20.34,
+            319.18,
+            89.75
+          ],
+          "score": 0.2437,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            283.32,
+            22.58,
+            303.64,
+            79.45
+          ],
+          "score": 0.1307,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 109,
+      "time_s": 4.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.2,
+            268.14,
+            213.5
+          ],
+          "score": 0.6005,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.01,
+            20.07,
+            319.42,
+            88.33
+          ],
+          "score": 0.2598,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.67,
+            22.68,
+            303.94,
+            77.49
+          ],
+          "score": 0.1265,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            263.31,
+            19.13,
+            304.33,
+            81.36
+          ],
+          "score": 0.1191,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 110,
+      "time_s": 4.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.06,
+            1.16,
+            268.43,
+            213.13
+          ],
+          "score": 0.5889,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.09,
+            20.72,
+            319.56,
+            87.98
+          ],
+          "score": 0.2612,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.6,
+            22.5,
+            304.0,
+            75.99
+          ],
+          "score": 0.1447,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 111,
+      "time_s": 4.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.37,
+            268.2,
+            214.57
+          ],
+          "score": 0.5918,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.14,
+            20.61,
+            319.87,
+            86.12
+          ],
+          "score": 0.3213,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 112,
+      "time_s": 4.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.97,
+            3.72,
+            267.52,
+            214.59
+          ],
+          "score": 0.5761,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.76,
+            20.57,
+            319.91,
+            86.13
+          ],
+          "score": 0.3355,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.94,
+            23.65,
+            303.87,
+            71.76
+          ],
+          "score": 0.1263,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 113,
+      "time_s": 4.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.72,
+            3.84,
+            268.12,
+            216.1
+          ],
+          "score": 0.5723,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.5,
+            20.71,
+            319.89,
+            85.94
+          ],
+          "score": 0.3261,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.35,
+            23.8,
+            303.8,
+            70.5
+          ],
+          "score": 0.1176,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 114,
+      "time_s": 4.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.6,
+            3.87,
+            269.61,
+            215.87
+          ],
+          "score": 0.5682,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.15,
+            20.29,
+            319.72,
+            86.74
+          ],
+          "score": 0.3421,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            283.22,
+            23.76,
+            303.5,
+            61.08
+          ],
+          "score": 0.1116,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 115,
+      "time_s": 4.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.74,
+            3.78,
+            268.32,
+            215.57
+          ],
+          "score": 0.5851,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.37,
+            20.24,
+            319.72,
+            86.87
+          ],
+          "score": 0.3369,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            283.44,
+            23.34,
+            305.48,
+            73.43
+          ],
+          "score": 0.1691,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 116,
+      "time_s": 4.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.45,
+            270.93,
+            214.23
+          ],
+          "score": 0.5848,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            261.24,
+            15.3,
+            320.0,
+            87.29
+          ],
+          "score": 0.2775,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            283.96,
+            23.16,
+            304.95,
+            65.31
+          ],
+          "score": 0.1067,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 117,
+      "time_s": 4.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.35,
+            269.76,
+            215.05
+          ],
+          "score": 0.5917,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.63,
+            20.55,
+            319.79,
+            86.84
+          ],
+          "score": 0.2712,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            284.08,
+            23.17,
+            303.35,
+            51.92
+          ],
+          "score": 0.1124,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 118,
+      "time_s": 4.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.96,
+            4.13,
+            265.16,
+            215.26
+          ],
+          "score": 0.5664,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            269.66,
+            19.45,
+            320.0,
+            85.06
+          ],
+          "score": 0.3519,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.92,
+            22.2,
+            304.23,
+            60.66
+          ],
+          "score": 0.1312,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            247.88,
+            2.17,
+            319.2,
+            97.1
+          ],
+          "score": 0.1063,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 119,
+      "time_s": 4.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.78,
+            4.1,
+            263.29,
+            214.36
+          ],
+          "score": 0.5567,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.95,
+            19.65,
+            319.92,
+            85.27
+          ],
+          "score": 0.3312,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            250.97,
+            2.02,
+            319.45,
+            97.45
+          ],
+          "score": 0.1936,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.24,
+            23.15,
+            304.97,
+            77.02
+          ],
+          "score": 0.1456,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            304.05,
+            23.75,
+            320.0,
+            79.5
+          ],
+          "score": 0.1393,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 120,
+      "time_s": 4.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.35,
+            264.58,
+            213.67
+          ],
+          "score": 0.6105,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            280.4,
+            21.24,
+            319.5,
+            87.82
+          ],
+          "score": 0.2786,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 121,
+      "time_s": 4.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.34,
+            3.81,
+            268.33,
+            216.58
+          ],
+          "score": 0.5861,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.64,
+            21.72,
+            320.0,
+            88.73
+          ],
+          "score": 0.3572,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            302.84,
+            24.47,
+            320.0,
+            82.33
+          ],
+          "score": 0.1414,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 122,
+      "time_s": 4.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.23,
+            3.66,
+            265.8,
+            218.12
+          ],
+          "score": 0.5748,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.41,
+            22.44,
+            319.7,
+            87.56
+          ],
+          "score": 0.355,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            261.14,
+            21.38,
+            303.99,
+            85.23
+          ],
+          "score": 0.1256,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 123,
+      "time_s": 4.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.24,
+            3.67,
+            268.71,
+            216.9
+          ],
+          "score": 0.5975,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.88,
+            21.2,
+            319.78,
+            85.58
+          ],
+          "score": 0.2549,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 124,
+      "time_s": 4.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.26,
+            3.56,
+            268.38,
+            216.44
+          ],
+          "score": 0.585,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.79,
+            20.73,
+            319.3,
+            86.19
+          ],
+          "score": 0.3252,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 125,
+      "time_s": 5.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.18,
+            270.19,
+            215.97
+          ],
+          "score": 0.6053,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            254.28,
+            16.77,
+            320.0,
+            87.22
+          ],
+          "score": 0.2777,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            290.45,
+            23.6,
+            320.0,
+            82.42
+          ],
+          "score": 0.1276,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            268.43,
+            23.08,
+            303.09,
+            83.05
+          ],
+          "score": 0.1162,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 126,
+      "time_s": 5.04,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.75,
+            270.77,
+            214.23
+          ],
+          "score": 0.5927,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.31,
+            23.18,
+            319.85,
+            84.8
+          ],
+          "score": 0.3557,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.5,
+            24.19,
+            302.53,
+            81.83
+          ],
+          "score": 0.1046,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 127,
+      "time_s": 5.08,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.68,
+            271.01,
+            214.56
+          ],
+          "score": 0.5905,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            279.11,
+            23.07,
+            319.86,
+            84.89
+          ],
+          "score": 0.3582,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.62,
+            24.15,
+            302.59,
+            81.77
+          ],
+          "score": 0.1096,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 128,
+      "time_s": 5.12,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.72,
+            271.91,
+            215.38
+          ],
+          "score": 0.5947,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.71,
+            23.25,
+            319.96,
+            85.36
+          ],
+          "score": 0.3562,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 129,
+      "time_s": 5.16,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.53,
+            3.59,
+            269.99,
+            217.03
+          ],
+          "score": 0.5624,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.77,
+            23.79,
+            319.85,
+            85.95
+          ],
+          "score": 0.375,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 130,
+      "time_s": 5.2,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.63,
+            3.28,
+            266.15,
+            218.09
+          ],
+          "score": 0.5632,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.16,
+            23.28,
+            320.0,
+            86.2
+          ],
+          "score": 0.3013,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 131,
+      "time_s": 5.24,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.97,
+            0.78,
+            264.51,
+            216.21
+          ],
+          "score": 0.5953,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.26,
+            24.77,
+            319.83,
+            86.28
+          ],
+          "score": 0.2627,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 132,
+      "time_s": 5.28,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.22,
+            263.95,
+            217.09
+          ],
+          "score": 0.6001,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            265.01,
+            20.88,
+            319.22,
+            86.24
+          ],
+          "score": 0.2423,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 133,
+      "time_s": 5.32,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.01,
+            266.89,
+            216.9
+          ],
+          "score": 0.6086,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            265.44,
+            19.54,
+            320.0,
+            86.74
+          ],
+          "score": 0.2703,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 134,
+      "time_s": 5.36,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.97,
+            265.86,
+            217.39
+          ],
+          "score": 0.5975,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            277.35,
+            22.56,
+            320.0,
+            85.88
+          ],
+          "score": 0.3087,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 135,
+      "time_s": 5.4,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            1.66,
+            271.56,
+            216.7
+          ],
+          "score": 0.5768,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            272.89,
+            22.61,
+            320.0,
+            86.89
+          ],
+          "score": 0.3583,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 136,
+      "time_s": 5.44,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.42,
+            2.35,
+            265.09,
+            215.59
+          ],
+          "score": 0.5599,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.4,
+            24.93,
+            319.73,
+            84.63
+          ],
+          "score": 0.334,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 137,
+      "time_s": 5.48,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.36,
+            2.26,
+            263.02,
+            214.07
+          ],
+          "score": 0.5681,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            274.59,
+            25.11,
+            319.66,
+            83.93
+          ],
+          "score": 0.3382,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 138,
+      "time_s": 5.52,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.11,
+            2.39,
+            265.41,
+            213.54
+          ],
+          "score": 0.5655,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.11,
+            25.63,
+            320.0,
+            85.13
+          ],
+          "score": 0.3271,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 139,
+      "time_s": 5.56,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.09,
+            2.62,
+            268.12,
+            214.65
+          ],
+          "score": 0.5606,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            273.0,
+            25.85,
+            319.99,
+            85.59
+          ],
+          "score": 0.3423,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 140,
+      "time_s": 5.6,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.15,
+            2.7,
+            269.92,
+            214.17
+          ],
+          "score": 0.5674,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.1,
+            27.02,
+            319.89,
+            83.86
+          ],
+          "score": 0.2886,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 141,
+      "time_s": 5.64,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            2.36,
+            272.23,
+            214.22
+          ],
+          "score": 0.5659,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.84,
+            23.83,
+            320.0,
+            85.54
+          ],
+          "score": 0.3765,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 142,
+      "time_s": 5.68,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.72,
+            273.7,
+            216.03
+          ],
+          "score": 0.6025,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            278.27,
+            24.2,
+            320.0,
+            84.72
+          ],
+          "score": 0.354,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 143,
+      "time_s": 5.72,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.85,
+            2.32,
+            272.92,
+            214.99
+          ],
+          "score": 0.5749,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            252.02,
+            20.08,
+            320.0,
+            89.82
+          ],
+          "score": 0.3142,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            300.58,
+            28.24,
+            319.72,
+            81.81
+          ],
+          "score": 0.1183,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 144,
+      "time_s": 5.76,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.73,
+            1.15,
+            272.69,
+            213.06
+          ],
+          "score": 0.5979,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            252.29,
+            18.46,
+            320.0,
+            89.52
+          ],
+          "score": 0.3163,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.69,
+            25.89,
+            305.01,
+            82.52
+          ],
+          "score": 0.1618,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 145,
+      "time_s": 5.8,
+      "detections": [
+        {
+          "box_xyxy": [
+            1.1,
+            3.16,
+            272.06,
+            215.74
+          ],
+          "score": 0.5515,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            251.98,
+            18.95,
+            320.0,
+            89.75
+          ],
+          "score": 0.2927,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.35,
+            25.35,
+            304.29,
+            82.56
+          ],
+          "score": 0.1823,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            300.93,
+            27.76,
+            319.69,
+            82.28
+          ],
+          "score": 0.1419,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 146,
+      "time_s": 5.84,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.0,
+            272.02,
+            215.26
+          ],
+          "score": 0.5764,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            248.33,
+            17.31,
+            319.94,
+            87.13
+          ],
+          "score": 0.2691,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            275.21,
+            24.13,
+            306.59,
+            81.9
+          ],
+          "score": 0.1601,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.11,
+            28.67,
+            319.61,
+            82.03
+          ],
+          "score": 0.1128,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 147,
+      "time_s": 5.88,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.42,
+            271.98,
+            216.84
+          ],
+          "score": 0.5897,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            271.34,
+            22.03,
+            319.04,
+            85.3
+          ],
+          "score": 0.2046,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.07,
+            27.66,
+            319.66,
+            82.61
+          ],
+          "score": 0.1156,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 148,
+      "time_s": 5.92,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.6,
+            273.84,
+            216.88
+          ],
+          "score": 0.656,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            276.56,
+            23.99,
+            320.0,
+            84.58
+          ],
+          "score": 0.3619,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 149,
+      "time_s": 5.96,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.0,
+            0.19,
+            270.01,
+            218.09
+          ],
+          "score": 0.5943,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            282.89,
+            23.02,
+            320.0,
+            84.0
+          ],
+          "score": 0.2733,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            249.49,
+            16.61,
+            319.74,
+            90.31
+          ],
+          "score": 0.151,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            301.22,
+            28.58,
+            319.84,
+            80.41
+          ],
+          "score": 0.1029,
+          "label": "house"
+        }
+      ]
+    },
+    {
+      "frame": 150,
+      "time_s": 6.0,
+      "detections": [
+        {
+          "box_xyxy": [
+            0.21,
+            0.72,
+            269.74,
+            217.93
+          ],
+          "score": 0.6971,
+          "label": "house"
+        },
+        {
+          "box_xyxy": [
+            281.63,
+            23.0,
+            320.0,
+            84.13
+          ],
+          "score": 0.3299,
+          "label": "house"
+        }
+      ]
+    }
+  ]
+}

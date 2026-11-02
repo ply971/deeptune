@@ -230,3 +230,25 @@ with its own bundled Python and every dependency, including torch/
 transformers/tabpfn) and adds Start Menu / Desktop shortcuts. See
 [packaging/README.md](../packaging/README.md) for how to build it and what
 it needs on the machine that runs it.
+
+## Local trained cat detector
+
+Page **07 Analyse Video** offers **Trained cat detector** under Find, track and
+count. To use the installed model:
+
+1. Double-click `Launch-Cat-Tracking.cmd` in the repository root to open page 07.
+2. Click **Browse file**, choose a video, then click **Load / preview**.
+   A prepared example is `.artifacts/cat-tracking/videos/black-cat-walking.mov`.
+3. In **Find, track and count**, choose **Trained cat detector**. When the
+   installed checkpoint exists, this detector is selected automatically.
+4. Use the prompt `cat`. **Cat checkpoint** automatically points to
+   `saved_models/cat-detector/best.pt`; for another trained cat checkpoint,
+   paste its absolute path instead.
+5. Keep **Frames step** at `1` and click **Find, track and count**.
+6. When processing finishes, click **Show tracker overlay** to view boxes and IDs.
+
+Repeat with one video at a time. Each video gets its own results and overlay.
+Counts are track IDs and can count the same cat again after tracking loses it.
+This detector supports cats only and never downloads weights.
+The existing trained-run picker remains for whole-clip classification.
+See `docs/video-plan/reports/cat-tracking.md` for training and evaluation details.

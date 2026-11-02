@@ -1,0 +1,29 @@
+{
+  "video": "C:\\Users\\Ahmed Magdy\\deeptune-demo\\live_demo\\BabyCrawling\\v_BabyCrawling_g03_c01.avi",
+  "num_frames": 215,
+  "duration_s": 8.6,
+  "every_n_frames": 1,
+  "prompts": [
+    "baby"
+  ],
+  "fps": 25.0,
+  "total_tracks": 1,
+  "labels": {
+    "baby": {
+      "count": 1,
+      "first_seen_s": 0.0,
+      "last_seen_s": 8.56,
+      "tracks": [
+        {
+          "track_id": 1,
+          "first_frame": 0,
+          "last_frame": 214,
+          "first_seen_s": 0.0,
+          "last_seen_s": 8.56,
+          "duration_s": 8.6,
+          "num_observations": 215
+        }
+      ]
+    }
+  }
+}
