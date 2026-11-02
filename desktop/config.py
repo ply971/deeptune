@@ -22,6 +22,7 @@ import pandas as pd
 # Torch-free (the GUI process must never import torch); see trainers/param_count.py.
 from trainers.param_count import param_count_issue
 from handlers.video_arch import parse_pooling_spec
+from handlers.video_backbones import is_hub_video_backbone
 
 # ---------------------------------------------------------------------------
 # What each modality actually accepts as --model_version, and what each
@@ -148,7 +149,11 @@ def build_argv(cfg: RunConfig) -> list[str]:
         argv += ["--trainable_params", cfg.trainable_params.strip()]
 
     if cfg.modality == "video":
-        argv += ["--num_frames", str(cfg.num_frames), "--pooling", cfg.pooling]
+        argv += ["--num_frames", str(cfg.num_frames)]
+        # Clip models (V-JEPA 2, VideoMAE) read tokens through a probe, and cli.py refuses an explicit frame pooling on them.
+        # The GUI's default 'mean' is not a choice the user made, so leave it out and let the CLI apply the probe recipe.
+        if not (cfg.pooling == "mean" and is_hub_video_backbone(cfg.model_version)):
+            argv += ["--pooling", cfg.pooling]
 
     if cfg.modality == "tabular" and cfg.model_version == "gandalf":
         argv += ["--type", cfg.gandalf_type]

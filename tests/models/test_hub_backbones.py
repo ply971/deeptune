@@ -607,6 +607,35 @@ def test_cli_refuses_an_explicit_frame_pooling_on_a_clip_model(flags, capsys):
     assert '--video_arch linear_probe' in capsys.readouterr().err
 
 
+@pytest.mark.parametrize('version,frames,expected', [('vjepa2_tiny', 8, 'attentive_probe'), ('videomae_tiny', 4, 'attentive_probe'), ('resnet18', 8, 'mean')])
+def test_a_gui_built_run_with_the_default_pooling_parses(version, frames, expected, tmp_path):
+    """Re-check of V-052: the GUI always sent --pooling mean, which the clip-model refusal then stopped."""
+    from desktop.config import RunConfig, build_argv
+    from cli import DeepTuneVisionOptions
+    from utils import RunType
+    argv = build_argv(RunConfig(modality='video', df=tmp_path / 'x.parquet', out=tmp_path / 'o', model_version=version, num_frames=frames))
+    assert DeepTuneVisionOptions(RunType.ONECALL, args=argv).pooling.startswith(expected)
+
+
+def test_a_gui_built_run_still_passes_a_pooling_the_user_chose(tmp_path):
+    from desktop.config import RunConfig, build_argv
+    argv = build_argv(RunConfig(modality='video', df=tmp_path / 'x.parquet', out=tmp_path / 'o', model_version='vjepa2_tiny', pooling='attention'))
+    assert argv[argv.index('--pooling') + 1] == 'attention'  # and cli.py refuses it, as for any explicit frame pooling
+
+
+def test_infer_refuses_an_explicit_mean_on_a_clip_model(tmp_path, capsys):
+    """R1.md claims infer.py refuses this; nothing tested it (the re-check's surviving mutant). Refused before any weights load."""
+    import infer
+    run = tmp_path / 'run'
+    run.mkdir()
+    (run / 'cli_arguments.json').write_text(json.dumps({'model_version': 'vjepa2_tiny', 'num_classes': 2, 'modality': 'video',
+                                                        'pooling': 'attentive_probe:probe_depth=1,probe_heads=4,probe_width=256'}), encoding='utf-8')
+    with pytest.raises(SystemExit):
+        infer.main(['--modality', 'video', '--checkpoint', str(run / 'model_weights.pth'), '--data', str(tmp_path), '--out', str(tmp_path / 'o'),
+                    '--model_version', 'vjepa2_tiny', '--pooling', 'mean'])
+    assert '--pooling mean does not apply' in capsys.readouterr().err
+
+
 def test_cli_keeps_an_explicit_mean_on_other_models():
     assert _options('--model_version', 'resnet18', '--pooling', 'mean').pooling == 'mean'
     assert _options('--model_version', 'vjepa2_tiny', '--pooling', 'linear_probe').pooling == 'linear_probe'
