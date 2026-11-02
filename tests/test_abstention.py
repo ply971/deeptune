@@ -169,7 +169,9 @@ def test_silent_error_too_few_groups_abstains():
 def test_few_answered_groups_say_loose():
     score, wrong, groups = _easy(90, scenario=Scenario(clips_per_group=2, group_sd=0.1, offset=-6))
     info = fit_abstention(score, wrong, groups, target_error=0.1).info
-    assert info['status'] == 'met' and info['loose'] and info['headline'].startswith('Guarantee is loose') and info['effective_n'] < info['loose_below_effective_n']
+    # V-053 item 9: for selective_risk the bound still holds with few answered groups, so the headline says "few units", not "loose guarantee".
+    assert info['status'] == 'met' and info['loose'] and info['headline'].startswith('Few answered group units') and info['effective_n'] < info['loose_below_effective_n']
+    assert 'Guarantee is loose' not in info['headline'] and info['guarantee_holds']
 
 
 def test_a_constant_score_is_called_out():
@@ -542,3 +544,326 @@ def test_calibrating_on_the_validation_set_that_chose_the_model_under_covers():
     margin = 3 * np.std(on_calibration) / math.sqrt(seeds)
     assert np.mean(on_calibration) >= 1 - alpha - margin
     assert np.mean(on_validation) < 1 - alpha - margin
+
+
+# -- V-053 fix round: what the review found missing ------------------------------------------------------------------
+from evaluators.abstention import (METHODS, binding_issues, budget_message, certification_budget, file_fingerprint,  # noqa: E402
+                                   mapping_fingerprint)
+
+
+def _bound_rule(score_name='max_prob', **info):
+    score, wrong, groups = _easy()
+    provenance = {'weights_sha256': 'w1', 'label_mapping_sha256': mapping_fingerprint({'cat': 0, 'dog': 1}), 'error_model_sha256': 'e1', **info}
+    return fit_abstention(score, wrong, groups, target_error=0.1, score_name=score_name, provenance=provenance), score
+
+
+def _apply(rule, score, **binding):
+    frame = pd.DataFrame({'confidence': score, 'expected_error': 1 - score, 'predicted_label': 'cat'})
+    return apply_rule(rule, frame, {}, warn=lambda _: None, **binding), frame
+
+
+def test_matching_weights_mapping_and_error_model_keep_the_guarantee():
+    rule, score = _bound_rule('expected_error')
+    assert rule.info['guarantee_holds']
+    summary, frame = _apply(rule, score, weights_sha256='w1', label_mapping={'dog': 1, 'cat': 0}, error_model_sha256='e1')  # key order does not matter
+    assert summary['pipeline_mismatches'] == [] and summary['guarantee_holds'] is True and not summary['headline'].startswith('No guarantee')
+    assert binding_issues(rule, 'w1', {'cat': 0, 'dog': 1}, 'e1') == []
+
+
+@pytest.mark.parametrize('binding, needle', [
+    ({'weights_sha256': None}, 'weights'),
+    ({'label_mapping': {'cat': 1, 'dog': 0}}, 'label mapping'),  # names swapped: the decision column would name the wrong class
+    ({'error_model_sha256': 'e2'}, 'error model'),
+    ({'error_model_sha256': None}, 'error model'),  # the rule was fitted with an error model that is now gone
+])
+def test_a_binding_mismatch_voids_the_guarantee_at_apply_time(binding, needle):
+    """V-053 items 4 and 5: the label mapping and error_model.json are bound to the rule like the weights. Decisions are still written; the claim goes."""
+    rule, score = _bound_rule('expected_error')
+    given = {'weights_sha256': 'w1', 'label_mapping': {'cat': 0, 'dog': 1}, 'error_model_sha256': 'e1', **binding}
+    summary, frame = _apply(rule, score, **given)
+    assert summary['guarantee_holds'] is False and summary['headline'].startswith('No guarantee')
+    assert any(issue.startswith(needle) for issue in summary['pipeline_mismatches']) and 'decision' in frame.columns
+
+
+def test_a_rule_with_no_recorded_binding_cannot_claim_the_guarantee():
+    score, wrong, groups = _easy()
+    rule = fit_abstention(score, wrong, groups, target_error=0.1, score_name='expected_error')  # no provenance at all
+    issues = binding_issues(rule, 'w1', {'cat': 0}, 'e1')
+    assert {issue.split(':')[0] for issue in issues} == {'weights', 'label mapping', 'error model'}
+    assert _apply(rule, score, weights_sha256='w1', label_mapping={'cat': 0}, error_model_sha256='e1')[0]['guarantee_holds'] is False
+
+
+def test_the_error_model_is_bound_only_when_it_is_the_score():
+    rule, score = _bound_rule('max_prob')
+    assert binding_issues(rule, 'w1', None, 'something else') == []
+
+
+def test_fingerprints_are_stable_and_tell_files_apart(tmp_path):
+    assert mapping_fingerprint({'a': 0, 'b': 1}) == mapping_fingerprint({'b': 1, 'a': 0}) != mapping_fingerprint({'a': 1, 'b': 0})
+    assert mapping_fingerprint(None) is None and file_fingerprint(None) is None
+    (tmp_path / 'x.json').write_text('{"a": 1}')
+    (tmp_path / 'y.json').write_text('{"a": 2}')
+    assert file_fingerprint(tmp_path / 'x.json') != file_fingerprint(tmp_path / 'y.json')
+
+
+def test_integer_labels_maps_names_and_refuses_bad_labels():
+    """V-053 item 3: a wrong label reads as a wrong prediction, so bad calibration labels would decide the threshold silently."""
+    from evaluators.video.abstention_fit import integer_labels
+    mapping = {'left': 0, 'right': 1}
+    assert integer_labels(pd.Series(['right', 'left', 'right']), mapping, 2).tolist() == [1, 0, 1]
+    assert integer_labels(pd.Series([1, 0, 1.0]), mapping, 2).tolist() == [1, 0, 1]
+    assert integer_labels(pd.Series(['1', '0']), None, 2).tolist() == [1, 0]
+    refusals = [(pd.Series([0, None]), mapping, 'missing'), (pd.Series([0, 1.5]), mapping, 'whole class'), (pd.Series(['left', 'up']), mapping, 'does not have'),
+                (pd.Series([0, 2]), mapping, 'outside'), (pd.Series([-1, 0]), mapping, 'outside'), (pd.Series(['left', 'right']), None, 'no label_mapping')]
+    for values, given, needle in refusals:
+        with pytest.raises(ValueError, match=needle):
+            integer_labels(values, given, 2)
+
+
+def _split_file(path, groups, sources=None, labels=None):
+    n = len(groups) if groups is not None else len(sources) if sources is not None else 2
+    frame = pd.DataFrame({'labels': labels if labels is not None else [i % 2 for i in range(n)]})
+    if groups is not None:
+        frame['group'] = groups
+    if sources is not None:
+        frame['videos'] = sources
+    frame.to_parquet(path, index=False)
+    return path
+
+
+def test_void_reasons_need_something_to_compare_unless_disjoint_by_construction(tmp_path):
+    """V-053 item 1: a standalone fit with nothing to compare cannot show disjointness, so it claims nothing. deeptune.py drew the rows itself."""
+    from evaluators.video.abstention_fit import _void_reasons
+    calibration = _split_file(tmp_path / 'calibration.parquet', ['a', 'b'])
+    assert _void_reasons(calibration, 'group', [])[0].startswith('Disjointness unverified')
+    assert _void_reasons(calibration, 'group', [], disjoint_by_construction=True) == []
+    clean = _split_file(tmp_path / 'train.parquet', ['c', 'd'])
+    assert _void_reasons(calibration, 'group', [clean]) == []
+    overlapping = _split_file(tmp_path / 'test.parquet', ['b', 'e'])
+    assert '1 calibration groups also appear' in _void_reasons(calibration, 'group', [clean, overlapping])[0]
+    # No group column and no source path in either file (clip bytes): nothing to compare, so unverified.
+    bare = _split_file(tmp_path / 'bare.parquet', None)
+    other_bare = _split_file(tmp_path / 'other_bare.parquet', None)
+    assert any(reason.startswith('Disjointness unverified') for reason in _void_reasons(bare, None, [other_bare]))
+    # Source paths compare even when written relative to their own file.
+    (tmp_path / 'sub').mkdir()
+    by_path = _split_file(tmp_path / 'by_path.parquet', None, sources=['sub/v1.mp4', 'sub/v2.mp4'])
+    shares = _split_file(tmp_path / 'sub' / 'shares.parquet', None, sources=['v2.mp4', 'v3.mp4'])
+    assert any('source videos also appear' in reason for reason in _void_reasons(by_path, None, [shares]))
+
+
+def test_run_split_files_finds_the_runs_own_splits(tmp_path):
+    from evaluators.video.abstention_fit import run_label_mapping, run_split_files
+    run = tmp_path / 'deeptune-x'
+    (run / 'trainval_output_1').mkdir(parents=True)
+    splits = run / 'data_splits_1'
+    splits.mkdir()
+    for name in ('train', 'val', 'test'):
+        _split_file(splits / f'{name}_split.parquet', [name])
+    (splits / 'label_mapping.json').write_text('{"left": 0, "right": 1}')
+    checkpoint = run / 'trainval_output_1' / 'model_weights.pth'
+    assert [path.name for path in run_split_files(checkpoint)] == ['train_split.parquet', 'val_split.parquet', 'test_split.parquet']
+    assert run_label_mapping(checkpoint) == {'left': 0, 'right': 1}
+    lonely = tmp_path / 'lonely' / 'w' / 'model_weights.pth'
+    assert run_split_files(lonely) == [] and run_label_mapping(lonely) is None
+
+
+def test_carving_updates_split_summary_and_prints_the_budget(tmp_path, capsys):
+    """V-053 nice-to-have: split_summary.json no longer describes training before calibration left it. And the budget is said before training."""
+    from evaluators.video.abstention_fit import carve_calibration_split
+    groups = np.repeat([f'g{i}' for i in range(40)], 2)
+    train = _split_file(tmp_path / 'train_split.parquet', groups, labels=np.repeat(np.arange(40) % 2, 2))
+    (tmp_path / 'split_summary.json').write_text(json.dumps({'sample_counts': {'train': 80, 'val': 10, 'test': 10}, 'group_counts': {'train': 40, 'val': 5, 'test': 5}}))
+    calibration = carve_calibration_split(train, 0.1, 0.7, 'group', 0, target_error=0.1, delta=0.05)
+    summary = json.loads((tmp_path / 'split_summary.json').read_text())
+    kept, carved = pd.read_parquet(train), pd.read_parquet(calibration)
+    assert summary['sample_counts'] == {'train': len(kept), 'val': 10, 'test': 10, 'calibration': len(carved)}
+    assert summary['group_counts'] == {'train': kept['group'].nunique(), 'val': 5, 'test': 5, 'calibration': carved['group'].nunique()}
+    assert len(kept) + len(carved) == 80 and summary['calibration_taken_from'] == 'train'
+    out = capsys.readouterr().out
+    assert 'Certification budget' in out and 'cannot certify target 0.1' in out  # 6 groups: below the zero-error floor of 62
+
+
+def test_certification_budget_is_the_edge_of_certification_by_hand():
+    alpha, n, delta = 0.05, 250, 0.05
+    budget = certification_budget(alpha, n, delta)
+
+    def p_value(k):  # Hoeffding-Bentkus, arXiv 2110.01052 Eq. 2, by hand
+        r = k / n
+        h = (r * math.log(r / alpha) if r > 0 else 0.0) + (1 - r) * math.log((1 - r) / (1 - alpha))
+        return min(math.exp(-n * h), math.e * stats.binom.cdf(k, n, alpha))
+
+    assert budget is not None and budget / n < alpha
+    assert p_value(budget) <= delta / GRID_SIZE < p_value(budget + 1)
+    assert certification_budget(0.1, 10, 0.05) is None and certification_budget(0.1, 0, 0.05) is None
+    message = budget_message(alpha, n, delta, 'selective_risk')
+    assert 'at most' in message and f'{budget} wrong' in message
+    assert 'at least 19' in budget_message(0.05, 10, delta, 'silent_error')
+
+
+def test_method_names_say_learn_then_test_and_split_conformal():
+    """V-053 item 11: the default is Learn then Test risk control, not conformal prediction."""
+    score, wrong, groups = _easy()
+    selective = fit_abstention(score, wrong, groups, target_error=0.1).info
+    silent = fit_abstention(score, wrong, groups, target_error=0.1, guarantee='silent_error').info
+    assert selective['method'] == METHODS['selective_risk'] and 'Learn then Test' in selective['method'] and 'conformal' not in selective['method']
+    assert selective['guarantee_text'].startswith('Learn then Test') and 'conformal' not in selective['headline'].lower()
+    assert silent['method'] == METHODS['silent_error'] and silent['guarantee_text'].startswith('Split conformal')
+    applied = apply_rule(AbstentionRule(selective), pd.DataFrame({'confidence': score, 'predicted_label': 'x'}), {}, warn=lambda _: None)
+    assert applied['method'] == selective['method']
+
+
+def test_silent_error_with_few_groups_still_says_loose():
+    """Item 9 changed only the selective_risk wording: for silent_error few groups do make the coverage itself vary widely."""
+    score, wrong, groups = _easy(60, scenario=Scenario(clips_per_group=2, group_sd=0.1, offset=-1))
+    info = fit_abstention(score, wrong, groups, target_error=0.1, guarantee='silent_error').info
+    assert info['status'] == 'met' and info['loose'] and info['headline'].startswith('Guarantee is loose')
+
+
+def _big_group_errs():
+    """Nine one-clip groups all right, one nine-clip group all wrong: 0.1 by group, 0.5 by clip."""
+    groups = [*range(9), *[9] * 9]
+    frame = pd.DataFrame({'confidence': np.full(18, .9), 'correct': [True] * 9 + [False] * 9})
+    return frame, groups
+
+
+def _rule_at_zero(guarantee):
+    return AbstentionRule({'format': 'deeptune-abstention', 'version': 1, 'threshold': 0.0, 'score': 'max_prob', 'target_error': .2, 'guarantee_kind': guarantee,
+                           'status': 'met', 'headline': 'x', 'guarantee_holds': True})
+
+
+@pytest.mark.parametrize('guarantee, column', [('selective_risk', 'group_mean_error'), ('silent_error', 'share_groups_with_answered_wrong_clip')])
+def test_report_and_plot_use_the_guaranteed_quantity_not_clip_weighted_error(tmp_path, monkeypatch, guarantee, column):
+    """V-053 item 7: the plot drew clip-weighted error against a group-weighted target. Here clip-weighted error is 0.5, above the 0.2 target,
+    while the guaranteed quantity is 0.1, within it."""
+    pytest.importorskip('matplotlib')
+    import evaluators.video.report as report_mod
+    drawn = {}
+    finish = report_mod._finish
+
+    def spy(figure, axes, *rest, **kw):
+        drawn.update(axes=axes, ylabel=rest[2])
+        return finish(figure, axes, *rest, **kw)
+
+    monkeypatch.setattr(report_mod, '_finish', spy)
+    frame, groups = _big_group_errs()
+    report, curve = build_report(_rule_at_zero(guarantee), frame, groups, n_boot=20)
+    chosen = report['at_fitted_threshold']
+    assert chosen['error'] == pytest.approx(0.5) and chosen[column] == pytest.approx(0.1)
+    assert chosen['guaranteed_quantity'] == column and chosen['point_within_target'] is True
+    write_report(report, curve, tmp_path)
+    axes = drawn['axes']
+    marker = [c for c in axes.collections if c.get_label() == 'fitted threshold'][0]
+    assert marker.get_offsets()[0][1] == pytest.approx(0.1)
+    plotted = curve[curve['answered_clips'] > 0].sort_values('coverage')  # the plot leaves out thresholds that answer nothing
+    labels = [line.get_label() for line in axes.get_lines()]
+    guaranteed = [line for line in axes.get_lines() if '(guaranteed)' in line.get_label() or line.get_label().startswith('share of groups')]
+    assert len(guaranteed) == 1, labels
+    assert np.asarray(guaranteed[0].get_ydata(), dtype=float) == pytest.approx(plotted[column].to_numpy(dtype=float))
+    if guarantee == 'silent_error':
+        assert 'Share of groups' in drawn['ylabel'] and not any('each answered clip' in label for label in labels)
+
+
+# -- V-053 item 8: validity through the public fit_abstention, and tight enough to catch a wrong delta ----------------
+def _saturated_false_claim_rate(n, alpha, true_risk, delta, seeds, seed=0):
+    """Every score is 1, above the whole grid, so every threshold answers every clip. Clips are i.i.d. with error true_risk > alpha, so any
+    answer is a false claim. Returns the realised rate through fit_abstention and the exact rate the procedure at `delta` implies:
+    P(binomial tail <= delta / grid) for K ~ Bin(n, true_risk), from scipy alone."""
+    wrong = np.random.default_rng(seed).random((seeds, n)) < true_risk
+    claims = sum(fit_abstention(np.ones(n), row, target_error=alpha, delta=delta).threshold is not None for row in wrong)
+    k = np.arange(n + 1)
+    passing = k[stats.binom.cdf(k, n, alpha) <= delta / GRID_SIZE]
+    exact = float(stats.binom.cdf(passing.max(), n, true_risk)) if len(passing) else 0.0
+    return claims / seeds, exact
+
+
+def test_fit_abstention_false_claims_match_the_exact_rate_at_the_boundary():
+    """Tightness, not only validity: the realised false-claim rate equals what the exact procedure at delta implies, within 3 standard errors.
+    A fit that used delta / 8 (exact rate 0.0014) or delta / 2 (0.0070) claims far less often than 0.025, and fails here. Bonferroni's slack is out of play
+    since every threshold answers the same clips. n = 240 puts a binomial atom close to delta / 32, so discreteness costs little."""
+    n, alpha, true_risk, delta, seeds = 240, 0.1, 0.101, 0.9, 1500
+    rate, exact = _saturated_false_claim_rate(n, alpha, true_risk, delta, seeds)
+    assert exact > 0.75 * delta / GRID_SIZE  # near the boundary: the bound is not vacuous here
+    assert rate <= delta
+    assert abs(rate - exact) <= 3 * math.sqrt(exact * (1 - exact) / seeds)
+
+
+@pytest.mark.seed_study
+def test_fit_abstention_false_claims_match_the_exact_rate_at_the_boundary_long():
+    """The same with 8000 other draws: 3 standard errors are then 0.005."""
+    n, alpha, true_risk, delta, seeds = 240, 0.1, 0.101, 0.9, 8000
+    rate, exact = _saturated_false_claim_rate(n, alpha, true_risk, delta, seeds, seed=1)
+    assert abs(rate - exact) <= 3 * math.sqrt(exact * (1 - exact) / seeds)
+
+
+@pytest.mark.parametrize('guarantee', ['selective_risk', 'silent_error'])
+def test_the_grid_is_fixed_whatever_the_scores(guarantee):
+    """A grid derived from the calibration scores (quantiles, or dropping thresholds above the top score) breaks the fixed-family Bonferroni argument.
+    The fit table must hold the same thresholds, all of them, for any data."""
+    low = _easy(300, seed=0, scenario=Scenario(clips_per_group=2, score_mean=-2.0, score_clip_sd=0.3))
+    high = _easy(300, seed=1, scenario=Scenario(clips_per_group=2, score_mean=6.0, score_clip_sd=0.3))
+    assert low[0].max() < 0.5 < high[0].min()
+    fits = [fit_abstention(*data, target_error=0.2, guarantee=guarantee, num_classes=5).info for data in (low, high)]
+    tables = [[row['threshold'] for row in info['fit_table']] for info in fits]
+    assert tables[0] == tables[1] == threshold_grid(5).tolist()
+    assert fits[0]['grid_size'] == fits[1]['grid_size'] == GRID_SIZE
+
+
+def _public_failures(scenario, truth, n_groups, seeds, per_clip=False):
+    """As _failures, through fit_abstention: groups=None makes every clip its own unit."""
+    failed, chosen = 0, 0
+    for seed in range(seeds):
+        score, wrong, groups = draw(np.random.default_rng(seed), n_groups, scenario)
+        tau = fit_abstention(score, wrong, None if per_clip else groups, target_error=ALPHA, delta=DELTA).threshold
+        if tau is not None:
+            chosen += 1
+            failed += truth['group'][np.searchsorted(GRID, tau)] > ALPHA
+    return failed / seeds, chosen / seeds
+
+
+@pytest.mark.parametrize('name, scenario, n_groups, seeds', [('independent', INDEPENDENT, 1500, 60), ('dependent', DEPENDENT, 600, 120)])
+def test_fit_abstention_selective_risk_holds_and_answers(populations, name, scenario, n_groups, seeds):
+    assert populations[name]['group'][0] > ALPHA
+    rate, chosen = _public_failures(scenario, populations[name], n_groups, seeds)
+    assert rate <= DELTA + _slack(DELTA, seeds) and chosen > 0.9
+
+
+@pytest.mark.seed_study
+def test_fit_abstention_selective_risk_study(populations):
+    """The validity checks above at full size through the public fit, and the clip-counting failure."""
+    for name, scenario, n_groups, seeds in (('independent', INDEPENDENT, 1500, 400), ('dependent', DEPENDENT, 600, 400)):
+        rate, chosen = _public_failures(scenario, populations[name], n_groups, seeds)
+        assert rate <= DELTA + _slack(DELTA, seeds) and chosen > 0.9
+    seeds = 800
+    truth = {'group': np.full(len(GRID), populations['stress']['group'][0])}
+    grouped, _ = _public_failures(STRESS, truth, 60, seeds)
+    naive, _ = _public_failures(STRESS, truth, 60, seeds, per_clip=True)
+    assert grouped <= DELTA + _slack(DELTA, seeds) and naive > DELTA + _slack(DELTA, seeds)
+
+
+def _public_silent_coverage(n, alpha, seeds, truth_score, truth_wrong, truth_groups):
+    worst_population = np.sort(group_worst_scores(truth_score, truth_wrong, truth_groups))
+    realised = []
+    for seed in range(seeds):
+        score, wrong, groups = draw(np.random.default_rng(seed), n, NEARLY_ALL_GROUPS_ERR)
+        tau = fit_abstention(score, wrong, groups, target_error=alpha, guarantee='silent_error').threshold
+        realised.append(np.searchsorted(worst_population, tau, side='left') / len(worst_population))
+    return np.array(realised)
+
+
+def test_fit_abstention_silent_error_coverage_is_nominal(silent_population):
+    n, alpha, seeds = 99, 0.1, 400
+    realised = _public_silent_coverage(n, alpha, seeds, *silent_population)
+    standard_error = realised.std() / math.sqrt(seeds)
+    assert 1 - alpha - 3 * standard_error <= realised.mean() <= 1 - alpha + 1 / (n + 1) + 3 * standard_error
+
+
+@pytest.mark.seed_study
+def test_fit_abstention_silent_error_study(silent_population):
+    n, alpha, seeds = 99, 0.1, 1500
+    realised = _public_silent_coverage(n, alpha, seeds, *silent_population)
+    standard_error = realised.std() / math.sqrt(seeds)
+    assert 1 - alpha - 3 * standard_error <= realised.mean() <= 1 - alpha + 1 / (n + 1) + 3 * standard_error
+    interval = realised_coverage_interval(n, alpha)
+    inside = ((realised >= interval['low']) & (realised <= interval['high'])).mean()
+    assert abs(inside - 0.95) <= _slack(0.95, seeds)

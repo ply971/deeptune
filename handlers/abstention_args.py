@@ -1,5 +1,5 @@
 """CLI flags of abstention ("not sure" with a target error rate). Torch-free, like handlers/evaluation_args.py."""
-from evaluators.abstention import DEFAULT_CALIB_FRACTION, DEFAULT_DELTA, GUARANTEES, SCORES
+from evaluators.abstention import DEFAULT_CALIB_FRACTION, DEFAULT_DELTA, GUARANTEES, SCORES, certification_budget
 
 ABSTENTION_ARG_NAMES = ('target_error', 'abstain_delta', 'abstain_guarantee', 'abstain_score', 'calib_fraction')
 
@@ -11,18 +11,24 @@ def _open_unit_interval(text: str) -> float:
     return value
 
 
+def _budget_example() -> str:
+    budget = certification_budget(0.05, 250, DEFAULT_DELTA)
+    return f'target 0.05 on 250 calibration groups certifies only with at most {budget} wrong groups, {100 * budget / 250:.1f}%% observed error.'  # %% because argparse formats help with %
+
+
 def add_abstention_arguments(parser) -> None:
     parser.add_argument('--target_error', type=_open_unit_interval, default=None, metavar='RATE',
-                        help="""Video classification only. Off by default. Fit a threshold so that the model says "not sure" rather than exceed this error rate
+                        help=f"""Video classification only. Off by default. Fit a threshold so that the model says "not sure" rather than exceed this error rate
 among the clips it answers, e.g. 0.05. It promises no accuracy: a model that cannot reach the target answers little or nothing, and the output says so.
 Turning this on takes --calib_fraction of the data out of training, whole groups at a time. Validation and test rows do not change.
-Fitted on the separate calibration split, saved as abstention.json next to the weights, and applied by infer.py.""")
+Fitted on the separate calibration split, saved as abstention.json next to the weights, and applied by infer.py.
+Check the budget first: a preflight line prints it before training. Example, at delta 0.05 with every group answered: {_budget_example()}""")
     parser.add_argument('--abstain_delta', type=_open_unit_interval, default=DEFAULT_DELTA, metavar='DELTA',
                         help=f"""With --target_error and --abstain_guarantee selective_risk: the chance that the calibration draw is unlucky and the guarantee fails (default {DEFAULT_DELTA}).""")
     parser.add_argument('--abstain_guarantee', choices=GUARANTEES, default='selective_risk',
-                        help="""With --target_error. What the target bounds.
-selective_risk (default): error among answered clips, with probability 1 - delta over the calibration draw, group-weighted, for i.i.d. groups.
-silent_error: the chance that a new group has any answered wrong clip, marginally, for exchangeable groups. It does not bound error among answered clips.""")
+                        help="""With --target_error. What the target bounds. Prediction sets are not built.
+selective_risk (default, Learn then Test risk control): error among answered clips, with probability 1 - delta over the calibration draw, group-weighted, for i.i.d. groups.
+silent_error (split conformal): the chance that a new group has any answered wrong clip, marginally, for exchangeable groups. It does not bound error among answered clips.""")
     parser.add_argument('--abstain_score', choices=SCORES, default='max_prob',
                         help="""With --target_error. What ranks clips (default max_prob, the softmax confidence with no temperature). expected_error uses error_model.json. Validity needs neither to be calibrated.""")
     parser.add_argument('--calib_fraction', type=_open_unit_interval, default=DEFAULT_CALIB_FRACTION, metavar='FRACTION',

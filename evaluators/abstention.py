@@ -1,5 +1,8 @@
 """Abstention ("not sure") with a target error rate, calibrated on whole groups. Torch-free.
 
+Names matter here. The default, 'selective_risk', is Learn then Test risk control, not conformal prediction. Only 'silent_error' is conformal.
+Prediction sets and cross-conformal are not built.
+
 The model answers a clip when its score reaches a threshold fitted on a calibration split, and says "not sure"
 otherwise. Nothing here promises a fixed accuracy: the model's accuracy decides how much it can answer, and that
 can be nothing at all.
@@ -52,6 +55,7 @@ What is not guaranteed
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from functools import lru_cache
@@ -72,6 +76,7 @@ CURVE_FILENAME = 'selective_risk_curve.csv'
 PLOT_FILENAME = 'selective_risk_curve.png'
 INFERENCE_SUMMARY_FILENAME = 'abstention_summary.json'
 NOT_SURE = 'not sure'
+_INK_MARK = '#1f2933'  # the fitted threshold's marker, apart from the series colours
 
 GUARANTEES = ('selective_risk', 'silent_error')
 SCORES = ('max_prob', 'expected_error')
@@ -80,6 +85,10 @@ DEFAULT_CALIB_FRACTION = 0.1
 GRID_SIZE = 32
 SMALLEST_DISTANCE_FROM_ONE = 1e-6  # float32 softmax cannot resolve much closer to 1
 INTERVAL_LEVEL = 0.95
+METHODS = {'selective_risk': 'Learn then Test risk control on per-group losses', 'silent_error': 'split conformal on one score per group'}
+# Calibration is a uniform draw of groups from the training split; test comes from split_dataset's stratified grouped folds.
+SPLIT_GAP_NOTE = ('Calibration groups are a uniform draw from the training split, while the test split comes from stratified grouped folds, so they are not exact i.i.d. draws from one population. '
+                  'The guarantee speaks about new groups from the population calibration represents; this test set checks it only approximately.')
 LOOSE_FACTOR = 1.5  # "loose" when the realised miss rate can plausibly reach 1.5 x target: see loose_below
 REFUSED_SPLITS = ('test', 'val', 'validation', 'train', 'training')
 
@@ -173,24 +182,57 @@ def risk_p_values(answered_units, loss_sum, alpha: float, single_clip_units: boo
 
 def risk_upper_bound(answered_units: int, loss_sum: float, delta: float, single_clip_units: bool = False) -> float:
     """The smallest alpha that the p-value rejects at level `delta`: an upper confidence bound on R. 1.0 with no answered unit."""
-    if answered_units <= 0:
-        return 1.0
-    low, high = float(np.clip(loss_sum / answered_units, 0.0, 1.0)), 1.0
-    if low >= 1.0:
-        return 1.0
-    if low > 0 and risk_p_values(answered_units, loss_sum, low, single_clip_units)[0] <= delta:
-        return low
-    if low == 0:
-        low = 1e-12
-    for _ in range(50):
-        middle = (low + high) / 2
-        if middle >= 1.0:
-            break
-        if risk_p_values(answered_units, loss_sum, middle, single_clip_units)[0] <= delta:
-            high = middle
-        else:
-            low = middle
-    return float(high)
+    return float(risk_upper_bounds([answered_units], [loss_sum], delta, single_clip_units)[0])
+
+
+def risk_upper_bounds(answered_units, loss_sum, delta: float, single_clip_units: bool = False) -> np.ndarray:
+    """risk_upper_bound for many thresholds at once, by bisection."""
+    n = np.asarray(answered_units, dtype=np.int64)
+    total = np.asarray(loss_sum, dtype=np.float64)
+    bounds = np.ones(len(n))
+    usable = n > 0
+    rate = np.zeros(len(n))
+    rate[usable] = np.clip(total[usable] / n[usable], 0.0, 1.0)
+    usable &= rate < 1.0
+    positive = usable & (rate > 0)
+    if positive.any():
+        at_rate = risk_p_values(n[positive], total[positive], rate[positive], single_clip_units) <= delta
+        indices = np.nonzero(positive)[0][at_rate]
+        bounds[indices] = rate[indices]
+        usable[indices] = False
+    if usable.any():
+        low, high = np.maximum(rate[usable], 1e-12), np.ones(int(usable.sum()))
+        for _ in range(50):
+            middle = np.minimum((low + high) / 2, 1 - 1e-15)
+            rejected = risk_p_values(n[usable], total[usable], middle, single_clip_units) <= delta
+            high = np.where(rejected, middle, high)
+            low = np.where(rejected, low, middle)
+        bounds[usable] = high
+    return bounds
+
+
+def certification_budget(alpha: float, n_groups: int, delta: float = DEFAULT_DELTA, grid_size: int = GRID_SIZE, single_clip_units: bool = False) -> Optional[int]:
+    """The most wrong groups that still certify `alpha`, when `n_groups` are answered and each is wholly right or wholly wrong. None: no count certifies it.
+    So the observed group error must be at most this / n_groups, usually far under the target. Fractional group losses differ slightly."""
+    if n_groups <= 0:
+        return None
+    counts = np.arange(n_groups + 1, dtype=np.float64)
+    passing = counts[risk_p_values(np.full(n_groups + 1, n_groups), counts, alpha, single_clip_units) <= delta / grid_size]
+    return int(passing.max()) if len(passing) else None
+
+
+def budget_message(alpha: float, n_groups: int, delta: float, guarantee: str, unit: str = 'group') -> str:
+    """What calibration can certify, stated before training."""
+    if guarantee == 'silent_error':
+        needed = math.ceil(1 / alpha) - 1
+        return (f'Certification budget: split conformal at target {alpha:g} needs at least {needed} calibration {unit} units; there are {n_groups}. '
+                'It bounds the share of new groups with an answered wrong clip, not the error among answered clips.')
+    budget = certification_budget(alpha, n_groups, delta, single_clip_units=unit == 'row')
+    if budget is None:
+        return (f'Certification budget: {n_groups} calibration {unit} units cannot certify target {alpha:g} at delta {delta:g}, even with no error at all: '
+                f'at least {groups_needed(alpha, delta)} answered units are needed. As it stands every clip will be "{NOT_SURE}".')
+    return (f'Certification budget: if all {n_groups} calibration {unit} units are answered, target {alpha:g} at delta {delta:g} certifies only with at most {budget} wrong '
+            f'({budget / n_groups:.1%} observed error). The bound is conservative, so reaching the target needs an observed error well under it.')
 
 
 def select_selective_threshold(stats_table: pd.DataFrame, alpha: float, delta: float, single_clip_units: bool = False) -> Optional[float]:
@@ -359,9 +401,7 @@ def fit_abstention(score, wrong, groups=None, sources=None, *, target_error: flo
     single_clip = int(np.bincount(index).max()) == 1
     grid = threshold_grid(num_classes)
     table = threshold_stats(score, wrong, index, grid)
-    bound_delta = delta / len(grid)
-    table['simultaneous_upper_bound'] = [risk_upper_bound(n, s, bound_delta, single_clip) for n, s in
-                                         zip(table['answered_units'], table['unit_loss_sum'])]
+    table['simultaneous_upper_bound'] = risk_upper_bounds(table['answered_units'].to_numpy(), table['unit_loss_sum'].to_numpy(), delta / len(grid), single_clip)
     table['group_mean_error'] = (table['unit_loss_sum'] / table['answered_units'].replace(0, np.nan))
     table['clip_error'] = (table['wrong_clips'] / table['answered_clips'].replace(0, np.nan))
     table['clip_coverage'] = table['answered_clips'] / len(score)
@@ -378,7 +418,7 @@ def fit_abstention(score, wrong, groups=None, sources=None, *, target_error: flo
         warnings.append(f"Every calibration clip has the same {score_name}, so the rule answers all clips or none. With expected_error this means error_model.json is the constant fallback.")
     limit = loose_below(target_error)
     info = {'format': FORMAT, 'version': FORMAT_VERSION, 'target_error': float(target_error), 'guarantee_kind': guarantee, 'score': score_name,
-            'threshold': threshold, 'split': split, 'unit': unit, 'guarantee_level': GUARANTEE_LEVELS[unit], 'assumes_independent_clips': unit == 'row',
+            'method': METHODS[guarantee], 'threshold': threshold, 'split': split, 'unit': unit, 'guarantee_level': GUARANTEE_LEVELS[unit], 'assumes_independent_clips': unit == 'row',
             'n_units': n_units, 'n_clips': int(len(score)),
             'largest_group': int(np.bincount(index).max()), 'grid_size': len(grid), 'source': SOURCES[guarantee],
             'probabilities': 'uncalibrated softmax, averaged over test clips and crops; no temperature applied at fit or at inference',
@@ -387,6 +427,8 @@ def fit_abstention(score, wrong, groups=None, sources=None, *, target_error: flo
                 'clip_error_answering_everything': float(wrong.mean()), 'groups_with_an_error': int(np.isfinite(worst).sum())}}
     if guarantee == 'selective_risk':
         info['delta'] = float(delta)
+        info['certification_budget'] = {'answered_groups': n_units, 'most_wrong_groups_that_certify': certification_budget(target_error, n_units, delta, len(grid), single_clip),
+                                        'note': 'If every group is answered and each is wholly right or wholly wrong. Fractional group losses differ slightly.'}
     info.update(provenance or {})
 
     if threshold is None:
@@ -430,7 +472,7 @@ def _selective_statement(alpha, delta, threshold, table, n_units, limit) -> dict
     level = 1 - (1 - INTERVAL_LEVEL) / len(table)  # holds together over the grid, so for the picked threshold
     low, high = clopper_pearson(int(row['units_without_silent_error']), n_units, level)
     answer_low, answer_high = clopper_pearson(answered, n_units, level)
-    text = (f'With probability at least {1 - delta:g} over the draw of the calibration groups, the error rate among answered clips is at most {alpha:g}, for new groups '
+    text = (f'Learn then Test risk control: with probability at least {1 - delta:g} over the draw of the calibration groups, the error rate among answered clips is at most {alpha:g}, for new groups '
             'i.i.d. with the calibration groups: draw a new group with an answered clip, then one of its answered clips. Group-weighted, and not per class or under shift.')
     return {'status': 'met', 'effective_n': answered, 'loose': answered < limit, 'guarantee_text': text,
             'risk_upper_bound': float(row['simultaneous_upper_bound']), 'answer_rate_on_calibration': float(row['clip_coverage']),
@@ -446,7 +488,7 @@ def _silent_statement(alpha, threshold, score, index, worst, n_units, limit) -> 
     interval = realised_coverage_interval(n_units, alpha)
     finite = worst[np.isfinite(worst)]
     ties = len(finite) < n_units or len(np.unique(finite)) < len(finite)
-    text = (f'Marginally over the calibration groups and a new group exchangeable with them, the chance that the new group has any answered wrong clip is at most {alpha:g}. '
+    text = (f'Split conformal: marginally over the calibration groups and a new group exchangeable with them, the chance that the new group has any answered wrong clip is at most {alpha:g}. '
             'This is not an error rate among answered clips.')
     return {'status': 'met', 'effective_n': n_units, 'loose': n_units < limit, 'guarantee_text': text,
             'answer_rate_on_calibration': float((score >= threshold).mean()),
@@ -459,15 +501,22 @@ def _silent_statement(alpha, threshold, score, index, worst, n_units, limit) -> 
 def _headline(info: dict) -> str:
     if info['status'] == 'target_not_met':
         return f"Target error {info['target_error']:g} cannot be met on this calibration data, so every clip gets \"{NOT_SURE}\". {info['reason']}"
+    note = _unit_note(info)
     if info['void_reasons']:
-        return 'No guarantee: ' + ' '.join(info['void_reasons'])
+        return 'No guarantee: ' + ' '.join(info['void_reasons']) + note
     limit = info['loose_below_effective_n']
-    note = f" {UNIT_NOTES[info['unit']]}" if info['unit'] in UNIT_NOTES else ''
     level = info['guarantee_level']
+    if info['loose'] and info['guarantee_kind'] == 'selective_risk':  # the bound itself still holds: what is weak is how much it can answer
+        return (f"Few answered {level} units: target error {info['target_error']:g} rests on only {info['effective_n']} answered units (fewer than {limit}). The bound is conservative here, "
+                f"and the answer rate can change a lot between calibration draws. {info['guarantee_text']}{note}")
     if info['loose']:
         return (f"Guarantee is loose: target error {info['target_error']:g} rests on only {info['effective_n']} effective {level} units (fewer than {limit}). "
                 f"One calibration draw can land far from the target. {info['guarantee_text']}{note}")
     return f"Target error {info['target_error']:g} on {info['effective_n']} effective {level} units. {info['guarantee_text']}{note}"
+
+
+def _unit_note(info: dict) -> str:
+    return f" {UNIT_NOTES[info['unit']]}" if info.get('unit') in UNIT_NOTES else ''
 
 
 # -- applying a rule to new clips -----------------------------------------------------------------------------------
@@ -489,7 +538,7 @@ def load_rule_near(checkpoint_path, num_classes: Optional[int] = None, weights_s
     except (OSError, ValueError, KeyError) as exc:
         warn(f'Warning: ignoring {path}: {exc}. No abstention is applied.')
         return None
-    fitted = rule.info.get('weights_sha256')
+    fitted = rule.info.get('weights_sha256')  # a rule with no hash is applied, but carries no guarantee: binding_issues
     if weights_sha256 is not None and fitted and fitted != weights_sha256:
         warn(f'Warning: {path} was fitted on different weights. No abstention is applied; fit it again for these weights.')
         return None
@@ -497,6 +546,43 @@ def load_rule_near(checkpoint_path, num_classes: Optional[int] = None, weights_s
         warn(f"Warning: {path} was fitted for {rule.info.get('num_classes')} classes, not {num_classes}. No abstention is applied.")
         return None
     return rule
+
+
+def mapping_fingerprint(label_mapping: Optional[dict]) -> Optional[str]:
+    """Hash of a {class name: index} mapping, whatever its key order or file format."""
+    if label_mapping is None:
+        return None
+    return hashlib.sha256(json.dumps({str(k): int(v) for k, v in label_mapping.items()}, sort_keys=True).encode('utf-8')).hexdigest()
+
+
+def file_fingerprint(path) -> Optional[str]:
+    return None if path is None else hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def binding_issues(rule: AbstentionRule, weights_sha256: Optional[str] = None, label_mapping: Optional[dict] = None, error_model_sha256: Optional[str] = None) -> list[str]:
+    """What this run cannot show to be the fit's own: weights, the class names written into `decision`, and the error model behind an expected_error score."""
+    info = rule.info
+    issues = []
+    fitted = info.get('weights_sha256')
+    if not fitted:
+        issues.append('weights: the rule records no weights hash, so what it was fitted on cannot be verified')
+    elif weights_sha256 is None:
+        issues.append('weights: the weights in use were not given, so they cannot be compared with the fit')
+    elif weights_sha256 != fitted:
+        issues.append('weights: these are not the weights the rule was fitted on')
+    if label_mapping is not None:
+        fitted_mapping = info.get('label_mapping_sha256')
+        if fitted_mapping is None:
+            issues.append('label mapping: the rule records none, so the names in the decision column cannot be verified')
+        elif mapping_fingerprint(label_mapping) != fitted_mapping:
+            issues.append("label mapping: this is not the run's mapping, so the names in the decision column can be wrong")
+    if rule.score_name == 'expected_error':
+        fitted_model = info.get('error_model_sha256')
+        if fitted_model is None:
+            issues.append('error model: the rule records no hash of error_model.json, so its score cannot be verified')
+        elif error_model_sha256 != fitted_model:
+            issues.append('error model: error_model.json is not the file the rule was fitted with, so its scores mean something else')
+    return issues
 
 
 def pipeline_issues(rule: AbstentionRule, pipeline: dict, temperature_applied: bool = False) -> list[str]:
@@ -509,14 +595,16 @@ def pipeline_issues(rule: AbstentionRule, pipeline: dict, temperature_applied: b
     return issues
 
 
-def apply_rule(rule: AbstentionRule, frame: pd.DataFrame, pipeline: Optional[dict] = None, temperature_applied: bool = False, warn=print) -> Optional[dict]:
-    """Adds `answered` and `decision` (the predicted label, or "not sure") to `frame` in place, and returns the summary to save. None when the score is missing."""
+def apply_rule(rule: AbstentionRule, frame: pd.DataFrame, pipeline: Optional[dict] = None, temperature_applied: bool = False, warn=print, *, weights_sha256: Optional[str] = None,
+               label_mapping: Optional[dict] = None, error_model_sha256: Optional[str] = None) -> Optional[dict]:
+    """Adds `answered` and `decision` (the predicted label, or "not sure") to `frame` in place, and returns the summary to save. None when the score is missing.
+    Decisions are still written when something differs from the fit; only the claim goes."""
     try:
         score = score_values(frame, rule.score_name)
     except ValueError as exc:
         warn(f'Warning: no abstention is applied. {exc}')
         return None
-    issues = pipeline_issues(rule, pipeline or {}, temperature_applied)
+    issues = binding_issues(rule, weights_sha256, label_mapping, error_model_sha256) + pipeline_issues(rule, pipeline or {}, temperature_applied)
     for issue in issues:
         warn(f'Warning: this run differs from the abstention fit ({issue}). The target error guarantee does not hold for these outputs; fit it again with these settings.')
     answered = rule.answers(score)
@@ -529,7 +617,8 @@ def apply_rule(rule: AbstentionRule, frame: pd.DataFrame, pipeline: Optional[dic
                'guarantee_kind': rule.info['guarantee_kind'], 'status': rule.info['status'], 'guarantee_holds': holds, 'pipeline_mismatches': issues,
                'loose': rule.info.get('loose'), 'effective_n': rule.info.get('effective_n'), 'unit': rule.info.get('unit'), 'guarantee_level': rule.info.get('guarantee_level'),
                'assumes_independent_clips': rule.info.get('assumes_independent_clips'),
-               'headline': rule.info['headline'] if not issues else 'No guarantee: this run differs from the abstention fit: ' + '; '.join(issues),
+               'method': rule.info.get('method'),
+               'headline': rule.info['headline'] if not issues else 'No guarantee: this run differs from the abstention fit: ' + '; '.join(issues) + '.' + _unit_note(rule.info),
                'not_guaranteed': rule.info.get('not_guaranteed', [])}
     if 'correct' in frame.columns and frame['correct'].notna().any():
         known = frame.loc[answered, 'correct'].dropna().astype(bool)
@@ -547,7 +636,9 @@ def selective_curve(score, wrong, groups=None, sources=None, *, grid=None, num_c
     n = len(score)
     grid = threshold_grid(num_classes) if grid is None else np.asarray(grid, dtype=np.float64)
     units, _ = unit_labels(n, groups, sources)
-    stats_table = threshold_stats(score, wrong, units, grid)
+    index = pd.factorize(units)[0]
+    n_units = int(index.max()) + 1
+    stats_table = threshold_stats(score, wrong, index, grid)
     keep = ~stats_table['answered_clips'].duplicated(keep='first').to_numpy()
     rows = []
     for tau, row in zip(grid[keep], stats_table[keep].to_dict('records')):
@@ -562,15 +653,34 @@ def selective_curve(score, wrong, groups=None, sources=None, *, grid=None, num_c
 
         out = {'threshold': float(tau), 'answered_clips': int(row['answered_clips']), 'answered_units': int(row['answered_units']),
                'coverage': row['answered_clips'] / n, 'error': row['wrong_clips'] / row['answered_clips'] if row['answered_clips'] else None,
-               'group_mean_error': row['unit_loss_sum'] / row['answered_units'] if row['answered_units'] else None}
+               'group_mean_error': row['unit_loss_sum'] / row['answered_units'] if row['answered_units'] else None,
+               'share_groups_with_answered_wrong_clip': 1 - row['units_without_silent_error'] / n_units}
         if expected_error is not None:
             out['mean_expected_error'] = float(np.asarray(expected_error, dtype=np.float64)[answered].mean()) if answered.any() else None
         if n_boot > 0:
             band_error = bootstrap_ci(error, n, groups, sources, n_boot=n_boot, seed=seed)
             band_coverage = bootstrap_ci(coverage, n, groups, sources, n_boot=n_boot, seed=seed)
-            out.update(error_low=band_error['low'], error_high=band_error['high'], coverage_low=band_coverage['low'], coverage_high=band_coverage['high'])
+            band_group = group_risk_interval(score, wrong, index, n_units, tau, n_boot, seed)
+            share_low, share_high = clopper_pearson(n_units - int(row['units_without_silent_error']), n_units)
+            out.update(error_low=band_error['low'], error_high=band_error['high'], coverage_low=band_coverage['low'], coverage_high=band_coverage['high'],
+                       group_mean_error_low=band_group['low'], group_mean_error_high=band_group['high'], share_low=share_low, share_high=share_high)
         rows.append(out)
     return pd.DataFrame(rows)
+
+
+def group_risk_interval(score, wrong, index, n_units, tau, n_boot, seed) -> dict:
+    """Pointwise interval of the group-weighted risk at one threshold. Works on one row per group, so resampling rows here resamples whole groups."""
+    answered = score >= tau
+    clips = np.bincount(index[answered], minlength=n_units).astype(np.float64)
+    errors = np.bincount(index[answered & wrong], minlength=n_units).astype(np.float64)
+    has = clips > 0
+    loss = np.divide(errors, clips, out=np.zeros(n_units), where=has)
+
+    def risk(idx):
+        count = has[idx].sum()
+        return float(loss[idx].sum() / count) if count else float('nan')
+
+    return bootstrap_ci(risk, n_units, groups=np.arange(n_units), n_boot=n_boot, seed=seed)
 
 
 def build_report(rule: Optional[AbstentionRule], frame: pd.DataFrame, groups=None, sources=None, *, split: str = 'test', n_boot: int = 2000, seed: int = 0,
@@ -585,8 +695,9 @@ def build_report(rule: Optional[AbstentionRule], frame: pd.DataFrame, groups=Non
     _, unit = unit_labels(len(score), groups, sources)
     report = {'format': 'deeptune-abstention-report', 'version': FORMAT_VERSION, 'split': split, 'n_clips': int(len(frame)), 'unit': unit,
               'n_units': int(len(pd.unique(unit_labels(len(score), groups, sources)[0]))), 'n_boot': int(n_boot),
-              'curve_covers': 'Group-resampled percentile intervals: which held-out groups were drawn, for this fitted model. This curve is a description, not the guarantee.',
-              'warnings': list(extra_warnings)}
+              'curve_covers': 'Pointwise 95% intervals, each for one threshold on its own, not a band over the whole curve: which held-out groups were drawn, for this fitted model. '
+                              'Percentile bootstrap over whole groups, and Clopper-Pearson for the share of groups. This curve is a description, not the guarantee.',
+              'split_note': SPLIT_GAP_NOTE, 'warnings': list(extra_warnings)}
     if rule is not None:
         answered = rule.answers(score)
         chosen = {'threshold': rule.threshold, 'answered_clips': int(answered.sum()), 'coverage': float(answered.mean()), 'not_sure_clips': int((~answered).sum())}
@@ -598,29 +709,47 @@ def build_report(rule: Optional[AbstentionRule], frame: pd.DataFrame, groups=Non
             chosen['error_interval'] = bootstrap_ci(error, len(score), groups, sources, n_boot=n_boot, seed=seed) if n_boot > 0 else None
             stats_row = threshold_stats(score, wrong, unit_labels(len(score), groups, sources)[0], [rule.threshold]).iloc[0]
             chosen['group_mean_error'] = float(stats_row['unit_loss_sum'] / stats_row['answered_units'])
-            if rule.info['guarantee_kind'] == 'selective_risk':
-                chosen['point_within_target'] = chosen['group_mean_error'] <= rule.info['target_error']
-        report.update(target_error=rule.info['target_error'], guarantee_kind=rule.info['guarantee_kind'], guarantee_level=rule.info.get('guarantee_level'), assumes_independent_clips=rule.info.get('assumes_independent_clips'),
+            index = pd.factorize(unit_labels(len(score), groups, sources)[0])[0]
+            n_units = int(index.max()) + 1
+            chosen['group_mean_error_interval'] = group_risk_interval(score, wrong, index, n_units, rule.threshold, n_boot, seed) if n_boot > 0 else None
+            chosen['clip_error_note'] = 'Clip-weighted, reported beside the guaranteed quantity. It is not what the target bounds, and big groups that err more can push it above the target while the guarantee holds.'
+            wrong_groups = n_units - int(stats_row['units_without_silent_error'])
+            share_low, share_high = clopper_pearson(wrong_groups, n_units)
+            chosen['groups_with_answered_wrong_clip'] = wrong_groups
+            chosen['share_groups_with_answered_wrong_clip'] = wrong_groups / n_units
+            chosen['share_interval'] = {'low': share_low, 'high': share_high, 'level': INTERVAL_LEVEL, 'n_units': n_units, 'method': 'Clopper-Pearson over groups, pointwise'}
+            guaranteed = 'group_mean_error' if rule.info['guarantee_kind'] == 'selective_risk' else 'share_groups_with_answered_wrong_clip'
+            chosen['guaranteed_quantity'] = guaranteed
+            chosen['point_within_target'] = chosen[guaranteed] <= rule.info['target_error']
+        report.update(target_error=rule.info['target_error'], guarantee_kind=rule.info['guarantee_kind'], method=rule.info.get('method'), guarantee_level=rule.info.get('guarantee_level'), assumes_independent_clips=rule.info.get('assumes_independent_clips'),
                        status=rule.info['status'], guarantee_holds=rule.info['guarantee_holds'],
                       headline=rule.info['headline'], at_fitted_threshold=chosen,
-                      reading='One held-out set is one draw. A point above the target does not by itself refute a guarantee that holds with probability 1 - delta, and a point below does not confirm it.')
+                      reading='One held-out set is one draw. Read point_within_target on guaranteed_quantity only. A point above the target does not by itself refute a guarantee, and a point below does not confirm it.')
     return report, curve
 
 
-def plot_selective_curve(curve: pd.DataFrame, path, target: Optional[float] = None, chosen: Optional[dict] = None, split: str = 'test') -> None:
+def plot_selective_curve(curve: pd.DataFrame, path, target: Optional[float] = None, chosen: Optional[dict] = None, split: str = 'test', guarantee: str = 'selective_risk') -> None:
+    """Draws the target only against the quantity it bounds: group-weighted error for selective_risk, the share of groups with an answered wrong clip for silent_error."""
     from evaluators.video.report import _MUTED, _SERIES, _finish, _new_axes
     figure, axes = _new_axes()
-    rows = curve[curve['error'].notna()].sort_values('coverage')
-    if 'error_low' in rows.columns and rows['error_low'].notna().any():
-        axes.fill_between(rows['coverage'], rows['error_low'], rows['error_high'], color=_SERIES[0], alpha=0.18, linewidth=0, label='95% interval, whole groups resampled')
-    axes.plot(rows['coverage'], rows['error'], color=_SERIES[0], linewidth=2, marker='o', markersize=4, label=f'error among answered clips, {split}')
+    silent = guarantee == 'silent_error'
+    column, low, high = ('share_groups_with_answered_wrong_clip', 'share_low', 'share_high') if silent else ('group_mean_error', 'group_mean_error_low', 'group_mean_error_high')
+    rows = curve[curve['answered_clips'] > 0].sort_values('coverage')
+    rows = rows[rows[column].notna()]
+    if low in rows.columns and rows[low].notna().any():
+        axes.fill_between(rows['coverage'], rows[low], rows[high], color=_SERIES[0], alpha=0.18, linewidth=0, label='pointwise 95% interval, whole groups')
+    axes.plot(rows['coverage'], rows[column], color=_SERIES[0], linewidth=2, marker='o', markersize=4,
+              label=f'share of groups with an answered wrong clip, {split}' if silent else f'error, each answered group counted once (guaranteed), {split}')
+    if not silent:
+        axes.plot(rows['coverage'], rows['error'], color=_SERIES[1], linewidth=2, marker='s', markersize=4, label=f'error, each answered clip counted once (not guaranteed), {split}')
     if target is not None:
-        axes.axhline(target, color=_MUTED, linewidth=1, linestyle=':', label=f'target error {target:g}')
-    if chosen and chosen.get('answered_clips') and chosen.get('error') is not None:
-        axes.scatter([chosen['coverage']], [chosen['error']], color=_SERIES[1], s=70, zorder=3, edgecolors='white', linewidths=1.5, label='fitted threshold')
+        axes.axhline(target, color=_MUTED, linewidth=1, linestyle=':', label=f'target {target:g}')
+    if chosen and chosen.get('answered_clips') and chosen.get(column) is not None:
+        axes.scatter([chosen['coverage']], [chosen[column]], color=_INK_MARK, s=70, zorder=3, edgecolors='white', linewidths=1.5, label='fitted threshold')
     axes.set_xlim(0, 1.02)
     axes.set_ylim(bottom=0)
-    _finish(figure, axes, 'Selective risk: error against coverage', 'Coverage (share of clips answered)', 'Error among answered clips', Path(path), legend=True)
+    _finish(figure, axes, 'Silent errors against coverage' if silent else 'Selective risk against coverage', 'Coverage (share of clips answered)',
+            'Share of groups with an answered wrong clip' if silent else 'Error among answered clips', Path(path), legend=True)
 
 
 def write_report(report: dict, curve: pd.DataFrame, out_dir) -> Path:
@@ -631,7 +760,7 @@ def write_report(report: dict, curve: pd.DataFrame, out_dir) -> Path:
     plots = plotting_available()
     report['plots'] = 'written' if plots else 'skipped: matplotlib could not be imported'
     if plots:
-        plot_selective_curve(curve, out_dir / PLOT_FILENAME, report.get('target_error'), report.get('at_fitted_threshold'), report.get('split', 'test'))
+        plot_selective_curve(curve, out_dir / PLOT_FILENAME, report.get('target_error'), report.get('at_fitted_threshold'), report.get('split', 'test'), report.get('guarantee_kind', 'selective_risk'))
     else:
         print('Warning: matplotlib could not be imported, so there is no selective-risk plot. selective_risk_curve.csv is complete.')
     path = out_dir / REPORT_FILENAME

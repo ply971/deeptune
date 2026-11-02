@@ -126,7 +126,7 @@ def predict_video(
         attach_expected_error(result, mode, checkpoint_path, torch.cat(scores).numpy(), state_dict)
     if abstain and mode == 'cls':  # after expected_error, which a rule can use as its score
         from evaluators.abstention import pipeline_record
-        summary = attach_abstention(result, checkpoint_path, num_classes, state_dict, pipeline_record(video_options, num_frames, pooling))
+        summary = attach_abstention(result, checkpoint_path, num_classes, state_dict, pipeline_record(video_options, num_frames, pooling), label_mapping=label_mapping)
         if summary is not None:
             result.attrs['abstention'] = summary
     return result

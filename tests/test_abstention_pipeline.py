@@ -206,3 +206,113 @@ def test_flags_have_help_and_are_off_by_default():
     assert 'promises no accuracy' in text
     with pytest.raises(SystemExit):
         DeepTuneVisionOptions(RunType.ONECALL, args=['--modality', 'video', '--df', 'x', '--out', 'y', '--target_error', '1.5'])
+
+
+# -- V-053 fix round ---------------------------------------------------------------------------------------------------
+def test_standalone_fit_checks_the_runs_own_splits_labels_and_flags(tmp_path, small_pipeline, capsys):
+    """V-053 items 1, 2 and 3 on the standalone fit: the run's own data_splits_* are always checked, nothing to compare voids, a run that used
+    --resume_allow_data_change claims nothing, and calibration labels are validated and read through the run's label mapping."""
+    import shutil
+    from evaluators.video import abstention_fit
+    run = _run(tmp_path, '--target_error', '0.45', '--abstain_delta', '0.5', '--report_boot', '0')
+    weights = next(run.glob('trainval_output_*/model_weights.pth'))
+    splits = next(run.glob('data_splits_*'))
+    calibration = splits / 'calibration_split.parquet'
+
+    def fit(calib_df, checkpoint=weights):
+        assert abstention_fit.main(['--checkpoint', str(checkpoint), '--calib_df', str(calib_df), '--target_error', '0.45', '--abstain_delta', '0.5',
+                                    '--split_name', 'held_out']) == 0
+        return json.loads((checkpoint.parent / 'abstention.json').read_text())
+
+    capsys.readouterr()
+    clean = fit(calibration)  # the documented use: the run's own calibration split, against its own train, val and test
+    assert clean['void_reasons'] == []
+    out = capsys.readouterr().out
+    assert 'already has test results' in out and 'overwriting the abstention rule' in out
+
+    trained = fit(splits / 'train_split.parquet')  # no --other_df: the run's splits are found anyway
+    assert trained['guarantee_holds'] is False and any('also appear in other splits' in reason for reason in trained['void_reasons'])
+
+    lonely = tmp_path / 'lonely' / 'trainval_output_1'  # weights with no data_splits_* beside them and no --other_df
+    lonely.mkdir(parents=True)
+    for name in ('model_weights.pth', 'cli_arguments.json'):
+        shutil.copy(weights.parent / name, lonely / name)
+    alone = fit(calibration, lonely / 'model_weights.pth')
+    assert alone['guarantee_holds'] is False and alone['void_reasons'][0].startswith('Disjointness unverified')
+
+    arguments = weights.parent / 'cli_arguments.json'
+    recorded = json.loads(arguments.read_text())
+    assert recorded['resume_allow_data_change'] is False
+    arguments.write_text(json.dumps({**recorded, 'resume_allow_data_change': True}))
+    resumed = fit(calibration)
+    assert resumed['guarantee_holds'] is False and any('resume_allow_data_change' in reason for reason in resumed['void_reasons'])
+    arguments.write_text(json.dumps(recorded))
+
+    frame = pd.read_parquet(calibration)
+    mapping = json.loads((splits / 'label_mapping.json').read_text())
+    assert pd.api.types.is_integer_dtype(frame['labels'])
+    names = {index: name for name, index in mapping.items()}
+    named = tmp_path / 'named.parquet'
+    frame.assign(labels=frame['labels'].map(names)).to_parquet(named, index=False)
+    assert fit(named)['fit_table'] == clean['fit_table']  # 'left' and 'right' are read as the run's indices, not as wrong answers
+    for bad, needle in ((frame.assign(labels=7), 'outside'), (frame.assign(labels='up'), 'does not have'), (frame.assign(labels=0.5), 'whole class')):
+        bad.to_parquet(tmp_path / 'bad.parquet', index=False)
+        with pytest.raises(ValueError, match=needle):
+            fit(tmp_path / 'bad.parquet')
+
+
+def test_resume_allow_data_change_voids_and_the_budget_and_split_summary_come_first(tmp_path, small_pipeline, capsys):
+    """V-053 item 2 in deeptune.py, the preflight budget, and split_summary.json after carving."""
+    run = _run(tmp_path, '--target_error', '0.45', '--abstain_delta', '0.5', '--report_boot', '0', '--resume_allow_data_change')
+    out = capsys.readouterr().out
+    assert 'Certification budget' in out and out.index('Certification budget') < out.index('Abstention rule saved')
+    info = json.loads(next(run.glob('trainval_output_*/abstention.json')).read_text())
+    assert info['guarantee_holds'] is False and any('resume_allow_data_change' in reason for reason in info['void_reasons'])
+    assert info['headline'].startswith(('No guarantee', 'Target error'))
+    summary = json.loads(next(run.glob('data_splits_*/split_summary.json')).read_text())
+    train, calibration = _split(run, 'train'), _split(run, 'calibration')
+    assert summary['sample_counts']['train'] == len(train) and summary['sample_counts']['calibration'] == len(calibration)
+    assert summary['group_counts']['train'] == train['group'].nunique() and summary['group_counts']['calibration'] == calibration['group'].nunique()
+    assert sum(summary['sample_counts'].values()) == 4 * GROUPS_PER_CLASS
+
+
+def test_expected_error_without_the_error_model_is_refused_before_training(tmp_path, small_pipeline, capsys):
+    """V-053 item 10: this used to fail only after training, at the fit."""
+    import deeptune
+    with pytest.raises(SystemExit):
+        deeptune.main(['--modality', 'video', '--out', str(tmp_path / 'out'), '--model_version', 'dummy_video3d', '--df', str(_manifest(tmp_path)), '--raw-data',
+                       '--target_error', '0.1', '--abstain_score', 'expected_error', '--no_error_model'])
+    assert '--no_error_model' in capsys.readouterr().err
+    assert not list((tmp_path / 'out').glob('deeptune-*'))
+
+
+def test_inference_binds_the_label_mapping_and_the_error_model(tmp_path, small_pipeline):
+    """V-053 items 4 and 5 end to end: another mapping or another error_model.json leaves the decisions but drops the claim."""
+    run = _run(tmp_path, '--target_error', '0.45', '--abstain_delta', '0.5', '--abstain_score', 'expected_error', '--report_boot', '0')
+    rule_path = next(run.glob('trainval_output_*/abstention.json'))
+    info = json.loads(rule_path.read_text())
+    mapping_path = next(run.glob('data_splits_*/label_mapping.json'))
+    assert info['label_mapping_sha256'] and info['error_model_sha256']
+
+    def summary(name, *extra):
+        _infer(run, tmp_path / name, *extra)
+        return json.loads((tmp_path / name / 'abstention_summary.json').read_text())
+
+    same = summary('same', '--label_mapping', str(mapping_path))
+    assert same['pipeline_mismatches'] == [] and same['guarantee_holds'] == info['guarantee_holds']
+    mapping = json.loads(mapping_path.read_text())
+    swapped = tmp_path / 'swapped.json'
+    swapped.write_text(json.dumps({name: len(mapping) - 1 - index for name, index in mapping.items()}))
+    other = summary('swapped', '--label_mapping', str(swapped))
+    assert other['guarantee_holds'] is False and other['headline'].startswith('No guarantee') and any(issue.startswith('label mapping') for issue in other['pipeline_mismatches'])
+    rule_path.write_text(json.dumps({**info, 'error_model_sha256': '0' * 64}))
+    changed = summary('changed', '--label_mapping', str(mapping_path))
+    assert changed['guarantee_holds'] is False and any(issue.startswith('error model') for issue in changed['pipeline_mismatches'])
+
+
+def test_target_error_help_shows_the_budget_and_names_the_method():
+    from cli import DeepTuneVisionOptions
+    from utils import RunType
+    text = DeepTuneVisionOptions(RunType.ONECALL, args=['--modality', 'video', '--df', 'x', '--out', 'y']).parser.format_help()
+    assert 'preflight line prints it before training' in text and 'certifies only with at most' in text
+    assert 'Learn then Test' in text and 'split conformal' in text and 'Prediction sets are not built' in text

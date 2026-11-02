@@ -80,6 +80,8 @@ def main(argv=None):
             issues.append('--target_error needs classification: a regression model has no error rate to bound.')
         elif args.calib_fraction >= globals()['defaults']['train_size']:
             issues.append(f"--calib_fraction must be below the training share, {globals()['defaults']['train_size']}.")
+        if args.abstain_score == 'expected_error' and args.no_error_model:
+            issues.append('--abstain_score expected_error needs the error model, so it cannot be combined with --no_error_model.')
     # --- end R2 ---
     if issues:
         args.parser.error("\n".join(issues))
@@ -145,7 +147,8 @@ def main(argv=None):
     if args.target_error is not None:
         from evaluators.video.abstention_fit import carve_calibration_split
         calibration_seed = 42 if defaults['fixed_seed'] else None  # like the split: --seed varies training, not which groups calibrate
-        calibration_data_path = carve_calibration_split(train_data_path, args.calib_fraction, defaults['train_size'], GROUPER, calibration_seed)
+        calibration_data_path = carve_calibration_split(train_data_path, args.calib_fraction, defaults['train_size'], GROUPER, calibration_seed,
+                                                        args.target_error, args.abstain_delta, args.abstain_guarantee)
     # --- end R2 ---
 
     df = pd.read_parquet(train_data_path, columns=['labels'])
@@ -436,7 +439,9 @@ def main(argv=None):
                 score_name=args.abstain_score, model_version=args.model_version, num_classes=args.num_classes, added_layers=defaults['added_layers'],
                 embed_size=defaults['embed_size'], freeze_backbone=FREEZE_BACKBONE, use_peft=args.use_peft, batch_size=args.batch_size, num_frames=args.num_frames,
                 pooling=args.pooling, video_options=video_options_from_args(args), grouper=GROUPER, other_splits=(train_data_path, val_data_path, test_data_path),
-                lora_rank=resolve_lora_rank(args, ckpt_directory) if args.use_peft and is_native_video_architecture(args.model_version) else None)
+                lora_rank=resolve_lora_rank(args, ckpt_directory) if args.use_peft and is_native_video_architecture(args.model_version) else None,
+                disjoint_by_construction=True,  # this run drew the calibration rows from training before it trained
+                void_reasons=['--resume_allow_data_change was set, so the weights may have trained on these calibration rows.'] if training_options.resume_allow_data_change else [])
             report_on_eval_dir(abstention_rule, next(path for path in sorted((Path(args.out)/parent_dir).glob('eval_output_*')) if path.is_dir()), test_data_path, GROUPER,
                                n_boot=args.report_boot, calib_df=calibration_data_path)
         # --- end R2 ---
