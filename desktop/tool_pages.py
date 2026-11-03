@@ -27,6 +27,7 @@ from desktop import dpg_context as ui
 from desktop import option_widgets as ow
 from desktop import tools
 from desktop.log_stream import LineBuffer
+from desktop import runner
 from desktop.runner import RunHandle, start_tool_run, tool_argv
 
 PREFIX = {'select_model': 'sel', 'ensemble': 'ens', 'extract_features': 'feat', 'train_feature_head': 'probe'}
@@ -43,14 +44,17 @@ class _Run:
     out: Optional[Path]
     dry_run: bool = False
     argv: list = field(default_factory=list)
+    device: str = 'auto'
 
 
 _shell = None
 _running: dict = {}  # page -> _Run
 _buffers: dict = {page: LineBuffer() for page in LOG}
 # select_model.py: the argv of the last dry run that passed. Start search is enabled only for those exact settings,
-# so the counts and time estimate are always seen before a search trains anything.
+# so the counts and time estimate are always seen before a search trains anything. The device it ran on counts too: the
+# estimate and the memory checks depend on it.
 _checked_select_argv: Optional[list] = None
+_checked_select_device: Optional[str] = None
 
 
 def _colors():
@@ -92,7 +96,7 @@ def start(tool: str, extra: Optional[list] = None) -> bool:
     _buffers[page].clear()
     dpg.set_value(f'{LOG[page]}_box', '')
     _running[page] = _Run(tool, handle, time.monotonic(), tools.output_folder(cfg), dry_run='--dry_run' in (extra or []),
-                          argv=tool_argv(cfg))
+                          argv=tool_argv(cfg), device=runner.device())
     _say(status, f'Running {cfg.spec.script}...', _colors().analysis)
     _shell.set_status(f'{cfg.spec.title} in progress', _colors().analysis)
     _update_buttons()
@@ -135,11 +139,11 @@ def poll() -> None:
 
 
 def finished(page: str, run: _Run, status: str, message: str) -> None:
-    global _checked_select_argv
+    global _checked_select_argv, _checked_select_device
     colors = _colors()
     if status == 'success':
         if run.dry_run:
-            _checked_select_argv = run.argv
+            _checked_select_argv, _checked_select_device = run.argv, run.device
             _say(f'{page}_status', 'Dry run passed: the counts and the time estimate are in the log above. Start search runs '
                                    'exactly these settings; change any setting and check again.', colors.success)
         else:
@@ -228,7 +232,8 @@ def _update_buttons() -> None:
 
 def _select_checked() -> bool:
     try:
-        return _checked_select_argv is not None and tool_argv(config('select_model')) == _checked_select_argv
+        return (_checked_select_argv is not None and tool_argv(config('select_model')) == _checked_select_argv
+                and _checked_select_device == runner.device())
     except ValueError:
         return False
 
