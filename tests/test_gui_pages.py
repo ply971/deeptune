@@ -147,7 +147,9 @@ def test_settings_with_options_save_and_load(tmp_path):
                     options={'accept_weights_licence': ['CC-BY-NC-4.0'], 'test_crops': 3, 'seed': 4, 'mix_prob': 0.5})
     gc.save_config(cfg, tmp_path / 's.json')
     loaded = gc.load_config(tmp_path / 's.json')
-    assert loaded.options == cfg.options and loaded.model_version == 'videomae_b16'
+    # A licence is accepted by a deliberate tick each session: it is never saved or restored.
+    assert loaded.options == {key: value for key, value in cfg.options.items() if key != 'accept_weights_licence'}
+    assert loaded.model_version == 'videomae_b16' and 'accept_weights_licence' not in loaded.options
     payload = json.loads((tmp_path / 's.json').read_text(encoding='utf-8'))
     payload['config']['options'] = {'not_a_flag': 1}
     (tmp_path / 'bad.json').write_text(json.dumps(payload), encoding='utf-8')
@@ -495,7 +497,8 @@ def test_model_selection_starts_only_after_a_dry_run_of_the_same_settings(gui, t
 def test_new_pages_render_results_from_disk(gui, tmp_path):
     from desktop import option_widgets as ow
     from desktop import tool_pages
-    (tmp_path / 'selection.json').write_text(json.dumps({'winner': {'label': 'w'}, 'test': {'metrics': {'accuracy': 0.7}}}))
+    (tmp_path / 'selection.json').write_text(json.dumps({'winner': {'label': 'w'}, 'test': {'metrics': {'accuracy': 0.7}},
+                                                         'sealed_test_uses': 1}))
     pd.DataFrame({'rank': [1], 'candidate': ['w']}).to_csv(tmp_path / 'leaderboard.csv', index=False)
     gui.dpg.set_value(ow.tag('sel', co.by_key(co.SELECT_OPTIONS)['out']), str(tmp_path))
     tool_pages.on_refresh(user_data='select_model')
@@ -526,3 +529,266 @@ def test_device_combo_sets_the_runner_device(gui, monkeypatch):
     gui.dpg.set_value('device_combo', 'cpu')
     gui.on_device_changed()
     assert runner.device() == 'cpu'
+
+
+# --- G1 fix round (V-058) -----------------------------------------------------------------------------------------------
+def _selection(tmp_path, **payload):
+    (tmp_path / 'selection.json').write_text(json.dumps({'winner': {'label': 'w'}, 'reason': 'r', 'notes': [], **payload}))
+    return tools.selection_sections(tmp_path)[0]
+
+
+def test_the_sealed_score_is_the_honest_number_only_when_used_once(tmp_path):
+    once = _selection(tmp_path, sealed_test_uses=1, test={'metrics': {'accuracy': 0.7}})
+    assert once.title == 'Sealed test score (the honest number)' and 'scored the final winner once' in once.notes[0]
+    reused = _selection(tmp_path, sealed_test_uses=2, test={'metrics': {'accuracy': 0.9}})
+    assert 'honest' not in reused.title and 'reused 2 times' in reused.title and 'not an unbiased estimate' in reused.title
+    assert 'no longer an unbiased estimate' in reused.notes[0] and not any('scored the final winner once' in n for n in reused.notes)
+    unknown = _selection(tmp_path, test={'metrics': {'accuracy': 0.9}})
+    assert 'honest' not in unknown.title
+
+
+def test_a_sealed_test_that_did_not_score_says_so_without_the_scored_once_note(tmp_path):
+    section = _selection(tmp_path, sealed_test_uses=1, test=None,
+                         final={'status': 'not_scored', 'reason': 'The sealed test set already scored an earlier winner (A).'})
+    assert section.title == 'Sealed test score: not scored'
+    assert 'earlier winner' in section.notes[0] and not any('scored the final winner once' in n for n in section.notes)
+    assert section.rows == []
+
+
+@pytest.mark.parametrize('name,payload', [
+    ('evaluation_report.json', {'metrics': [0.8], 'warnings': []}),
+    ('evaluation_report.json', {'metrics': {'accuracy': 0.8}, 'warnings': None}),
+    ('cv_summary.json', {'scheme': 'kfold', 'caveats': None, 'out_of_fold': [1]}),
+    ('abstention_report.json', {'at_fitted_threshold': [1], 'warnings': 'one'}),
+])
+def test_readers_never_crash_on_unexpected_json(tmp_path, name, payload):
+    folder = tmp_path / ('validation_kfold' if name == 'cv_summary.json' else 'eval_output_x')
+    folder.mkdir()
+    (folder / name).write_text(json.dumps(payload))
+    tools.run_reports(tmp_path)  # no exception, whatever the shape
+    (folder / name).write_text('{"scheme": "kf')  # a half-written file
+    assert [s.title for s in tools.run_reports(tmp_path)] == ['Could not read']
+
+
+def test_selection_readers_survive_odd_types(tmp_path):
+    (tmp_path / 'selection.json').write_text(json.dumps({'winner': ['w'], 'test': 'x', 'notes': None, 'runner_up': 3}))
+    titles = [s.title for s in tools.selection_sections(tmp_path)]
+    assert titles[0] == 'Sealed test score: not scored'
+
+
+# --- recipe files instead of --config -----------------------------------------------------------------------------------
+@pytest.mark.parametrize('name,text', [
+    ('recipe.json', json.dumps({'learning_rate': 3e-4, 'precision': 'bf16', 'num_epochs': 30})),
+    ('recipe.yaml', 'learning_rate: 3e-4\nprecision: bf16\nnum_epochs: 30\n'),
+])
+def test_a_recipe_fills_the_page_and_the_run_sends_what_the_page_shows(gui, tmp_path, monkeypatch, name, text):
+    import deeptune
+    from desktop import option_widgets as ow
+    from desktop import runner
+    seen = []
+    monkeypatch.setattr(runner, '_run_process', lambda args, log_q, done_q, *rest: (seen.append(args), done_q.put(('success', ''))))
+    monkeypatch.setattr(gui, 'SESSION_PATH', tmp_path / 'session.json')
+    gui.apply_config(ready_video_cfg(tmp_path))
+    (tmp_path / name).write_text(text, encoding='utf-8')
+    gui.on_load_recipe(app_data={'file_path_name': str(tmp_path / name)})
+    assert gui.dpg.get_value('learning_rate_input') == pytest.approx(3e-4)
+    assert gui.dpg.get_value('num_epochs_input') == 30
+    assert gui.dpg.get_value(ow.tag('dt', co.by_key(co.DEEPTUNE_OPTIONS)['precision'])) == 'bf16'
+    gui._current_run = None
+    gui.on_run_clicked()
+    gui._current_run.thread.join(timeout=10)
+    gui._current_run = None
+    argv = seen[-1]
+    assert '--config' not in argv
+    with contextlib.redirect_stdout(io.StringIO()):
+        args, _, training = deeptune.parse_args(argv)
+    assert (args.learning_rate, args.num_epochs, training.precision) == (3e-4, 30, 'bf16')
+
+
+def test_a_recipe_with_an_unknown_key_is_refused_whole(gui, tmp_path):
+    gui.apply_config(ready_video_cfg(tmp_path))
+    (tmp_path / 'bad.json').write_text(json.dumps({'learning_rate': 3e-4, 'learnin_rate': 1e-3, 'config': 'x.json'}))
+    gui.on_load_recipe(app_data={'file_path_name': str(tmp_path / 'bad.json')})
+    status = gui.dpg.get_value('recipe_status')
+    assert 'was not loaded' in status and 'learnin_rate' in status and 'config' in status
+    assert gui.dpg.get_value('learning_rate_input') == pytest.approx(1e-4)  # nothing applied
+
+
+# --- Test-page overrides --------------------------------------------------------------------------------------------------
+def _recorded_run(tmp_path, **record):
+    run = tmp_path / 'deeptune-1'
+    (run / 'trainval_output_x').mkdir(parents=True)
+    (run / 'data_splits_x').mkdir()
+    (run / 'trainval_output_x' / 'model_weights.pth').write_bytes(b'w')
+    (run / 'trainval_output_x' / 'cli_arguments.json').write_text(json.dumps({'modality': 'video', 'model_version': 'resnet18',
+                                                                             'num_classes': 3, **record}))
+    (run / 'data_splits_x' / 'label_mapping.json').write_text(json.dumps({'a': 0, 'b': 1, 'c': 2}))
+    return run
+
+
+@pytest.mark.parametrize('record,override', [({'pooling': 'single_frame'}, {'pooling': 'mean'}),
+                                             ({'pooling': 'tsm:tsm_fold_div=8'}, {'tsm_fold_div': 2}),
+                                             ({}, {'label_mapping': 'other.json'})])
+def test_model_defining_overrides_need_a_confirmation(tmp_path, record, override):
+    """override_load.py (V-058): such overrides still load the weights strictly and change the logits silently."""
+    results = gc.read_run_results(_recorded_run(tmp_path, **record))
+    cfg = gc.infer_config_from_run(results, data=tmp_path, out=tmp_path / 'p')
+    cfg.options = override
+    assert any('change the model rebuilt' in issue for issue in gc.validate_infer_config(cfg))
+    cfg.confirm_model_overrides = True
+    assert not any('change the model rebuilt' in issue for issue in gc.validate_infer_config(cfg))
+    cfg.options = {'test_clips': 3, 'temporal_sampling': 'segment'}  # test-time overrides need no confirmation
+    cfg.confirm_model_overrides = False
+    assert gc.validate_infer_config(cfg) == []
+
+
+def test_a_confirmed_override_writes_overrides_json_and_warns_in_the_log(tmp_path, monkeypatch):
+    from desktop import runner
+    monkeypatch.setattr(runner, '_infer_process', lambda args, log_q, done_q, *rest: done_q.put(('success', '')))
+    results = gc.read_run_results(_recorded_run(tmp_path, pooling='single_frame'))
+    cfg = gc.infer_config_from_run(results, data=tmp_path, out=tmp_path / 'pred')
+    cfg.options, cfg.confirm_model_overrides = {'pooling': 'mean', 'test_clips': 2}, True
+    handle = runner.start_infer_run(cfg)
+    handle.thread.join(timeout=10)
+    record = json.loads((tmp_path / 'pred' / 'overrides.json').read_text(encoding='utf-8'))
+    assert record['model_overrides'] == {'pooling': 'mean'} and record['test_time_overrides'] == {'test_clips': 2}
+    assert record['model_overrides_confirmed'] and '--pooling' in record['argv']
+    assert 'WARNING' in handle.log_queue.get_nowait()
+    assert tools.inference_reports(tmp_path / 'pred')[0].title == 'Overrides of the recorded settings'
+    cfg.options = {}
+    assert gc.write_overrides(cfg, []) is None
+
+
+def test_a_three_way_override_can_turn_a_recorded_flag_off(tmp_path):
+    results = gc.read_run_results(_recorded_run(tmp_path, freeze_backbone=True))
+    cfg = gc.infer_config_from_run(results, data=tmp_path, out=tmp_path / 'p')
+    assert _infer_parse(gc.build_infer_argv(cfg)).freeze_backbone
+    cfg.options = {'freeze_backbone': False, 'use_peft': True}
+    parsed = _infer_parse(gc.build_infer_argv(cfg))
+    assert parsed.freeze_backbone is False and parsed.use_peft is True
+
+
+def test_the_test_page_blocks_model_overrides_until_confirmed(gui, tmp_path):
+    from desktop import option_widgets as ow
+    run = _recorded_run(tmp_path, pooling='single_frame')
+    gui._test_run_history = {'r': run}
+    gui._selected_test_run = None
+    gui._current_infer_run = None
+    gui.on_test_run_selected(user_data='r')
+    assert gui.dpg.get_item_configuration('test_run_button')['enabled']
+    gui.dpg.set_value(ow.tag('infer', co.by_key(co.INFER_OPTIONS)['pooling']), 'mean')
+    gui.on_test_options_changed()
+    assert not gui.dpg.get_item_configuration('test_run_button')['enabled']
+    assert gui.dpg.get_item_configuration('infer_confirm_group')['show']
+    gui.dpg.set_value('infer_confirm_model_overrides', True)
+    gui.on_test_options_changed()
+    assert gui.dpg.get_item_configuration('test_run_button')['enabled']
+
+
+# --- ensemble membership --------------------------------------------------------------------------------------------------
+def test_the_selected_runs_labels_go_with_an_ensemble_only_when_it_is_a_member(tmp_path):
+    run = _recorded_run(tmp_path)
+    other = tmp_path / 'other_run'
+    other.mkdir()
+    results = gc.read_run_results(run)
+    cfg = gc.infer_config_from_run(results, data=tmp_path, out=tmp_path / 'p')
+    cfg.options = {'ensemble': [str(other), str(tmp_path / 'third')]}
+    assert '--label_mapping' not in gc.build_infer_argv(cfg)
+    cfg.options = {'ensemble': [str(run / 'trainval_output_x' / 'model_weights.pth'), str(other)]}
+    argv = gc.build_infer_argv(cfg)
+    assert _infer_parse(argv).label_mapping == cfg.label_mapping_path
+    spec = co.by_key(co.INFER_OPTIONS)['ensemble']
+    assert 'exactly' in spec.label and 'besides' not in spec.help and 'only if it is listed' in spec.help
+
+
+# --- model selection in the frozen build ---------------------------------------------------------------------------------
+def test_model_selection_runs_its_scripts_through_the_frozen_workers(tmp_path, monkeypatch):
+    from handlers.model_selection import probe
+    from handlers.model_selection import runner as ms_runner
+    seen = []
+
+    class Done:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(ms_runner.subprocess, 'Popen', lambda cmd, **kw: seen.append((cmd, kw['cwd'])) or Done())
+    ms_runner.SubprocessRunner(python='py')(['--modality', 'video'], tmp_path / 'a', 'cv')
+    with open(tmp_path / 'log.txt', 'w', encoding='utf-8') as log:
+        probe.FeatureProbeRunner(python='py')._call('extract_features.py', ['--data', 'x'], log)
+    assert seen[0] == (['py', '-u', str(ms_runner.REPO / 'deeptune.py'), '--modality', 'video'], str(ms_runner.REPO))
+    assert seen[1][0] == ['py', '-u', str(ms_runner.REPO / 'extract_features.py'), '--data', 'x']
+    exe = tmp_path / 'DeepTune.exe'
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(sys, 'executable', str(exe))
+    ms_runner.SubprocessRunner()(['--modality', 'video'], tmp_path / 'b', 'cv')
+    with open(tmp_path / 'log.txt', 'w', encoding='utf-8') as log:
+        probe.FeatureProbeRunner()._call('train_feature_head.py', ['--out', 'o'], log)
+    assert seen[2] == ([str(exe), '--deeptune-worker', '--modality', 'video'], str(tmp_path))
+    assert seen[3][0] == [str(exe), '--tool-worker', 'train_feature_head', '--out', 'o']
+
+
+# --- device, licences, select flags, resume ------------------------------------------------------------------------------
+def test_run_records_say_which_device_the_run_got(tmp_path, monkeypatch):
+    from desktop import runner
+
+    class Done:
+        stdout = None
+        pid = 1
+
+        def wait(self):
+            return 0
+
+        def poll(self):
+            return 0
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda cmd, **kw: Done())
+    monkeypatch.setattr(runner, '_device', 'auto')
+    runner.set_device('cuda:1')
+    log_q, done_q = queue.Queue(), queue.Queue()
+    runner._worker_process(runner.ROOT / 'ensemble.py', '--tool-worker', 'Ensemble', '', ['--help'], log_q, done_q,
+                           runner._ProcessState(), 'ensemble', tmp_path)
+    record = json.loads((tmp_path / 'desktop-run.json').read_text(encoding='utf-8'))
+    assert (record['device'], record['CUDA_VISIBLE_DEVICES'], record['status']) == ('cuda:1', '1', 'success')
+    first = log_q.get_nowait()
+    assert first.startswith('Device: cuda:1 (CUDA_VISIBLE_DEVICES=1)') and 'falls back to the CPU' in first
+
+
+def test_changing_the_device_invalidates_the_dry_run(gui, tmp_path, monkeypatch):
+    from desktop import runner, tool_pages
+    monkeypatch.setattr(runner, '_device', 'auto')
+    monkeypatch.setattr(tool_pages, '_checked_select_argv', tool_pages.tool_argv(tool_pages.config('select_model')))
+    monkeypatch.setattr(tool_pages, '_checked_select_device', 'auto')
+    assert tool_pages._select_checked()
+    gui.dpg.set_value('device_combo', 'cpu')
+    gui.on_device_changed()
+    assert not tool_pages._select_checked()
+
+
+def test_licences_are_not_restored_from_the_session(gui, tmp_path):
+    from desktop import option_widgets as ow
+    cfg = ready_video_cfg(tmp_path, model_version='videomae_b16', num_frames=16, options={'accept_weights_licence': ['CC-BY-NC-4.0']})
+    gc.save_config(cfg, tmp_path / 'session.json')
+    gui.apply_config(gc.load_config(tmp_path / 'session.json'))
+    box = f"{ow.tag('dt', co.by_key(co.DEEPTUNE_OPTIONS)['accept_weights_licence'])}__CC-BY-NC-4.0"
+    assert gui.dpg.get_value(box) is False
+    assert not gui.dpg.get_item_configuration('run_button')['enabled']
+
+
+def test_include_is_refused_outside_the_smart_search_as_the_cli_does():
+    import select_model
+    base = {'df': 'd.parquet', 'out': 'o', 'backbones': ['resnet18'], 'include': ['backbone=resnet18']}
+    assert any('--include' in i for i in tools.validate_tool(tools.ToolConfig('select_model', {**base, 'search': 'random'})))
+    assert not any('--include' in i for i in tools.validate_tool(tools.ToolConfig('select_model', base)))
+    args = select_model.build_parser().parse_args(['--df', 'd.parquet', '--out', 'o', '--search', 'random', '--include', 'backbone=x',
+                                                   '--backbones', 'resnet18'])
+    with pytest.raises(ValueError, match='--include'):
+        select_model.options_from_args(args)
+
+
+def test_resume_with_a_validation_scheme_is_refused_before_a_process_starts(tmp_path):
+    (tmp_path / 'last.pt').write_bytes(b'x')
+    issues = gc.validate_run(video_cfg(tmp_path, options={'resume': str(tmp_path / 'last.pt'), 'validation': 'kfold'}))
+    assert '--resume cannot be combined with --validation: every fold must train a fresh model.' in issues
+
+
+def test_the_seed_tooltip_says_the_gui_fixes_the_seed_by_default():
+    assert '--fixed-seed' in co.by_key(co.DEEPTUNE_OPTIONS)['seed'].help
