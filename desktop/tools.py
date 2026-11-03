@@ -74,9 +74,10 @@ def _exists(label: str, path) -> list[str]:
     return [] if not path or Path(path).expanduser().exists() else [f'{label} not found: {path}']
 
 
-# select_model.py refuses a strategy's own flags under another strategy (select_model.STRATEGY_FLAGS).
+# select_model.py refuses a strategy's own flags under another strategy (select_model.STRATEGY_FLAGS, kept equal by a
+# test), and --include under any strategy but smart (select_model.options_from_args, with its own message).
 SELECT_STRATEGY_FLAGS = {('smart',): ('screen', 'screen_views', 'screen_epochs', 'top_families', 'top_backbones', 'tune_epochs',
-                                      'recheck_models', 'recheck_full_product', 'final_top', 'include'),
+                                      'recheck_models', 'recheck_full_product', 'final_top'),
                          ('random', 'bayes'): ('n_trials',), ('bayes',): ('bayes_startup',)}
 
 
@@ -96,6 +97,9 @@ def _select_issues(cfg: ToolConfig) -> list[str]:
         given = [co.by_key(co.SELECT_OPTIONS)[key].label for key in keys if cfg.values.get(key) not in (None, [], ())]
         if given and strategy not in owners:
             issues.append(f'{", ".join(given)}: only for the {" or ".join(owners)} strategy; clear them or change the strategy.')
+    if cfg.values.get('include') and strategy != 'smart':
+        issues.append("Keep past the cuts (--include) keeps values past the smart search's screening cuts; the other strategies "
+                      'have no cuts. Use Fix or Exclude.')
     metric = cfg.get('metric')
     if metric is not None and metric not in (co.SELECTION_METRICS[:5] if cfg.get('mode') == 'cls' else co.SELECTION_METRICS[5:]):
         issues.append(f'The metric {metric} does not fit the task {cfg.get("mode")}.')
@@ -157,6 +161,25 @@ def _probe_issues(cfg: ToolConfig) -> list[str]:
 # ---------------------------------------------------------------------------------------------------------------------
 # Reading results back (best effort: a missing or broken file becomes a warning, never an exception)
 # ---------------------------------------------------------------------------------------------------------------------
+def _guarded(title: str, path: Path, build, sections: list) -> None:
+    """Run one reader block; a file with unexpected content becomes a "could not read" section, never an exception."""
+    try:
+        built = build()
+    except (TypeError, ValueError, KeyError, AttributeError, IndexError, OSError) as exc:
+        sections.append(Section(f'Could not read {title}', notes=[f'{Path(path).name}: {type(exc).__name__}: {exc}'], path=path))
+        return
+    if built is not None:
+        sections.extend(built if isinstance(built, list) else [built])
+
+
+def _dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
 def read_json(path: Path, warnings: Optional[list] = None) -> Optional[dict]:
     try:
         value = json.loads(Path(path).read_text(encoding='utf-8-sig'))
@@ -198,12 +221,12 @@ class Section:
     path: Optional[Path] = None
 
 
-def _metric_rows(metrics: dict, intervals: Optional[dict] = None) -> list:
-    rows = []
-    for name, value in (metrics or {}).items():
-        if isinstance(value, dict):
+def _metric_rows(metrics, intervals=None) -> list:
+    rows, intervals = [], _dict(intervals)
+    for name, value in _dict(metrics).items():
+        if isinstance(value, (dict, list)):
             continue
-        rows.append((name, number(value) + (f'  {interval_text((intervals or {}).get(name))}' if intervals else '')))
+        rows.append((name, number(value) + (f'  {interval_text(intervals.get(name))}' if intervals else '')))
     return rows
 
 
@@ -214,45 +237,53 @@ def run_reports(run_dir: Path) -> list[Section]:
     sections, warnings = [], []
     report_path = _latest(run_dir, 'eval*/evaluation_report.json')
     if report_path is not None and (report := read_json(report_path, warnings)) is not None:
-        section = Section(f"Test report ({report.get('n', '?')} clips, {report.get('split', 'test')})",
-                          _metric_rows(report.get('metrics', {}), report.get('intervals', {})), path=report_path)
-        section.notes += [str(w) for w in report.get('warnings', [])]
-        sections.append(section)
+        def test_report():
+            section = Section(f"Test report ({report.get('n', '?')} clips, {report.get('split', 'test')})",
+                              _metric_rows(report.get('metrics'), report.get('intervals')), path=report_path)
+            section.notes += [str(w) for w in _list(report.get('warnings'))]
+            return section
+        _guarded('the test report', report_path, test_report, sections)
     for summary_path in sorted(run_dir.glob('validation_*/cv_summary.json')):
         summary = read_json(summary_path, warnings)
         if summary is None:
             continue
-        scheme = summary.get('scheme', summary_path.parent.name)
-        rows = [('rows used', number(summary.get('n_rows'))), ('grouped', str(summary.get('grouped')))]
-        if summary.get('k'):
-            rows.append(('folds', number(summary['k'])))
-        oof = summary.get('out_of_fold') or {}
-        rows += [(f'out-of-fold {name}', value) for name, value in _metric_rows(oof.get('metrics', {}), oof.get('intervals', {}))]
-        for name, stats in (summary.get('across_folds') or {}).items():
-            if isinstance(stats, dict) and stats.get('mean') is not None:
-                rows.append((f'{name} across folds', f"mean {number(stats.get('mean'))}, sd {number(stats.get('std'))}"))
-        b632 = summary.get('bootstrap632') or {}
-        for name, value in (b632.get('estimates') or b632.get('metrics') or {}).items():
-            if not isinstance(value, dict):
-                rows.append((f'.632+ {name}', number(value)))
-        section = Section(f'Validation: {scheme}', rows, list(summary.get('caveats', [])), path=summary_path)
-        sections.append(section)
+
+        def validation(summary=summary, summary_path=summary_path):
+            scheme = summary.get('scheme', summary_path.parent.name)
+            rows = [('rows used', number(summary.get('n_rows'))), ('grouped', str(summary.get('grouped')))]
+            if summary.get('k'):
+                rows.append(('folds', number(summary['k'])))
+            oof = _dict(summary.get('out_of_fold'))
+            rows += [(f'out-of-fold {name}', value) for name, value in _metric_rows(oof.get('metrics'), oof.get('intervals'))]
+            for name, stats in _dict(summary.get('across_folds')).items():
+                if isinstance(stats, dict) and stats.get('mean') is not None:
+                    rows.append((f'{name} across folds', f"mean {number(stats.get('mean'))}, sd {number(stats.get('std'))}"))
+            b632 = _dict(summary.get('bootstrap632'))
+            for name, value in _dict(b632.get('estimates') or b632.get('metrics')).items():
+                if not isinstance(value, (dict, list)):
+                    rows.append((f'.632+ {name}', number(value)))
+            return Section(f'Validation: {scheme}', rows, [str(c) for c in _list(summary.get('caveats'))], path=summary_path)
+        _guarded('the validation summary', summary_path, validation, sections)
     abstention_path = _latest(run_dir, 'eval*/abstention_report.json')
     if abstention_path is not None and (report := read_json(abstention_path, warnings)) is not None:
-        chosen = report.get('at_fitted_threshold') or {}
-        rows = [('target error', number(report.get('target_error'))), ('guarantee', str(report.get('guarantee_kind'))),
-                ('status', str(report.get('status'))), ('guarantee holds', str(report.get('guarantee_holds'))),
-                ('coverage (answered share)', number(chosen.get('coverage'))),
-                ('error among answered clips', number(chosen.get('error')) + f"  {interval_text(chosen.get('error_interval'))}"),
-                ('"not sure" clips', number(chosen.get('not_sure_clips')))]
-        notes = [report['headline']] if report.get('headline') else []
-        sections.append(Section('Not sure (abstention) on the test split', rows, notes + list(report.get('warnings', [])),
-                                path=abstention_path))
+        def abstention():
+            chosen = _dict(report.get('at_fitted_threshold'))
+            rows = [('target error', number(report.get('target_error'))), ('guarantee', str(report.get('guarantee_kind'))),
+                    ('status', str(report.get('status'))), ('guarantee holds', str(report.get('guarantee_holds'))),
+                    ('coverage (answered share)', number(chosen.get('coverage'))),
+                    ('error among answered clips', number(chosen.get('error')) + f"  {interval_text(chosen.get('error_interval'))}"),
+                    ('"not sure" clips', number(chosen.get('not_sure_clips')))]
+            notes = [str(report['headline'])] if report.get('headline') else []
+            return Section('Not sure (abstention) on the test split', rows,
+                           notes + [str(w) for w in _list(report.get('warnings'))], path=abstention_path)
+        _guarded('the abstention report', abstention_path, abstention, sections)
     export_path = _latest(run_dir, 'dfanalyze_export*/dfanalyze_export.json')
     if export_path is not None and (export := read_json(export_path, warnings)) is not None:
-        rows = [(key, str(value)) for key, value in export.items() if isinstance(value, (str, int, float)) and key != 'command']
-        notes = [f"Command: {export['command']}"] if isinstance(export.get('command'), str) else []
-        sections.append(Section('df-analyze export', rows[:12], notes, path=export_path))
+        def dfanalyze():
+            rows = [(key, str(value)) for key, value in export.items() if isinstance(value, (str, int, float)) and key != 'command']
+            notes = [f"Command: {export['command']}"] if isinstance(export.get('command'), str) else []
+            return Section('df-analyze export', rows[:12], notes, path=export_path)
+        _guarded('the df-analyze export', export_path, dfanalyze, sections)
     if warnings:
         sections.append(Section('Could not read', notes=warnings))
     return sections
@@ -261,11 +292,20 @@ def run_reports(run_dir: Path) -> list[Section]:
 def inference_reports(out_dir: Path) -> list[Section]:
     """The abstention summary of an infer.py run, and the ensemble record when it was an ensemble."""
     out_dir, sections, warnings = Path(out_dir), [], []
+    overrides = read_json(out_dir / 'overrides.json', warnings) if (out_dir / 'overrides.json').exists() else None
+    if overrides:
+        def overrides_section():
+            rows = [(f'test-time: {k}', str(v)) for k, v in _dict(overrides.get('test_time_overrides')).items()]
+            rows += [(f'model: {k}', str(v)) for k, v in _dict(overrides.get('model_overrides')).items()]
+            notes = [str(overrides['warning'])] if overrides.get('warning') else []
+            return Section('Overrides of the recorded settings', rows, notes, path=out_dir / 'overrides.json')
+        _guarded('overrides.json', out_dir / 'overrides.json', overrides_section, sections)
     summary = read_json(out_dir / 'abstention_summary.json', warnings) if (out_dir / 'abstention_summary.json').exists() else None
     if summary:
-        rows = [(key, number(value) if isinstance(value, (int, float)) else str(value)) for key, value in summary.items()
-                if not isinstance(value, (dict, list))]
-        sections.append(Section('Not sure (abstention)', rows, path=out_dir / 'abstention_summary.json'))
+        _guarded('the abstention summary', out_dir / 'abstention_summary.json', lambda: Section(
+            'Not sure (abstention)', [(key, number(value) if isinstance(value, (int, float)) else str(value))
+                                      for key, value in summary.items() if not isinstance(value, (dict, list))],
+            path=out_dir / 'abstention_summary.json'), sections)
     sections += ensemble_sections(out_dir, warnings)
     if warnings:
         sections.append(Section('Could not read', notes=warnings))
@@ -277,15 +317,16 @@ def ensemble_sections(out_dir: Path, warnings: Optional[list] = None) -> list[Se
     sections = []
     record_path = out_dir / 'ensemble.json'
     if record_path.exists() and (record := read_json(record_path, warnings)) is not None:
-        rows = [(key, str(value)) for key, value in record.items() if isinstance(value, (str, int, float, bool))]
-        members = record.get('members')
-        if isinstance(members, list):
-            rows.append(('members', str(len(members))))
-        notes = [str(n) for n in record.get('notes', [])] if isinstance(record.get('notes'), list) else []
-        sections.append(Section('Ensemble', rows, notes, path=record_path))
+        def ensemble():
+            rows = [(key, str(value)) for key, value in record.items() if isinstance(value, (str, int, float, bool))]
+            if isinstance(record.get('members'), list):
+                rows.append(('members', str(len(record['members']))))
+            return Section('Ensemble', rows, [str(n) for n in _list(record.get('notes'))], path=record_path)
+        _guarded('ensemble.json', record_path, ensemble, sections)
     metrics_path = out_dir / 'inference_metrics.json'
     if metrics_path.exists() and (metrics := read_json(metrics_path, warnings)) is not None:
-        sections.append(Section('Metrics on the labelled data', _metric_rows(metrics), path=metrics_path))
+        _guarded('the metrics', metrics_path, lambda: Section('Metrics on the labelled data', _metric_rows(metrics), path=metrics_path),
+                 sections)
     predictions = out_dir / 'predictions.csv'
     if predictions.exists():
         try:
@@ -295,30 +336,56 @@ def ensemble_sections(out_dir: Path, warnings: Optional[list] = None) -> list[Se
     return sections
 
 
+HONEST_NOTE = ('No stage of the search read the sealed test set; it scored the final winner once. The cross-validation scores '
+               'below picked the winner, so they flatter it.')
+
+
+def sealed_test_section(selection: dict, path: Path) -> Section:
+    """The sealed-test block, worded from what selection.json records: the honest number only when this sealed set has
+    scored exactly one winner and that score exists."""
+    test = _dict(selection.get('test'))
+    metrics = _dict(test.get('metrics'))
+    uses = selection.get('sealed_test_uses')
+    final = _dict(selection.get('final'))
+    rows = _metric_rows(metrics, test.get('intervals'))
+    if not metrics:
+        reason = final.get('reason') or selection.get('reason') or 'the search has not finished.'
+        notes = [f'Not scored: {reason}']
+        if isinstance(uses, int) and uses >= 1:
+            notes.append(f'This sealed test set has already scored {uses} winner(s) of this folder.')
+        return Section('Sealed test score: not scored', rows, notes, path=path)
+    if uses == 1:
+        return Section('Sealed test score (the honest number)', rows + [('times this sealed test set has scored a winner', '1')],
+                       [HONEST_NOTE], path=path)
+    if isinstance(uses, int) and uses > 1:
+        return Section(f'Sealed test score (sealed set reused {uses} times: not an unbiased estimate)',
+                       rows + [('times this sealed test set has scored a winner', str(uses))],
+                       [f'This sealed test set was reused: it has scored {uses} different winners of this folder '
+                        '(--rescore_sealed_test). A test set read more than once is no longer an unbiased estimate of how the '
+                        'model does on new data.'], path=path)
+    return Section('Sealed test score (use count not recorded)', rows,
+                   ['selection.json does not say how many winners this sealed test set has scored, so this page cannot tell '
+                    'whether the number is untouched.'], path=path)
+
+
 def selection_sections(out_dir: Path) -> list[Section]:
-    """select_model.py's results: the winner, the sealed-test score (the honest number) and the leaderboard."""
+    """select_model.py's results: the sealed-test score (the honest number when the sealed set was used once), the winner
+    and the leaderboard."""
     out_dir, sections, warnings = Path(out_dir), [], []
-    selection = read_json(out_dir / 'selection.json', warnings) if (out_dir / 'selection.json').exists() else None
+    selection_path = out_dir / 'selection.json'
+    selection = read_json(selection_path, warnings) if selection_path.exists() else None
     if selection is not None:
-        test = selection.get('test') or {}
-        metrics = test.get('metrics') or {}
-        honest = Section('Sealed test score (the honest number)', _metric_rows(metrics, test.get('intervals', {})),
-                         ['No stage of the search read the sealed test set; it scored the final winner once. The cross-validation '
-                          'scores below picked the winner, so they flatter it.'], path=out_dir / 'selection.json')
-        if not metrics:
-            honest.notes.insert(0, 'No sealed-test score yet: ' + str((selection.get('final') or {}).get('reason')
-                                                                       or selection.get('reason') or 'the search has not finished.'))
-        uses = selection.get('sealed_test_uses')
-        if uses is not None:
-            honest.rows.append(('times this sealed test set has scored a winner', number(uses)))
-        sections.append(honest)
-        winner = selection.get('winner') or {}
-        rows = [('winner', str(winner.get('label', 'none')))]
-        rows += [(key, number(value)) for key, value in winner.items() if key.startswith('cv_')]
-        if selection.get('runner_up'):
-            rows.append(('runner-up', str(selection['runner_up'].get('label'))))
-        sections.append(Section('Selection', rows, [str(selection.get('reason', ''))] + [str(n) for n in selection.get('notes', [])],
-                                path=out_dir / 'selection.json'))
+        _guarded('the sealed test score', selection_path, lambda: sealed_test_section(selection, selection_path), sections)
+
+        def winner_section():
+            winner = _dict(selection.get('winner'))
+            rows = [('winner', str(winner.get('label', 'none')))]
+            rows += [(key, number(value)) for key, value in winner.items() if key.startswith('cv_') and not isinstance(value, (dict, list))]
+            if isinstance(selection.get('runner_up'), dict):
+                rows.append(('runner-up', str(selection['runner_up'].get('label'))))
+            notes = [str(selection.get('reason', ''))] + [str(n) for n in _list(selection.get('notes'))]
+            return Section('Selection', rows, notes, path=selection_path)
+        _guarded('the selection', selection_path, winner_section, sections)
     leaderboard = out_dir / 'leaderboard.csv'
     if leaderboard.exists():
         try:
@@ -343,11 +410,12 @@ def probe_sections(out_dir: Path) -> list[Section]:
     out_dir, sections, warnings = Path(out_dir), [], []
     metrics_path = out_dir / 'metrics.json'
     if metrics_path.exists() and (metrics := read_json(metrics_path, warnings)) is not None:
-        sections.append(Section('Probe test metrics', _metric_rows(metrics), path=metrics_path))
+        _guarded('the probe metrics', metrics_path, lambda: Section('Probe test metrics', _metric_rows(metrics), path=metrics_path),
+                 sections)
     audit_path = out_dir / 'split_audit.json'
     if audit_path.exists() and (audit := read_json(audit_path, warnings)) is not None:
-        sections.append(Section('Split audit', [(k, str(v)) for k, v in audit.items() if not isinstance(v, (dict, list))],
-                                path=audit_path))
+        _guarded('the split audit', audit_path, lambda: Section(
+            'Split audit', [(k, str(v)) for k, v in audit.items() if not isinstance(v, (dict, list))], path=audit_path), sections)
     predictions = out_dir / 'predictions.csv'
     if predictions.exists():
         try:
