@@ -25,8 +25,10 @@ from typing import Any, Callable, ContextManager, Optional
 import dearpygui.dearpygui as dpg
 
 from desktop import analyse
+from desktop import cli_options as co
 from desktop import config as gc
 from desktop import dpg_context as ui
+from desktop import option_widgets as ow
 from desktop.log_stream import LineBuffer
 from desktop.runner import RunHandle, start_infer_run, start_track_run
 from desktop.video_player import VideoPlayer
@@ -73,8 +75,10 @@ class _Running:
     started: float
     detector: str = ''
     run: Optional[gc.RunResults] = None
+    folder: Optional[Path] = None  # "Track a whole folder instead": every video of it, not the previewed one
 
 
+TRACK_PREFIX = 'track'  # widget-tag prefix of "More tracking options" (desktop/cli_options.TRACK_OPTIONS)
 _shell: Optional[Shell] = None
 _choices = analyse.RunChoices()
 _selected_run: Optional[gc.RunResults] = None
@@ -340,11 +344,11 @@ def _load_run(run_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _begin(kind: str, handle: RunHandle, out_dir: Path, video: Path, detector: str = '',
-           run: Optional[gc.RunResults] = None) -> None:
+           run: Optional[gc.RunResults] = None, folder: Optional[Path] = None) -> None:
     global _active, _last_out_dir
-    _active = _Running(kind, handle, out_dir, video, time.monotonic(), detector, run)
+    _active = _Running(kind, handle, out_dir, video, time.monotonic(), detector, run, folder)
     _last_out_dir = out_dir
-    _message(kind, f'Starting on {video.name}...', _colors().analysis)
+    _message(kind, f'Starting on {(folder or video).name}...', _colors().analysis)
     _shell.set_status('Analysing video', _colors().analysis)
     _set_running(True)
 
@@ -413,6 +417,10 @@ def on_track_clicked(sender: Any = 0, app_data: Any = None) -> None:
     if detector == 'pet_fasterrcnn':
         text = str(dpg.get_value('analyse_checkpoint_input') or '').strip().strip('"')
         cfg.detector_model = Path(text).expanduser() if text else None
+    cfg.options, problems = ow.read(co.TRACK_OPTIONS, TRACK_PREFIX)
+    if problems:
+        _problem(TRACK, problems[0])
+        return
     issues = analyse.validate_track_config(cfg)
     if issues:
         _problem(TRACK, issues[0])
@@ -425,7 +433,8 @@ def on_track_clicked(sender: Any = 0, app_data: Any = None) -> None:
         _message(TRACK, str(exc), _colors().error)
         _shell.set_status('Could not start tracking', _colors().error)
         return
-    _begin(TRACK, handle, cfg.out, video, detector=detector)
+    folder = cfg.options.get('video_dir')
+    _begin(TRACK, handle, cfg.out, video, detector=detector, folder=Path(folder).expanduser() if folder else None)
 
 
 def on_stop_clicked(sender: Any = 0, app_data: Any = None) -> None:
@@ -489,6 +498,11 @@ def _finish_prediction(active: _Running) -> None:
 
 def _finish_tracking(active: _Running) -> None:
     global _tracking, _overlay
+    if active.folder is not None:  # one sub-folder per video: there is no single overlay to show here
+        _message(TRACK, f'Complete: every video of {active.folder} was tracked. Open the output folder for one sub-folder '
+                        'per video (tracks.csv, counts and overlay.mp4).', _colors().success)
+        _shell.set_status('Folder tracking complete', _colors().success)
+        return
     results = analyse.read_track_results(active.out_dir, active.video, active.detector)
     if results.error:
         _message(TRACK, results.error, _colors().error)
@@ -770,6 +784,10 @@ def _build_track_card(shell: Shell) -> None:
         hint = analyse.installed_cat_hint(checkpoint)
         dpg.add_text(hint, tag='analyse_cat_hint', color=colors.accent, wrap=850, show=bool(hint))
         dpg.add_text(analyse.detector_note(first.key), tag='analyse_detector_note', color=colors.muted, wrap=850)
+        with ui.collapsing_header(label=co.T_MORE, tag='analyse_track_more'):
+            dpg.add_text('Blank or default leaves the choice to the controls above and track.py. A value here replaces '
+                         'what the score threshold chose for the same setting.', color=colors.muted, wrap=850)
+            ow.render(co.TRACK_OPTIONS, TRACK_PREFIX, None, headers=False)
         with ui.group(horizontal=True):
             button = dpg.add_button(tag='analyse_track_button', label=analyse.track_button_label(first.key), height=44,
                                     callback=on_track_clicked)

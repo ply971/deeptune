@@ -27,6 +27,7 @@ from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, check_g
                             clean_prompts)
 from track import TRACK_DEFAULTS
 
+from . import cli_options as co
 from . import config as gc
 
 # ---------------------------------------------------------------------------
@@ -516,6 +517,9 @@ class TrackConfig:
     # Score a box needs to start a track. None = track.py's own defaults.
     track_score: Optional[float] = None
     detector_model: Optional[Path] = None
+    # "More tracking options" (G1): {key: value} for desktop/cli_options.TRACK_OPTIONS. A value set there replaces what
+    # the page's own controls chose for the same flag.
+    options: dict = field(default_factory=dict)
 
 
 def threshold_flags(detector: str, score: Optional[float]) -> list[str]:
@@ -551,15 +555,26 @@ def build_track_argv(cfg: TrackConfig) -> list[str]:
         if cfg.detector_model is None:
             raise ValueError('Choose a trained cat checkpoint first.')
         argv += ['--detector_model', str(cfg.detector_model), '--batch_size', '1']
-    return argv + threshold_flags(cfg.detector, cfg.track_score)
+    argv += threshold_flags(cfg.detector, cfg.track_score)
+    extra = co.options_argv(co.TRACK_OPTIONS, cfg.options or {})
+    if (cfg.options or {}).get('video_dir'):  # --video and --video_dir exclude each other
+        argv = argv[2:]
+    return co.merge_flags(argv, extra) if extra else argv
 
 
 def validate_track_config(cfg: TrackConfig) -> list[str]:
     """The checks that keep a bad setting from loading a detector first."""
     issues: list[str] = []
-    check = check_video(cfg.video)
-    if not check.ok:
-        issues.append(check.error)
+    values, problems = co.coerce_values(co.TRACK_OPTIONS, cfg.options or {})
+    issues += problems
+    folder = values.get('video_dir')
+    if folder:
+        if not Path(folder).expanduser().is_dir():
+            issues.append(f'Folder not found: {folder}')
+    else:
+        check = check_video(cfg.video)
+        if not check.ok:
+            issues.append(check.error)
     if not cfg.prompts:
         issues.append('Type at least one thing to find, such as: person, car')
     elif cfg.detector == 'grounding_dino':
@@ -569,6 +584,9 @@ def validate_track_config(cfg: TrackConfig) -> list[str]:
             issues.append(str(exc))
     if cfg.detector not in DEFAULT_MODELS:
         issues.append(f'Unknown detector: {cfg.detector}')
+    for key in ('batch_size', 'track_buffer'):
+        if values.get(key, 1) < 1:
+            issues.append(f'{co.by_key(co.TRACK_OPTIONS)[key].label} must be at least 1.')
     if cfg.detector == 'pet_fasterrcnn':
         if cfg.detector_model is None or not Path(cfg.detector_model).is_file():
             issues.append('Paste the path to your trained cat checkpoint (best.pt).')

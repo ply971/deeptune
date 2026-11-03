@@ -1,4 +1,4 @@
-# PROGRESS — DeepTune Video Analysis
+﻿# PROGRESS — DeepTune Video Analysis
 
 Claude Code: update this file at the end of **every** session. Newest entry on top.
 Keep entries short and factual. This is the handoff between sessions.
@@ -438,3 +438,14 @@ Keep entries short and factual. This is the handoff between sessions.
 - Coordinator script (artifact-only): .claude/wt/real-benchmarks/.artifacts/benchmark-tests/continue_after_verification.py. Live state: D:/DeepTuneBenchmarks/results/continuation-status.json; log continuation-coordinator.log. Do not launch a second controller, full suite, or concurrent GPU job. Do not change/commit Python code in the benchmark worktree while this verified campaign proceeds.
 - All original MOT17 training JPEGs and both detector snapshots are available on D:. This continuation does not make prior public-detection scores end-to-end detector results. The frozen-UCF first attempt failed before an epoch and is preserved in campaign01, with no accuracy claim.
 - Full requested campaign remains unfinished. Main-branch code has not been merged or pushed; pre-merge review remains required. Background verification/experiments continue from their task-owned tool sessions. Future status must read continuation-status.json and job logs, not assume training is active or all stages passed.
+### 2026-11-03 — G1 GUI catch-up built (builder, branch `video/G1-gui-catchup`)
+- Every flag of deeptune.py, infer.py, select_model.py, ensemble.py, extract_features.py, train_feature_head.py and track.py (273) has a GUI control; allow-list empty. Specs in `desktop/cli_options.py`; new pages Model Selection (dry run gates the search; sealed-test score shown as the honest number), Ensemble, Features & Probes; Advanced settings on the Model page; Test options and overrides; More tracking options; sidebar Device (`CUDA_VISIBLE_DEVICES`); reports read from disk on Results/Test.
+- `tests/test_gui_coverage.py` drives each flag's control through the GUI's argv builder and the real parser; mutation proof: dropping `--use-peft` or `--save_video` fails it. `tests/test_gui_pages.py` covers the pages. Targeted runs: `98 passed` (new), `315 passed, 2 warnings` (desktop + hub), `9 passed` (followups), `254 passed, 2 skipped` (CLI neighbours). Full suite owed.
+- For review: hub backbones offered via `GUI_MODEL_VERSIONS` so `test_hub_backbones.py`'s "GUI list is Phase 7" assertion still holds; its message is now stale. Details in `reports/G1.md`.
+- Next: click through the new pages once, a GPU check of a GUI-launched run, ml-critic review, then Wave 3.
+
+### 2026-11-03 — G1 fix round after V-058 (builder)
+- Must-fixes done: sealed-test wording from `selection.json` facts; Load recipe file instead of `--config` (allow-listed with reason); Test-page overrides split into test-time and model-defining (confirmation tick, log warning, `overrides.json`, three-way yes/no); coverage test now presses each page's Start handler and parses the captured argv (deeptune.py lines through `deeptune.parse_args`, video flags in a video run); ensemble = exactly the listed runs, labels only from a member; frozen-build launches in model selection. Nice-to-haves done (readers, device records, licences unsaved, strategy-flag sync, resume+validation, Seed tooltip).
+- Critic mutants: all 8 caught; my two earlier mutants caught. `test_hub_backbones.py` GUI-list test reworded on its own commit (user decision).
+- Runs: `121 passed` (G1 tests), `315 passed, 2 warnings` (desktop + hub), `9 passed` (followups), `53 passed, 1 warning` (model selection). Full suite still owed.
+- Disk: C: hit 0 MB free during the round; I deleted only my own pytest temp folders (~800 MB). The coordinator should free space before the full suite.

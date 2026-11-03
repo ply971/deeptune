@@ -23,12 +23,51 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from . import analyse
+from . import cli_options as co
 from . import config as gc
+from . import tools
 
 DoneResult = Tuple[str, str]
 DEEPTUNE_SCRIPT = Path(__file__).resolve().parents[1] / "deeptune.py"
 INFER_SCRIPT = Path(__file__).resolve().parents[1] / "infer.py"
 TRACK_SCRIPT = Path(__file__).resolve().parents[1] / "track.py"
+ROOT = Path(__file__).resolve().parents[1]
+
+# The device every run started from the GUI uses (G1; the sidebar's Device choice). deeptune.py and the other scripts
+# take CUDA whenever torch sees it, so 'cpu' hides the GPUs from the run (CUDA_VISIBLE_DEVICES=-1) and 'cuda:N' shows
+# only GPU N. 'auto' leaves the environment alone.
+_device = 'auto'
+
+
+def set_device(device: str) -> None:
+    global _device
+    co.device_env(device)  # raises on an unknown device
+    _device = device or 'auto'
+
+
+def device() -> str:
+    return _device
+
+
+def _apply_device(env: dict) -> dict:
+    env.update(co.device_env(_device))
+    return env
+
+
+def device_record(env: dict) -> dict:
+    """What a run record says about its device: the choice, and the CUDA_VISIBLE_DEVICES the run really got."""
+    return {'device': _device, 'CUDA_VISIBLE_DEVICES': env.get('CUDA_VISIBLE_DEVICES')}
+
+
+def device_line(env: dict) -> str:
+    """The first line of every log. torch quietly falls back to the CPU when CUDA_VISIBLE_DEVICES names no GPU, so a
+    cuda:N choice says how to check that it took effect."""
+    value = env.get('CUDA_VISIBLE_DEVICES')
+    line = f'Device: {_device} (CUDA_VISIBLE_DEVICES={"unset" if value is None else value}).'
+    if _device.startswith('cuda:'):
+        line += (f' If this machine has no GPU {_device[5:]}, torch sees no GPU and the run falls back to the CPU without an '
+                 'error: check the device the run reports below.')
+    return line + '\n'
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
@@ -144,7 +183,7 @@ def _worker_command(script: Path, worker_sentinel: str, args: list[str]) -> Tupl
 def start_run(cfg: gc.RunConfig) -> RunHandle:
     """Launch deeptune.py for `cfg` and return progress queues the GUI polls."""
     cfg = gc.resolved_config(cfg)
-    issues = gc.validate_config(cfg)
+    issues = gc.validate_run(cfg)
     if issues:
         raise ValueError('\n'.join(issues))
     session_dir = cfg.out / 'desktop-sessions' / f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:8]}"
@@ -177,6 +216,7 @@ def _run_process(
     existing_runs = set(gc.list_runs(out_dir))
     result: DoneResult = ('error', 'Run did not finish.')
     started = datetime.now(timezone.utc).isoformat()
+    devices: dict = {'device': _device}
 
     def emit(chunk: str) -> None:
         if log_file is not None:
@@ -212,6 +252,9 @@ def _run_process(
         env.setdefault("OMP_NUM_THREADS", "1")
         env.setdefault("OPENBLAS_NUM_THREADS", "1")
         env.setdefault("MKL_NUM_THREADS", "1")
+        _apply_device(env)
+        devices.update(device_record(env))
+        emit(device_line(env))
         emit("Starting DeepTune. The first import (torch/transformers) can take a moment...\n")
         cmd, run_cwd = _worker_command(DEEPTUNE_SCRIPT, "--deeptune-worker", args)
         process = subprocess.Popen(
@@ -255,7 +298,8 @@ def _run_process(
         if session_dir is not None:
             try:
                 manifest = {'status': result[0], 'message': result[1], 'started': started,
-                            'finished': datetime.now(timezone.utc).isoformat(), 'session_dir': str(session_dir), 'argv': args}
+                            'finished': datetime.now(timezone.utc).isoformat(), 'session_dir': str(session_dir), 'argv': args,
+                            **devices}
                 gc.write_json(session_dir / 'run.json', manifest)
                 new_runs = set(gc.list_runs(out_dir)) - existing_runs
                 if len(new_runs) == 1:
@@ -275,10 +319,15 @@ def start_infer_run(cfg: gc.InferenceConfig) -> RunHandle:
     log_q: "queue.Queue[str]" = queue.Queue(maxsize=2000)
     done_q: "queue.Queue[DoneResult]" = queue.Queue()
     args = gc.build_infer_argv(cfg)
+    gc.write_overrides(cfg, args)  # overrides.json, when the test replaced what the run recorded
+    model = gc.model_overrides(cfg)
+    if model:
+        log_q.put_nowait(f'WARNING: {gc.MODEL_OVERRIDE_WARNING} Overridden: {", ".join(sorted(model))}. '
+                         f'See overrides.json.\n')
     state = _ProcessState()
     thread = threading.Thread(
         target=_infer_process,
-        args=(args, log_q, done_q, state),
+        args=(args, log_q, done_q, state, Path(cfg.out)),
         daemon=True,
         name="deeptune-infer",
     )
@@ -301,7 +350,7 @@ def start_track_run(cfg: analyse.TrackConfig) -> RunHandle:
     thread = threading.Thread(
         target=_worker_process,
         args=(TRACK_SCRIPT, "--track-worker", "Tracking", analyse.loading_message(cfg.detector),
-              args, log_q, done_q, state),
+              args, log_q, done_q, state, '', Path(cfg.out)),
         daemon=True,
         name="deeptune-track",
     )
@@ -310,15 +359,55 @@ def start_track_run(cfg: analyse.TrackConfig) -> RunHandle:
     return handle
 
 
+def start_tool_run(cfg: tools.ToolConfig, extra: Optional[list] = None) -> RunHandle:
+    """Launch select_model.py, ensemble.py, extract_features.py or train_feature_head.py for `cfg` (G1's pages) and
+    return progress queues the GUI polls. `extra` adds flags a button sets, such as --dry_run."""
+    issues = tools.validate_tool(cfg)
+    if issues:
+        raise ValueError('\n'.join(issues))
+    out = tools.output_folder(cfg)
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+    log_q: "queue.Queue[str]" = queue.Queue(maxsize=2000)
+    done_q: "queue.Queue[DoneResult]" = queue.Queue()
+    args = tool_argv(cfg, extra)
+    state = _ProcessState()
+    spec = cfg.spec
+    thread = threading.Thread(
+        target=_worker_process,
+        args=(ROOT / spec.script, "--tool-worker", spec.title,
+              f"Starting {spec.script}. The first import (torch/transformers) can take a moment...\n",
+              args, log_q, done_q, state, cfg.tool, out),
+        daemon=True,
+        name=f"deeptune-{cfg.tool}",
+    )
+    handle = RunHandle(thread, log_q, done_q, state, None)
+    thread.start()
+    return handle
+
+
+def tool_argv(cfg: tools.ToolConfig, extra: Optional[list] = None) -> list[str]:
+    """A tool's argv with `extra` flags placed before a trailing remainder flag (select_model.py --deeptune_args must
+    stay last, as it takes every word after it)."""
+    argv = tools.build_tool_argv(cfg)
+    extra = list(extra or [])
+    remainder = next((opt.flag for opt in cfg.spec.specs if opt.remainder and opt.flag in argv), None)
+    if remainder is None:
+        return argv + extra
+    at = argv.index(remainder)
+    return argv[:at] + extra + argv[at:]
+
+
 def _infer_process(
     args: list[str],
     log_q: "queue.Queue[str]",
     done_q: "queue.Queue[DoneResult]",
     state: _ProcessState,
+    record_dir: Optional[Path] = None,
 ) -> None:
     _worker_process(INFER_SCRIPT, "--infer-worker", "Inference",
                     "Starting inference. The first import (torch/transformers) can take a moment...\n",
-                    args, log_q, done_q, state)
+                    args, log_q, done_q, state, '', record_dir)
 
 
 def _worker_process(
@@ -330,6 +419,8 @@ def _worker_process(
     log_q: "queue.Queue[str]",
     done_q: "queue.Queue[DoneResult]",
     state: _ProcessState,
+    tool: str = '',
+    record_dir: Optional[Path] = None,
 ) -> None:
     """Same subprocess/streaming/cancellation shape as _run_process, minus
     the desktop-sessions log file and deeptune-*-run-folder bookkeeping
@@ -338,6 +429,8 @@ def _worker_process(
     subfolder of their own."""
     process: Optional[subprocess.Popen[str]] = None
     result: DoneResult = ('error', 'Run did not finish.')
+    started = datetime.now(timezone.utc).isoformat()
+    devices: dict = {'device': _device}
 
     def emit(chunk: str) -> None:
         try:
@@ -359,8 +452,13 @@ def _worker_process(
         env.setdefault("OMP_NUM_THREADS", "1")
         env.setdefault("OPENBLAS_NUM_THREADS", "1")
         env.setdefault("MKL_NUM_THREADS", "1")
+        _apply_device(env)
+        devices.update(device_record(env))
+        emit(device_line(env))
         emit(start_message)
-        cmd, run_cwd = _worker_command(script, worker_sentinel, args)
+        # A frozen build runs every tool through one sentinel, so it also needs the tool's name; a checkout runs the script.
+        frozen = getattr(sys, "frozen", False)
+        cmd, run_cwd = _worker_command(script, worker_sentinel, [tool, *args] if tool and frozen else args)
         process = subprocess.Popen(
             cmd,
             cwd=run_cwd,
@@ -396,4 +494,11 @@ def _worker_process(
         else:
             result = ('error', f'{type(exc).__name__}: {exc}\n{traceback.format_exc()}')
     finally:
+        if record_dir is not None:  # what ran, where and on which device, beside the outputs
+            try:
+                gc.write_json(Path(record_dir) / 'desktop-run.json', {
+                    'status': result[0], 'message': result[1], 'started': started,
+                    'finished': datetime.now(timezone.utc).isoformat(), 'script': Path(script).name, 'argv': args, **devices})
+            except OSError as exc:
+                emit(f'Could not save run status: {exc}\n')
         done_q.put(result)

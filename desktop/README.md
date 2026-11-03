@@ -43,8 +43,26 @@ and screen-reader support remain limited by Dear PyGui.
   backbone, PEFT/LoRA), training hyperparameters (batch size, epochs,
   learning rate, and for images/video an optional **Trainable parameter
   budget** such as `100k` or `1.5M`; blank means no limit), and whatever else that modality/model needs: frame count
-  and pooling for video, continuous/categorical columns for GANDALF,
-  fine-tuning mode for TabPFN, the time index column for DeepAR.
+  and pooling (mean, attention, single_frame) for video, continuous/categorical columns for GANDALF,
+  fine-tuning mode for TabPFN, the time index column for DeepAR. The video model list also holds the
+  pretrained Hugging Face backbones (V-JEPA 2, VideoMAE, VideoMAE V2, SigLIP, SigLIP 2, DINOv3), with a
+  note on their weights' licence and memory. **Advanced settings** holds every other `deeptune.py` flag in
+  collapsible sections: temporal architecture (late/early/slow fusion, TSM, CNN+RNN, temporal transformer,
+  two-stream, attentive/linear probe, and their options), pretrained backbone and LoRA (train the whole
+  encoder, LoRA rank, and **"I accept the licence of these weights"**, which is never pre-ticked: opt-in
+  weights such as VideoMAE (CC-BY-NC-4.0) or DINOv3 cannot start until you tick their licence; the tick is
+  not saved in settings files or the session, so it is a deliberate act each session), video data
+  and decoding, augmentation (clip augmentation, flip, speed, mixup, CutMix, label smoothing), the training
+  recipe (mixed precision, seed, checkpoints and resume, best-epoch selection and early stopping, schedules,
+  gradient accumulation, BatchNorm freezing, layer decay, EMA, experiment logger), evaluation
+  and validation (test clips and crops, k-fold or bootstrap .632+, report intervals, a test split file,
+  cross-validate only, no error model), "not sure" (target error rate and its guarantee), and the df-analyze
+  export. Each starts at the command-line default and only the ones you change are passed on, so the
+  reproducible command on the Run page stays short. Sections that do not apply to the modality are hidden.
+  **Load recipe file** reads a JSON or YAML file of flag names (as `deeptune.py --config` takes them, e.g.
+  `learning_rate: 3e-4`) into these controls, so the run sends exactly what the page shows; the file itself is
+  never passed on, and a file with an unknown key is refused whole, naming the key. The GUI ticks "Use a
+  reproducible seed (42)" (`--fixed-seed`) by default; the command line does not.
 - **Run** - choose an output directory, review the equivalent CLI command,
   launch it, and follow the live (tqdm-aware) log. Stop cancels the run and
   its worker processes. Save or load reusable JSON settings; the last session
@@ -52,7 +70,9 @@ and screen-reader support remain limited by Dear PyGui.
   each launch are saved automatically under `desktop-sessions/` in the output folder.
 - **Results** - completed and partial runs under the chosen output directory, with
   its holdout metrics table, training/validation loss curve, checkpoint path,
-  and embeddings file. Export all available metrics to CSV and open the selected
+  and embeddings file. **Evaluation reports** shows what the run wrote beyond that, when it wrote it:
+  the test report with its bootstrap intervals, the k-fold or bootstrap validation summary, the "not sure"
+  report (coverage, error among answered clips, whether the guarantee holds) and the df-analyze command. Export all available metrics to CSV and open the selected
   experiment folder. Incomplete files are reported without breaking the page.
 - **Test** - load a completed run's checkpoint and run it on new data instead of
   the holdout split it was trained against: point at a single new image or video
@@ -69,8 +89,51 @@ and screen-reader support remain limited by Dear PyGui.
   to compare against) under that run's own folder rather than the training
   output layout. SigLIP images and DeepAR timeseries have narrower support
   today - see `inference/README.md` for exactly what's covered per modality
-  and why.
+  and why. **Test options**: batch size, "Answer every clip" (ignore the run's "not sure" rule;
+  `--no_abstain`), the licence of opt-in weights, and an **ensemble of exactly the listed runs**: two or
+  more, one per line; the run selected above is a member only if you list it, and its label mapping is passed
+  only then. "Allow unverified class indices" is for runs whose labels cannot be checked. Two override
+  sections replace one recorded setting for this test only (blank keeps the record):
+  **test-time settings** (clips, crops, sampling, decoder, workers, caches) and **change the rebuilt model or
+  its labels** (pooling and temporal architecture with their options, backbone, LoRA, frame count, frame
+  resize, motion source, label mapping, the model build). The second kind can rebuild a model the trained
+  weights still load into and give confident, wrong predictions, so Test model stays disabled until you tick
+  "I understand these overrides change the trained model", and the log starts with a warning. Yes/no
+  settings are three-way: (recorded), on or off, so an override can also turn a recorded flag off. Any override
+  is written to `overrides.json` beside the predictions and shown with the results, as are the abstention
+  summary and the ensemble record.
 - **Analyse Video** - give one video to a model. See "Analyse a video" below.
+  **More tracking options** under Find, track and count reaches every other `track.py` setting: a whole
+  folder of videos, the detector model, each threshold (a value there replaces what the score threshold
+  chose), NMS, frame limits, batch size, device, ByteTrack's match threshold and buffer, cross-prompt
+  merging and class-agnostic matching.
+- **Model Selection** - `select_model.py`: the dataset and search folder, the strategy (smart,
+  exhaustive, random, bayes), the grid axes (backbones, architectures, poolings, train modes, learning
+  rates, frame counts, augmentations), folds, metric, budgets and limits, every strategy's own settings and
+  extra `deeptune.py` flags. **Check grid and estimate** runs a dry run first and shows the candidate count and
+  the time estimate in the log; **Start search** is enabled only after a dry run of exactly the current
+  settings passed. Rerunning into the same folder resumes (the page says so), with "Resume with a changed
+  grid", "Retry failed candidates" and "Allow the sealed test to score a new winner" under Limits. Results
+  lead with the **sealed-test score**, worded from `selection.json`: the honest number only when that sealed
+  set has scored exactly one winner; "reused N times: not an unbiased estimate" after `--rescore_sealed_test`;
+  "not scored" with the reason when the sealed set was not used. Then the winner, the reason and the
+  cross-validation leaderboard. In the packaged app the search runs `deeptune.py`, `extract_features.py` and
+  `train_feature_head.py` through the app's own worker modes.
+- **Ensemble** - `ensemble.py`: trained runs (or "Fill runs from the output folder") with data, or
+  finished `predictions.csv` tables; label-mapping verification and the licence choice. Shows
+  `ensemble.json`, the metrics and the predictions.
+- **Features & Probes** - `extract_features.py` (streams, backbone, snippets, token grid, motion, decoder)
+  and `train_feature_head.py` (attentive or linear probe on the cached features, with its splits and
+  hyperparameters), each with its own launch button and reproducible command; shows the feature folder and
+  the probe's test metrics.
+
+The sidebar's **Device** applies to every run started from the app: `auto` (the GPU when there is one),
+`cpu` (hides the GPU from the run with `CUDA_VISIBLE_DEVICES=-1`), or `cuda:N`. Every log starts with the device
+and the `CUDA_VISIBLE_DEVICES` the run got, and `run.json` (training) or `desktop-run.json` (beside test,
+tracking and tool outputs) records both. With `cuda:N` on a machine without that GPU, torch sees no GPU and the
+run falls back to the CPU; the log line says so. Changing the device needs a new dry run on the Model Selection
+page. `tests/test_gui_coverage.py` sets every flag's control in the real UI, presses the page's own Start button
+with only the subprocess replaced, and checks the flag and its value in the argv that would run.
 
 Previews load on a worker thread and read at most 50 table rows. Binary media
 payloads are shown as byte counts. Model controls reflect supported combinations;

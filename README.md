@@ -40,7 +40,7 @@ Prefer a graphical interface over the command line? Run:
 .venv\Scripts\python.exe desktop\app.py
 ```
 
-to pick a modality and dataset, choose a model and its hyperparameters, launch the run, and browse results, all without typing CLI flags. The desktop app includes saved settings, automatic full logs, bounded background previews, cancellation, and metrics CSV export. See [desktop/README.md](desktop/README.md) for details and repeatable video checks.
+to pick a modality and dataset, choose a model and its hyperparameters, launch the run, and browse results, all without typing CLI flags. The desktop app includes saved settings, automatic full logs, bounded background previews, cancellation, and metrics CSV export. Every feature below is in the app too: each flag of `deeptune.py`, `infer.py`, `select_model.py`, `ensemble.py`, `extract_features.py`, `train_feature_head.py` and `track.py` has a control (advanced ones in collapsible sections, starting at the CLI default), with pages for model selection, ensembles and feature probes, and a device choice. See [desktop/README.md](desktop/README.md) for details and repeatable video checks.
 
 The installed commands are `deeptune` and `deeptune-desktop`. Run automated checks
 with `.venv\Scripts\python.exe -m pytest tests -q`, or everything at once (pip check,

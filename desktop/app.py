@@ -47,7 +47,8 @@ if str(ROOT) not in sys.path:
 # only happen in this worker process, never in the long-lived GUI process
 # itself. An unfrozen `python desktop/app.py` never takes this branch;
 # runner.py keeps using a real python.exe + the on-disk script path there.
-if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", "--track-worker"):
+_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head")  # desktop/tools.TOOLS
+if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", "--track-worker", "--tool-worker"):
     # PyInstaller's windowed bootloader doesn't reliably pick up
     # PYTHONIOENCODING for this process's stdio the way a plain python.exe
     # does -- confirmed by testing: even with runner.py's env=utf-8 set,
@@ -69,6 +70,11 @@ if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", 
     elif sys.argv[1] == "--track-worker":
         import track
         sys.exit(track.cli(sys.argv[2:]))
+    elif sys.argv[1] == "--tool-worker":  # G1: the frozen build's select_model / ensemble / feature scripts
+        import importlib
+        if len(sys.argv) < 3 or sys.argv[2] not in _TOOL_WORKERS:
+            sys.exit(f"--tool-worker needs one of: {', '.join(_TOOL_WORKERS)}")
+        sys.exit(importlib.import_module(sys.argv[2]).main(sys.argv[3:]))
     else:
         import infer
         sys.exit(infer.main(sys.argv[2:]))
@@ -77,7 +83,12 @@ import dearpygui.dearpygui as dpg
 import pandas as pd
 
 from desktop import analyse_page
+from desktop import cli_options as co
 from desktop import config as gc
+from desktop import option_widgets as ow
+from desktop import runner as desktop_runner
+from desktop import tool_pages
+from desktop import tools
 from desktop import dpg_context as ui
 from desktop.dpg_context import ItemId
 from desktop.log_stream import LineBuffer
@@ -114,7 +125,12 @@ NAV_ITEMS = [
     ("results", "05   Results"),
     ("test", "06   Test"),
     ("analyse", "07   Analyse Video"),
+    ("select", "08   Model Selection"),
+    ("ensemble", "09   Ensemble"),
+    ("features", "10   Features & Probes"),
 ]
+DT = 'dt'  # widget-tag prefix of the deeptune.py options on the Model page (desktop/cli_options.DEEPTUNE_OPTIONS)
+INFER = 'infer'  # ... and of the infer.py options on the Test page (INFER_OPTIONS)
 
 _FONTS: dict[str, ItemId] = {}
 _THEMES: dict[str, ItemId] = {}
@@ -172,6 +188,7 @@ CONFIG_TAGS = {
 def apply_config(cfg: gc.RunConfig) -> None:
     dpg.set_value('modality_radio', cfg.modality)
     on_modality_changed()
+    ow.apply(co.DEEPTUNE_OPTIONS, DT, cfg.options)
     for key, tag in CONFIG_TAGS.items():
         value = getattr(cfg, key)
         if key in ('df', 'out', 'added_layers'):
@@ -282,6 +299,39 @@ def on_nav_selected(sender: ItemId = 0, app_data: Any = None, user_data: str = "
 
 def on_show_dialog(sender: ItemId, app_data: Any, user_data: str) -> None:
     dpg.show_item(user_data)
+
+
+def on_device_changed(sender: ItemId = 0, app_data: Any = None) -> None:
+    device = _text('device_combo') or 'auto'
+    try:
+        desktop_runner.set_device(device)
+    except ValueError as exc:
+        _set_status(str(exc), ERROR)
+        return
+    tool_pages.on_changed()  # a dry run checked on another device no longer counts
+    if device.startswith('cuda:') and device != 'cuda:0':
+        _set_status(f'Device: {device}. If this machine has no GPU {device[5:]}, runs fall back to the CPU; each log says '
+                    'which device it got.', WARNING)
+    else:
+        _set_status(f'Device: {device}', SUCCESS)
+
+
+def on_load_recipe(sender: ItemId = 0, app_data: Any = None) -> None:
+    """Read a JSON/YAML recipe into the page's controls, so the run sends what the page shows (--config is never sent)."""
+    path = _dialog_path(app_data)
+    if not path:
+        return
+    try:
+        cfg, keys = gc.recipe_config(_build_run_config(), Path(path))
+    except (OSError, ValueError) as exc:
+        dpg.set_value('recipe_status', str(exc))
+        dpg.configure_item('recipe_status', color=ERROR)
+        _set_status('Recipe not loaded', ERROR)
+        return
+    apply_config(cfg)
+    dpg.set_value('recipe_status', f'Loaded {Path(path).name} into the controls: {", ".join(keys) or "nothing"}.')
+    dpg.configure_item('recipe_status', color=SUCCESS)
+    _set_status('Recipe loaded', SUCCESS)
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +732,7 @@ def on_modality_changed(sender: ItemId = 0, app_data: Any = None) -> None:
     modality = _text("modality_radio")
     if modality != 'video':
         stop_video_playback()
-    versions = gc.MODEL_VERSIONS_BY_MODALITY[modality]
+    versions = gc.GUI_MODEL_VERSIONS[modality]
     dpg.configure_item("model_version_combo", items=versions)
     if dpg.get_value("model_version_combo") not in versions:
         dpg.set_value("model_version_combo", versions[0])
@@ -694,6 +744,9 @@ def on_modality_changed(sender: ItemId = 0, app_data: Any = None) -> None:
     dpg.configure_item("video_options_group", show=modality == "video")
     dpg.configure_item("trainable_params_group", show=modality in gc.BUDGET_MODALITIES)
     dpg.configure_item("timeseries_options_group", show=modality == "timeseries")
+    applies = co.deeptune_applies(modality)
+    ow.show_rows(co.DEEPTUNE_OPTIONS, DT, applies)
+    dpg.configure_item('advanced_options_group', show=any(applies(opt) for opt in co.DEEPTUNE_OPTIONS))
 
     on_model_version_changed()
     _update_data_source_hint()
@@ -717,11 +770,34 @@ def on_model_version_changed(sender: ItemId = 0, app_data: Any = None) -> None:
         dpg.set_value('freeze_backbone_checkbox', False)
     if version == 'mvit_v2_s':
         dpg.set_value('num_frames_input', 16)
-    dpg.configure_item('pooling_radio', enabled=version not in gc.VIDEO_NATIVE_MODEL_VERSIONS)
+    hub = gc.hub_backbone(version) if modality == 'video' else None
+    if hub is not None and hub.fixed_frames is not None:
+        dpg.set_value('num_frames_input', hub.fixed_frames)
+    clip_model = hub is not None and hub.kind == 'video'
+    if clip_model:
+        dpg.set_value('pooling_radio', 'mean')  # the CLI replaces it with the model's probe
+    dpg.configure_item('pooling_radio', enabled=version not in gc.VIDEO_NATIVE_MODEL_VERSIONS and not clip_model)
+    dpg.set_value('hub_backbone_note', _hub_note(version) if hub is not None else '')
+    dpg.configure_item('hub_backbone_note', show=hub is not None)
 
     dpg.configure_item("gandalf_group", show=(modality == "tabular" and version == "gandalf"))
     dpg.configure_item("tabpfn_group", show=(modality == "tabular" and version == "tabpfn"))
     on_config_changed()
+
+
+def _hub_note(version: str) -> str:
+    from handlers.video_backbones import licence_text
+    hub = gc.hub_backbone(version)
+    lines = [f'Weights: {licence_text(version)}.']
+    if hub.opt_in:
+        lines.append(f'Opt-in: read the licence, then tick {hub.licence} under Advanced settings > Pretrained backbone and LoRA.')
+    if hub.frozen_by_default:
+        lines.append('The backbone stays frozen unless you choose PEFT / LoRA or "Train the whole encoder".')
+    if hub.kind == 'video':
+        lines.append('It reads its tokens through a probe (attentive_probe by default; see Temporal architecture).')
+    if hub.memory_note:
+        lines.append(hub.memory_note)
+    return ' '.join(lines)
 
 
 def _update_data_source_hint() -> None:
@@ -771,13 +847,19 @@ def _build_run_config() -> gc.RunConfig:
         categorical_cols=categorical_cols,
         finetuning_mode=_flag("finetuning_mode_checkbox"),
         time_idx_column=_text("time_idx_column_input") or "labels",
+        options=ow.read(co.DEEPTUNE_OPTIONS, DT)[0],
     )
+
+
+def _run_issues(cfg: gc.RunConfig) -> list[str]:
+    """Everything that stops a run: unreadable advanced values first, then desktop/config.validate_run."""
+    return ow.read(co.DEEPTUNE_OPTIONS, DT)[1] + gc.validate_run(cfg)
 
 
 def on_config_changed(sender: ItemId = 0, app_data: Any = None) -> None:
     try:
         cfg = gc.resolved_config(_build_run_config())
-        issues = gc.validate_config(cfg)
+        issues = _run_issues(cfg)
         if issues:
             dpg.set_value("validation_text", "\n".join(issues))
             dpg.configure_item("validation_text", color=WARNING)
@@ -813,7 +895,7 @@ def on_run_clicked(sender: ItemId = 0, app_data: Any = None) -> None:
     dpg.set_value("log_box", "")
     try:
         cfg = gc.resolved_config(_build_run_config())
-        issues = gc.validate_config(cfg)
+        issues = _run_issues(cfg)
         if issues:
             raise ValueError(issues[0])
         cfg.out.mkdir(parents=True, exist_ok=True)
@@ -950,6 +1032,7 @@ def _clear_results(message: str) -> None:
     dpg.delete_item("results_metrics_container", children_only=True)
     dpg.add_text(message, parent="results_metrics_container", color=TEXT_MUTED)
     dpg.delete_item("results_paths_container", children_only=True)
+    tool_pages.render_sections('results_reports_container', [], _palette(), 'Select a run to see its reports.')
     dpg.set_value("results_series_loss_plot", [[], []])
     dpg.set_value("results_series_valloss_plot", [[], []])
 
@@ -988,6 +1071,13 @@ def render_results(results: gc.RunResults) -> None:
             dpg.add_text(f"{label}:  {value}", parent="results_paths_container", wrap=900, color=TEXT_MUTED)
     if results.embeddings_shape is not None:
         dpg.add_text(f"Embeddings matrix shape: {results.embeddings_shape}", parent="results_paths_container", color=ACCENT_LIGHT)
+    tool_pages.render_sections('results_reports_container', tools.run_reports(results.run_dir), _palette(),
+                               'This run wrote no evaluation report, validation summary, abstention report or df-analyze export.')
+
+
+def _palette() -> analyse_page.Palette:
+    return analyse_page.Palette(accent=ACCENT, analysis=ACCENT_LIGHT, success=SUCCESS, error=ERROR, warning=WARNING,
+                                primary=TEXT_PRIMARY, muted=TEXT_MUTED)
 
 
 def on_open_output(sender: ItemId = 0, app_data: Any = None) -> None:
@@ -1056,6 +1146,10 @@ def on_test_run_selected(sender: ItemId = 0, app_data: Any = None, user_data: st
     except (OSError, ValueError) as exc:
         _set_status(f'Cannot read this run: {exc}', ERROR)
         return
+    if _selected_test_run is None or _selected_test_run.run_dir != results.run_dir:
+        # An override describes one run's model; another run starts from its own record again.
+        ow.apply([opt for opt in co.INFER_OPTIONS if opt.section in co.OVERRIDE_SECTIONS], INFER, {})
+        dpg.set_value('infer_confirm_model_overrides', False)
     _selected_test_run = results
     # Whatever predictions/metrics are on screen belong to whichever run was
     # selected (or tested) before this one -- clear them so switching runs
@@ -1075,6 +1169,27 @@ def on_test_run_selected(sender: ItemId = 0, app_data: Any = None, user_data: st
     dpg.set_value('test_run_info_text', info)
     dpg.configure_item('test_run_button', enabled=True)
     _clear_test_results('Choose new data and click Test model to see predictions for this run.')
+    on_test_options_changed()
+
+
+def _test_config(results: gc.RunResults, data: Path, out: Path) -> gc.InferenceConfig:
+    """What the Test page runs: the run's record, plus the page's own options."""
+    cfg = gc.infer_config_from_run(results, data=data, out=out, batch_size=_integer('test_batch_size_input', 16))
+    cfg.options = ow.read(co.INFER_OPTIONS, INFER)[0]
+    cfg.confirm_model_overrides = _flag('infer_confirm_model_overrides')
+    return cfg
+
+
+def on_test_options_changed(sender: ItemId = 0, app_data: Any = None) -> None:
+    """Model-defining overrides keep Test model disabled until their risk is confirmed."""
+    model = gc.model_overrides(gc.InferenceConfig(options=ow.read(co.INFER_OPTIONS, INFER)[0]))
+    blocked = bool(model) and not _flag('infer_confirm_model_overrides')
+    dpg.configure_item('infer_confirm_group', show=bool(model))
+    ready = (_selected_test_run is not None and _selected_test_run.checkpoint_path is not None and _current_infer_run is None)
+    dpg.configure_item('test_run_button', enabled=ready and not blocked)
+    if blocked:
+        dpg.set_value('test_stage_text', 'These overrides change the model rebuilt from the trained weights, or its labels: '
+                                         'tick the box to confirm, or clear them.')
 
 
 def on_test_data_folder_selected(sender: ItemId, app_data: Any) -> None:
@@ -1104,8 +1219,8 @@ def on_run_test_clicked(sender: ItemId = 0, app_data: Any = None) -> None:
     dpg.set_value('test_log_box', '')
     try:
         out_dir = _selected_test_run.run_dir / 'desktop-inference' / time.strftime('%Y%m%d-%H%M%S')
-        cfg = gc.infer_config_from_run(_selected_test_run, data=Path(data_text).expanduser(), out=out_dir)
-        issues = gc.validate_infer_config(cfg)
+        cfg = _test_config(_selected_test_run, Path(data_text).expanduser(), out_dir)
+        issues = ow.read(co.INFER_OPTIONS, INFER)[1] + gc.validate_infer_config(cfg)
         if issues:
             raise ValueError(issues[0])
         handle = start_infer_run(cfg)
@@ -1178,6 +1293,7 @@ def poll_infer_run_state() -> None:
         _infer_line_buffer.feed(f"\n[infer] {message}\n")
         dpg.set_value('test_log_box', _infer_line_buffer.render())
     _current_infer_run = None
+    on_test_options_changed()
 
 
 def _clear_test_results(message: str) -> None:
@@ -1186,6 +1302,7 @@ def _clear_test_results(message: str) -> None:
     dpg.delete_item('test_metrics_container', children_only=True)
     dpg.add_text(message, parent='test_metrics_container', color=TEXT_MUTED)
     dpg.delete_item('test_predictions_container', children_only=True)
+    dpg.delete_item('test_reports_container', children_only=True)
 
 
 def render_test_results(results: gc.InferenceResults) -> None:
@@ -1206,6 +1323,8 @@ def render_test_results(results: gc.InferenceResults) -> None:
     for warning in results.warnings:
         dpg.add_text(warning, parent='test_metrics_container', color=WARNING, wrap=800)
 
+    tool_pages.render_sections('test_reports_container', tools.inference_reports(results.out_dir), _palette(),
+                               'No abstention summary or ensemble record for this test.')
     dpg.delete_item('test_predictions_container', children_only=True)
     if results.predictions is not None and not results.predictions.empty:
         preview = results.predictions.head(200)
@@ -1389,6 +1508,10 @@ def _build_dialogs() -> None:
     with ui.file_dialog(directory_selector=False, show=False, callback=on_load_settings,
                         tag='file_dialog_load_settings', width=800, height=480):
         dpg.add_file_extension('.json')
+    with ui.file_dialog(directory_selector=False, show=False, callback=on_load_recipe,
+                        tag='file_dialog_load_recipe', width=800, height=480):
+        for ext in ('.json', '.yaml', '.yml'):
+            dpg.add_file_extension(ext)
     with ui.file_dialog(directory_selector=True, show=False, callback=on_data_folder_selected,
                         tag="file_dialog_data_folder", width=800, height=480):
         pass
@@ -1410,6 +1533,7 @@ def _build_dialogs() -> None:
         for ext in ('.*', '.csv', '.xlsx', '.parquet', *IMAGE_EXTENSIONS, *VIDEO_EXTENSIONS):
             dpg.add_file_extension(ext)
     analyse_page.build_dialogs()
+    ow.build_dialogs()
 
 
 # ---------------------------------------------------------------------------
@@ -1523,8 +1647,9 @@ def _build_model_page() -> None:
         _heading("Model & training", "Choose the backbone. Set the pace. Make the experiment yours.")
         with _card("MODEL"):
             dpg.add_combo(tag="model_version_combo", label="Model version",
-                         items=gc.MODEL_VERSIONS_BY_MODALITY["images"], default_value="resnet18",
+                         items=gc.GUI_MODEL_VERSIONS["images"], default_value="resnet18",
                          width=320, callback=on_model_version_changed)
+            dpg.add_text('', tag='hub_backbone_note', color=ACCENT_LIGHT, wrap=850, show=False)
             with ui.group(tag="num_classes_group", horizontal=True):
                 dpg.add_input_int(tag="num_classes_input", label="Number of classes", default_value=2,
                                   width=160, callback=on_config_changed)
@@ -1574,10 +1699,11 @@ def _build_model_page() -> None:
                 with ui.group(horizontal=True):
                     dpg.add_input_int(tag="num_frames_input", label="Frames sampled per clip", default_value=8,
                                       width=160, callback=on_config_changed)
-                    dpg.add_radio_button(["mean", "attention"], tag="pooling_radio", default_value="mean",
+                    dpg.add_radio_button(["mean", "attention", "single_frame"], tag="pooling_radio", default_value="mean",
                                          horizontal=True, callback=on_config_changed)
                     _tip("Pooling only applies to frame-sampling video models (any 2D backbone, e.g. "
-                         "resnet50). Native models (r3d_18, mvit_v2_s, swin3d_*) ignore it.")
+                         "resnet50). single_frame: the middle frame only (a baseline). Native models (r3d_18, "
+                         "mvit_v2_s, swin3d_*) ignore it. Other temporal architectures: Advanced settings below.")
         with ui.group(tag="gandalf_group", show=False):
             with _card("GANDALF"):
                 dpg.add_radio_button(["classification", "regression"], tag="gandalf_type_radio",
@@ -1597,6 +1723,18 @@ def _build_model_page() -> None:
             with _card("TIME SERIES"):
                 dpg.add_input_text(tag="time_idx_column_input", label="Time index column", default_value="labels",
                                    width=220, callback=on_config_changed)
+        dpg.add_spacer(height=10)
+        with ui.group(tag='advanced_options_group'):
+            with _card("ADVANCED SETTINGS"):
+                dpg.add_text('Every other deeptune.py setting. Each starts at the command-line default, and only the '
+                             'ones you change are passed on. Hover a setting for what it does.', color=TEXT_MUTED, wrap=850)
+                with ui.group(horizontal=True):
+                    dpg.add_button(label='Load recipe file...', callback=on_show_dialog, user_data='file_dialog_load_recipe')
+                    _tip('A JSON or YAML file of flag names without dashes, as deeptune.py --config reads, e.g. '
+                         'learning_rate: 3e-4. Its values are put into the controls on these pages, so the run sends '
+                         'exactly what you see; the file itself is not passed on. An unknown key refuses the whole file.')
+                    dpg.add_text('', tag='recipe_status', color=TEXT_MUTED, wrap=650)
+                ow.render(co.DEEPTUNE_OPTIONS, DT, on_config_changed, sections=co.DEEPTUNE_SECTIONS)
 
 
 def _build_run_page() -> None:
@@ -1647,6 +1785,12 @@ def _build_results_page() -> None:
             with ui.child_window(tag="results_metrics_container", height=220, horizontal_scrollbar=True):
                 dpg.add_text("Your evaluation report will appear here after a run. Select an experiment above to inspect it.", color=TEXT_MUTED)
         dpg.add_spacer(height=10)
+        with _card("EVALUATION REPORTS"):
+            dpg.add_text('Intervals, k-fold or bootstrap validation, "not sure" (abstention) and the df-analyze export, '
+                         'when the run wrote them.', color=TEXT_MUTED, wrap=850)
+            with ui.child_window(tag="results_reports_container", height=260, horizontal_scrollbar=True):
+                dpg.add_text("Select a run to see its reports.", color=TEXT_MUTED)
+        dpg.add_spacer(height=10)
         with _card("TRAINING CURVE"):
             with ui.plot(label="Loss per epoch", height=300, width=-1):
                 dpg.add_plot_legend()
@@ -1685,6 +1829,16 @@ def _build_test_page() -> None:
                 dpg.add_button(label="Browse folder", callback=on_show_dialog, user_data="file_dialog_test_data_folder")
                 dpg.add_button(label="Browse file", callback=on_show_dialog, user_data="file_dialog_test_data_file")
         dpg.add_spacer(height=10)
+        with _card("TEST OPTIONS"):
+            dpg.add_input_int(tag='test_batch_size_input', label='Batch size', default_value=16, width=150, min_value=1,
+                              min_clamped=True)
+            ow.render(co.INFER_OPTIONS, INFER, on_test_options_changed, open_sections=(co.S_TEST,),
+                      sections=(co.S_TEST, *co.OVERRIDE_SECTIONS))
+            with ui.group(tag='infer_confirm_group', show=False):
+                dpg.add_text(gc.MODEL_OVERRIDE_WARNING, color=WARNING, wrap=850)
+                dpg.add_checkbox(tag='infer_confirm_model_overrides', label='I understand these overrides change the trained '
+                                 'model; run anyway', callback=on_test_options_changed)
+        dpg.add_spacer(height=10)
         with _card("LAUNCH"):
             with ui.group(horizontal=True):
                 button = dpg.add_button(tag="test_run_button", label="Test model", callback=on_run_test_clicked,
@@ -1707,6 +1861,8 @@ def _build_test_page() -> None:
         with _card("METRICS"):
             with ui.child_window(tag="test_metrics_container", height=120, horizontal_scrollbar=True):
                 dpg.add_text("Run a test first.", color=TEXT_MUTED)
+            with ui.child_window(tag="test_reports_container", height=150, horizontal_scrollbar=True):
+                pass
         dpg.add_spacer(height=10)
         with _card("PREDICTIONS"):
             with ui.child_window(tag="test_predictions_container", height=280, horizontal_scrollbar=True):
@@ -1786,6 +1942,10 @@ def build_ui() -> None:
                 dpg.add_spacer(height=25)
                 dpg.add_separator()
                 dpg.add_text("SESSION", color=TEXT_MUTED)
+                dpg.add_combo(tag='device_combo', items=list(co.DEVICES), default_value=desktop_runner.device(),
+                              label='Device', width=110, callback=on_device_changed)
+                _tip('Where every run started here trains or predicts. auto: the GPU when there is one. cpu hides the GPU '
+                     '(CUDA_VISIBLE_DEVICES=-1); cuda:N uses only GPU N.')
                 dpg.add_text("Ready", tag="status_text", color=SUCCESS, wrap=180)
                 dpg.add_spacer(height=20)
                 dpg.add_text("Closing this window stops any active run.", tag="sidebar_note",
@@ -1797,11 +1957,12 @@ def build_ui() -> None:
                 _build_run_page()
                 _build_results_page()
                 _build_test_page()
-                analyse_page.build(analyse_page.Shell(
+                shell = analyse_page.Shell(
                     card=_card, heading=_heading, set_status=_set_status, dialog_path=_dialog_path,
                     show_dialog=on_show_dialog, themes=_THEMES, output_folder=lambda: _text('outdir_input'),
-                    palette=analyse_page.Palette(accent=ACCENT, analysis=ACCENT_LIGHT, success=SUCCESS, error=ERROR,
-                                                 warning=WARNING, primary=TEXT_PRIMARY, muted=TEXT_MUTED)))
+                    palette=_palette())
+                analyse_page.build(shell)
+                tool_pages.build(shell)
     dpg.bind_item_theme('workspace_content', _THEMES['workspace'])
     dpg.bind_item_theme('preview_container', _THEMES['media'])
     dpg.bind_item_theme('video_play_button', _THEMES['run_button'])
@@ -1844,6 +2005,7 @@ def run_gui(initial_page: str = 'overview', initial_video: Path | None = None) -
             poll_run_state()
             poll_infer_run_state()
             analyse_page.poll()
+            tool_pages.poll()
             poll_preview()
             poll_video_playback()
             dpg.render_dearpygui_frame()
@@ -1857,6 +2019,7 @@ def run_gui(initial_page: str = 'overview', initial_video: Path | None = None) -
         if _current_infer_run is not None:
             _current_infer_run.close()
         analyse_page.shutdown()
+        tool_pages.shutdown()
         stop_video_playback(timeout=2)
         dpg.destroy_context()
 
