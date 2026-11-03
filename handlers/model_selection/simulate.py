@@ -166,6 +166,11 @@ class SurfaceRunner:
     def full_epochs(self, argv) -> int:
         return self.full_epochs_value or int(_flag(argv, '--num_epochs'))
 
+    @staticmethod
+    def probe_problem(candidate, settings):
+        """The simulated probe takes any frozen backbone (the real one: probe.probe_problem)."""
+        return None if candidate.train_mode == 'frozen' else f'its backbone trains ({candidate.train_mode})'
+
     def probe(self, job, run_dir, info):
         """The cached-feature probe's stand-in: the frozen candidate's quality, with screening noise, on the same folds."""
         run_dir = Path(run_dir)

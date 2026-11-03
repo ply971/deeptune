@@ -147,6 +147,14 @@ class StrategyContext:
         self.decisions: list = []
         # The cached-feature probe needs real clips: a test's fake runner offers it only if it has a `probe` method.
         self.probe_available = search.probe_runner is not None or isinstance(search.runner, SubprocessRunner)
+        self._probe_check = search.probe_check
+
+    def probe_problem(self, candidate: Candidate) -> Optional[str]:
+        """Why this candidate cannot be screened by the cached-feature probe, or None."""
+        if self._probe_check is not None:
+            return self._probe_check(candidate, self.settings)
+        from handlers.model_selection.probe import probe_problem
+        return probe_problem(candidate, self.settings)
 
     # -- candidates and jobs ---------------------------------------------------------------------------------------------
     def item(self, candidate: Candidate):
@@ -238,6 +246,8 @@ class ModelSearch:
         self.runner = runner or SubprocessRunner()
         # The cached-feature probe (smart's screening). A test runner that also has a `probe` method serves both.
         self.probe_runner = probe_runner or getattr(runner, 'probe', None)
+        # Which candidates it can screen: its own `probe_problem` if it has one (a simulation), else the real extractor's rules.
+        self.probe_check = getattr(probe_runner, 'probe_problem', None) or getattr(runner, 'probe_problem', None)
         self.footprint_fn = footprint_fn or measure_footprint
         self.check_fn = check_fn or check_argv
         self.say = say or (lambda text: print(text, flush=True))
@@ -791,7 +801,9 @@ class ModelSearch:
     def _summary(self, selection: dict, table: pd.DataFrame) -> None:
         metric, winner, counts = self.metric, selection['winner'], selection['counts']
         self.say('')
-        self.say(f'Model selection ({self.strategy.name}): ' + ', '.join(f'{v} {k.replace("_", " ")}' for k, v in counts.items()) + '.')
+        others = sum(1 for entry in self.ledger.load().values() if _finished(entry) and entry.get('protocol', 'cv') != 'cv')
+        self.say(f'Model selection ({self.strategy.name}): ' + ', '.join(f'{v} {k.replace("_", " ")}' for k, v in counts.items())
+                 + (f'; plus {others} screening or tuning runs on other protocols (unranked)' if others > 0 else '') + '.')
         interval = winner.get(f'oof_{metric}_interval') or {}
         sd = winner[f'cv_{metric}_fold_sd']
         self.say(f'Winner: {winner["label"]}')

@@ -46,9 +46,30 @@ def probe_problem(candidate, settings) -> Optional[str]:
         from handlers.video_backbones import hub_backbone
         info = hub_backbone(candidate.backbone)
         pretrained = not (info is not None and info.is_untrained) and not candidate.backbone.endswith('_tiny')
+        problem = _extractor_knows(candidate.backbone, info)
+        if problem:
+            return problem
         check_feature_input('rgb', candidate.backbone, pretrained, None, probe_frames(candidate))
     except Exception as exc:  # the extractor's own refusal, in its words
         return f'the feature extractor refuses it ({type(exc).__name__}: {exc})'
+    return None
+
+
+def _extractor_knows(version: str, hub) -> Optional[str]:
+    """The names src.video.feature_backbones.SnippetBackbone accepts, checked as it checks them, without building it:
+    a hub backbone, a native video architecture, or a torchvision frame model with registered weights."""
+    if hub is not None:
+        return None
+    from src.video.feature_backbones import DUMMY_VIDEO_BACKBONE, VIDEO3D_ARCHITECTURES, frame_family
+    if version in VIDEO3D_ARCHITECTURES or version == DUMMY_VIDEO_BACKBONE:
+        return None
+    if frame_family(version) is None:
+        return 'the feature extractor has no snippet backbone of that name'
+    import torchvision.models as tv_models
+    try:
+        tv_models.get_model_weights(version)
+    except ValueError:
+        return 'the feature extractor builds frame backbones from torchvision, which has no model of that name'
     return None
 
 

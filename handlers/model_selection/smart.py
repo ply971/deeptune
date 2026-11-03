@@ -71,9 +71,8 @@ class SmartStrategy(Strategy):
         if not ctx.probe_available:
             problems.append('no feature-probe runner is available here')
         else:
-            from handlers.model_selection.probe import probe_problem
             for item in items:
-                problem = probe_problem(item.candidate, ctx.settings)
+                problem = ctx.probe_problem(item.candidate)
                 if problem:
                     problems.append(f'{item.candidate.backbone}: {problem}')
         if problems:

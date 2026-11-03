@@ -496,3 +496,51 @@ def test_regret_study_smart_recovers_the_interaction_that_one_group_at_a_time_mi
         sampled = table[table['strategy'] == name]
         assert (sampled['cv_runs'].to_numpy() <= (smart['cv_runs'] + smart['screen_runs']).to_numpy()).all()
         assert (sampled['regret'] >= 0).all()
+
+
+def test_smart_with_cheaper_tuning_cross_validates_its_top_candidates_again_under_the_ranking_protocol(data, tmp_path):
+    out = tmp_path / 's'
+    assert _search(_argv(data, out, '--tune_epochs', '2', '--final_top', '2'), _runner()) == 0
+    entries = [e for e in _ledger(out) if e.get('stage') != 'checks']
+    tune = [e for e in entries if e['protocol'] == 'tune']
+    final = [e for e in entries if e['protocol'] == 'cv']
+    assert tune and {e['epochs'] for e in tune} == {2}
+    assert len(final) == 2 and {e['stage'] for e in final} == {'final'} and {e['epochs'] for e in final} == {4}
+    selection = json.loads((out / 'selection.json').read_text())
+    assert selection['winner']['key'] in {e['key'] for e in final}  # only ranking-protocol scores pick the winner
+    board = pd.read_csv(out / 'leaderboard.csv')
+    assert board['rank'].notna().sum() == 2 and set(board.loc[board['protocol'] == 'tune', 'rank'].isna()) == {True}
+
+
+def test_smart_resumes_with_the_same_decisions_after_an_interruption(data, tmp_path):
+    assert _search(_argv(data, tmp_path / 'a'), _runner()) == 0
+    assert _search(_argv(data, tmp_path / 'b'), _Interrupting(_runner(), 5)) == 130
+    resumed = _runner()
+    assert _search(_argv(data, tmp_path / 'b'), resumed) == 0
+    assert _trained(tmp_path / 'b') == _trained(tmp_path / 'a')
+    decisions = lambda out: [(d['stage'], d['decision']) for d in json.loads((out / 'stages.json').read_text())]
+    assert decisions(tmp_path / 'b') == decisions(tmp_path / 'a')
+    assert not any(role == 'probe' for role, _ in resumed.calls)  # the screens finished before Ctrl+C and are not run again
+    rerun = _runner()
+    assert _search(_argv(data, tmp_path / 'b'), rerun) == 0 and rerun.calls == []  # all done: nothing trains, no second sealed score
+
+
+def test_the_probe_screens_only_frozen_backbones_the_feature_extractor_builds(data, tmp_path):
+    from handlers.model_selection.probe import probe_problem
+    assert probe_problem(Candidate('vjepa2_tiny', num_frames=4), RunSettings()) is None
+    assert probe_problem(Candidate('r3d_18'), RunSettings()) is None
+    assert 'torchvision' in probe_problem(Candidate('resnet_tiny'), RunSettings())  # deeptune.py has it; the extractor does not
+    assert 'trains (lora:8)' in probe_problem(Candidate('r3d_18', train_mode='lora:8'), RunSettings())
+
+    class NoProbeForSiglip(simulate.SurfaceRunner):
+        @staticmethod
+        def probe_problem(candidate, settings):
+            return 'not extractable here' if candidate.backbone == 'siglip_tiny' else None
+    runner = NoProbeForSiglip(simulate.interaction_surface(0))
+    runner.full_epochs_value = 4
+    out = tmp_path / 's'
+    assert _search(_argv(data, out), runner) == 0
+    decision = json.loads((out / 'stages.json').read_text())[0]
+    assert decision['stage'] == 'screen protocol' and 'siglip_tiny: not extractable here' in decision['decision']
+    protocols = {e['protocol'] for e in _ledger(out) if e.get('stage', '').startswith('screen')}
+    assert protocols == {'screen'}  # one protocol for the whole screen: never a mix of probe and cv scores
