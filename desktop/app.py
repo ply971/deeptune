@@ -308,7 +308,30 @@ def on_device_changed(sender: ItemId = 0, app_data: Any = None) -> None:
     except ValueError as exc:
         _set_status(str(exc), ERROR)
         return
-    _set_status(f'Device: {device}', SUCCESS)
+    tool_pages.on_changed()  # a dry run checked on another device no longer counts
+    if device.startswith('cuda:') and device != 'cuda:0':
+        _set_status(f'Device: {device}. If this machine has no GPU {device[5:]}, runs fall back to the CPU; each log says '
+                    'which device it got.', WARNING)
+    else:
+        _set_status(f'Device: {device}', SUCCESS)
+
+
+def on_load_recipe(sender: ItemId = 0, app_data: Any = None) -> None:
+    """Read a JSON/YAML recipe into the page's controls, so the run sends what the page shows (--config is never sent)."""
+    path = _dialog_path(app_data)
+    if not path:
+        return
+    try:
+        cfg, keys = gc.recipe_config(_build_run_config(), Path(path))
+    except (OSError, ValueError) as exc:
+        dpg.set_value('recipe_status', str(exc))
+        dpg.configure_item('recipe_status', color=ERROR)
+        _set_status('Recipe not loaded', ERROR)
+        return
+    apply_config(cfg)
+    dpg.set_value('recipe_status', f'Loaded {Path(path).name} into the controls: {", ".join(keys) or "nothing"}.')
+    dpg.configure_item('recipe_status', color=SUCCESS)
+    _set_status('Recipe loaded', SUCCESS)
 
 
 # ---------------------------------------------------------------------------
@@ -1125,7 +1148,8 @@ def on_test_run_selected(sender: ItemId = 0, app_data: Any = None, user_data: st
         return
     if _selected_test_run is None or _selected_test_run.run_dir != results.run_dir:
         # An override describes one run's model; another run starts from its own record again.
-        ow.apply([opt for opt in co.INFER_OPTIONS if opt.section == co.S_OVERRIDE], INFER, {})
+        ow.apply([opt for opt in co.INFER_OPTIONS if opt.section in co.OVERRIDE_SECTIONS], INFER, {})
+        dpg.set_value('infer_confirm_model_overrides', False)
     _selected_test_run = results
     # Whatever predictions/metrics are on screen belong to whichever run was
     # selected (or tested) before this one -- clear them so switching runs
@@ -1145,13 +1169,27 @@ def on_test_run_selected(sender: ItemId = 0, app_data: Any = None, user_data: st
     dpg.set_value('test_run_info_text', info)
     dpg.configure_item('test_run_button', enabled=True)
     _clear_test_results('Choose new data and click Test model to see predictions for this run.')
+    on_test_options_changed()
 
 
 def _test_config(results: gc.RunResults, data: Path, out: Path) -> gc.InferenceConfig:
     """What the Test page runs: the run's record, plus the page's own options."""
     cfg = gc.infer_config_from_run(results, data=data, out=out, batch_size=_integer('test_batch_size_input', 16))
     cfg.options = ow.read(co.INFER_OPTIONS, INFER)[0]
+    cfg.confirm_model_overrides = _flag('infer_confirm_model_overrides')
     return cfg
+
+
+def on_test_options_changed(sender: ItemId = 0, app_data: Any = None) -> None:
+    """Model-defining overrides keep Test model disabled until their risk is confirmed."""
+    model = gc.model_overrides(gc.InferenceConfig(options=ow.read(co.INFER_OPTIONS, INFER)[0]))
+    blocked = bool(model) and not _flag('infer_confirm_model_overrides')
+    dpg.configure_item('infer_confirm_group', show=bool(model))
+    ready = (_selected_test_run is not None and _selected_test_run.checkpoint_path is not None and _current_infer_run is None)
+    dpg.configure_item('test_run_button', enabled=ready and not blocked)
+    if blocked:
+        dpg.set_value('test_stage_text', 'These overrides change the model rebuilt from the trained weights, or its labels: '
+                                         'tick the box to confirm, or clear them.')
 
 
 def on_test_data_folder_selected(sender: ItemId, app_data: Any) -> None:
@@ -1255,6 +1293,7 @@ def poll_infer_run_state() -> None:
         _infer_line_buffer.feed(f"\n[infer] {message}\n")
         dpg.set_value('test_log_box', _infer_line_buffer.render())
     _current_infer_run = None
+    on_test_options_changed()
 
 
 def _clear_test_results(message: str) -> None:
@@ -1469,6 +1508,10 @@ def _build_dialogs() -> None:
     with ui.file_dialog(directory_selector=False, show=False, callback=on_load_settings,
                         tag='file_dialog_load_settings', width=800, height=480):
         dpg.add_file_extension('.json')
+    with ui.file_dialog(directory_selector=False, show=False, callback=on_load_recipe,
+                        tag='file_dialog_load_recipe', width=800, height=480):
+        for ext in ('.json', '.yaml', '.yml'):
+            dpg.add_file_extension(ext)
     with ui.file_dialog(directory_selector=True, show=False, callback=on_data_folder_selected,
                         tag="file_dialog_data_folder", width=800, height=480):
         pass
@@ -1685,6 +1728,12 @@ def _build_model_page() -> None:
             with _card("ADVANCED SETTINGS"):
                 dpg.add_text('Every other deeptune.py setting. Each starts at the command-line default, and only the '
                              'ones you change are passed on. Hover a setting for what it does.', color=TEXT_MUTED, wrap=850)
+                with ui.group(horizontal=True):
+                    dpg.add_button(label='Load recipe file...', callback=on_show_dialog, user_data='file_dialog_load_recipe')
+                    _tip('A JSON or YAML file of flag names without dashes, as deeptune.py --config reads, e.g. '
+                         'learning_rate: 3e-4. Its values are put into the controls on these pages, so the run sends '
+                         'exactly what you see; the file itself is not passed on. An unknown key refuses the whole file.')
+                    dpg.add_text('', tag='recipe_status', color=TEXT_MUTED, wrap=650)
                 ow.render(co.DEEPTUNE_OPTIONS, DT, on_config_changed, sections=co.DEEPTUNE_SECTIONS)
 
 
@@ -1783,7 +1832,12 @@ def _build_test_page() -> None:
         with _card("TEST OPTIONS"):
             dpg.add_input_int(tag='test_batch_size_input', label='Batch size', default_value=16, width=150, min_value=1,
                               min_clamped=True)
-            ow.render(co.INFER_OPTIONS, INFER, None, open_sections=(co.S_TEST,), sections=(co.S_TEST, co.S_OVERRIDE))
+            ow.render(co.INFER_OPTIONS, INFER, on_test_options_changed, open_sections=(co.S_TEST,),
+                      sections=(co.S_TEST, *co.OVERRIDE_SECTIONS))
+            with ui.group(tag='infer_confirm_group', show=False):
+                dpg.add_text(gc.MODEL_OVERRIDE_WARNING, color=WARNING, wrap=850)
+                dpg.add_checkbox(tag='infer_confirm_model_overrides', label='I understand these overrides change the trained '
+                                 'model; run anyway', callback=on_test_options_changed)
         dpg.add_spacer(height=10)
         with _card("LAUNCH"):
             with ui.group(horizontal=True):

@@ -42,9 +42,8 @@ IMAGE_MODEL_VERSIONS: dict[str, list[str]] = {
     "siglip": ["siglip"],
 }
 
-# Video backbones the GUI offers. SigLIP works as a frame backbone from the CLI
-# (--modality video --model_version siglip, src/video/siglip_backbone.py), but
-# its weights are a separate download, so the GUI does not list it yet.
+# torchvision video backbones the GUI offers. SigLIP and the other Hugging Face backbones are offered too, through
+# VIDEO_HUB_MODEL_VERSIONS below (G1), not in this list.
 VIDEO_FRAME_MODEL_VERSIONS: list[str] = [
     v for family, versions in IMAGE_MODEL_VERSIONS.items() if family != "siglip" for v in versions
 ]
@@ -65,8 +64,9 @@ MODEL_VERSIONS_BY_MODALITY: dict[str, list[str]] = {
 VIDEO_HUB_MODEL_VERSIONS: list[str] = [v for v, b in HUB_BACKBONES.items() if not b.is_untrained]
 GUI_MODEL_VERSIONS: dict[str, list[str]] = {**MODEL_VERSIONS_BY_MODALITY,
                                             "video": [*MODEL_VERSIONS_BY_MODALITY["video"], *VIDEO_HUB_MODEL_VERSIONS]}
-# Accepted from the command line: the untrained tiny models for tests and smoke runs, and the hub backbones (which the
-# GUI offers through VIDEO_HUB_MODEL_VERSIONS).
+# Video model versions validate_config accepts beyond MODEL_VERSIONS_BY_MODALITY. The name predates G1: the hub
+# backbones here are offered in the GUI (VIDEO_HUB_MODEL_VERSIONS); only the untrained tiny and dummy models, for tests and
+# smoke runs, are command-line only.
 VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d", "siglip2_b16", "siglip2_tiny",
                                             "vjepa2_vitl", "vjepa2_tiny", "videomae_b16", "videomae_v2_b16", "videomae_tiny",
                                             "dinov3_vitb16", "dinov3_tiny"]
@@ -239,6 +239,8 @@ def options_issues(cfg: RunConfig) -> list[str]:
         issues.append('"Train the whole encoder" cannot go with Freeze backbone or PEFT / LoRA.')
     if get('video_flip') and not get('video_augment'):
         issues.append('Flipping is part of augmentation: tick "Augment training clips" too.')
+    if get('resume') and get('validation') != 'holdout':
+        issues.append('--resume cannot be combined with --validation: every fold must train a fresh model.')
     if get('cv_only') and get('validation') == 'holdout':
         issues.append('Cross-validate only needs the kfold or bootstrap632 validation scheme.')
     if get('cv_only') and (get('test_df') or get('target_error') is not None or get('export_dfanalyze')):
@@ -353,6 +355,70 @@ def effective_mode(cfg: RunConfig) -> str:
     return cfg.mode
 
 
+# deeptune.py flag destinations that are RunConfig fields of another name.
+RECIPE_FIELDS = {'type': 'gandalf_type'}
+
+
+def recipe_config(cfg: RunConfig, path: Path) -> tuple[RunConfig, list[str]]:
+    """`cfg` with the values of a JSON or YAML recipe file, read the way deeptune.py reads --config (keys are flag names
+    without dashes). The page then shows every value the run will use, and --config itself is never sent. Refuses the
+    whole file, naming each problem, on an unknown key or a value of the wrong type. Returns (config, keys applied)."""
+    from handlers.training_args import load_config_file
+    data = load_config_file(path)
+    specs = co.by_key(co.DEEPTUNE_OPTIONS)
+    fields_by_key = {f.name: f for f in fields(RunConfig) if f.name != 'options'}
+    changes, options, problems = {}, dict(cfg.options or {}), []
+    for raw_key, value in data.items():
+        key = str(raw_key).lstrip('-').replace('-', '_')
+        if value is None:
+            continue
+        field_name = RECIPE_FIELDS.get(key, key)
+        if field_name in fields_by_key:
+            current = getattr(cfg, field_name)
+            try:
+                changes[field_name] = _recipe_value(current, value, field_name)
+            except (TypeError, ValueError) as exc:
+                problems.append(f'{raw_key}: {exc}')
+        elif key in specs:
+            parsed, problem = _recipe_option(specs[key], value)
+            if problem:
+                problems.append(f'{raw_key}: {problem}')
+            else:
+                options[key] = parsed
+        else:
+            problems.append(f'{raw_key}: not a setting of this page (a deeptune.py flag name without dashes)')
+    if problems:
+        raise ValueError(f'{Path(path).name} was not loaded: ' + '; '.join(problems))
+    return replace(cfg, **changes, options=options), sorted(str(k) for k in data if data[k] is not None)
+
+
+def _recipe_value(current, value, name: str):
+    if name in ('df', 'out'):
+        return Path(str(value)).expanduser()
+    if isinstance(current, bool):
+        if not isinstance(value, bool):
+            raise ValueError('must be true or false')
+        return value
+    if isinstance(current, int):
+        return int(str(value))
+    if isinstance(current, float):
+        return float(str(value))
+    if isinstance(current, list):
+        return [str(v) for v in (value if isinstance(value, list) else [value])]
+    return str(value)
+
+
+def _recipe_option(opt: co.Opt, value):
+    if opt.kind in co.LIST_KINDS:
+        value = [str(v) for v in (value if isinstance(value, list) else [value])]
+        if opt.kind == co.MULTI and set(value) - set(opt.choices):
+            return None, f'choose from {", ".join(opt.choices)}'
+        return value, None
+    if opt.kind == co.BOOL:
+        return (value, None) if isinstance(value, bool) else (None, 'must be true or false')
+    return co.parse_text(opt, str(value))
+
+
 def resolved_config(cfg: RunConfig) -> RunConfig:
     return replace(cfg, df=Path(cfg.df).expanduser().resolve() if cfg.df is not None else None,
                    out=Path(cfg.out).expanduser().resolve() if cfg.out is not None else None)
@@ -375,8 +441,13 @@ def write_json(path: Path, payload: dict) -> None:
             temporary.unlink(missing_ok=True)
 
 
+# Not saved in settings files or the session: accepting a weights licence is a deliberate act, each session.
+UNSAVED_OPTIONS = ('accept_weights_licence',)
+
+
 def save_config(cfg: RunConfig, path: Path) -> None:
     payload = asdict(resolved_config(cfg))
+    payload['options'] = {key: value for key, value in (payload.get('options') or {}).items() if key not in UNSAVED_OPTIONS}
     for key in ('df', 'out'):
         payload[key] = str(payload[key]) if payload[key] is not None else None
     write_json(path, {'version': 1, 'config': payload})
@@ -606,6 +677,8 @@ class InferenceConfig:
     # video only: the run's recorded test-time data-layer flags (sampling,
     # decoder, --test_clips, workers), passed back to infer.py unchanged.
     video_options: dict = field(default_factory=dict)
+    # Model-defining overrides run only when the user ticked the box that names the risk.
+    confirm_model_overrides: bool = False
     # The Test page's own controls (G1): {key: value} for desktop/cli_options.INFER_OPTIONS. An "override" control
     # replaces the recorded value of its flag when filled in; a non-empty `ensemble` runs the ensemble instead.
     options: dict = field(default_factory=dict)
@@ -713,7 +786,8 @@ def build_infer_argv(cfg: InferenceConfig) -> list[str]:
             raise ValueError('New data and an output folder are both required.')
         # infer.py refuses every other flag with --ensemble: each member uses the settings it recorded.
         argv = ['--modality', 'video', '--data', str(cfg.data), '--out', str(cfg.out), '--batch_size', str(cfg.batch_size)]
-        if cfg.label_mapping_path is not None:
+        # Class names come from the selected run, so they are passed only when that run is one of the members.
+        if cfg.label_mapping_path is not None and selected_run_is_member(cfg):
             argv += ['--label_mapping', str(cfg.label_mapping_path)]
         return argv + co.options_argv(co.INFER_OPTIONS, options, lambda opt: opt.key in co.INFER_ENSEMBLE_KEYS)
     if cfg.checkpoint_path is None or cfg.data is None or cfg.out is None:
@@ -760,7 +834,59 @@ def build_infer_argv(cfg: InferenceConfig) -> list[str]:
         if cfg.history_df_paths:
             argv += ['--history_df', *[str(p) for p in cfg.history_df_paths]]
     extra = co.options_argv(co.INFER_OPTIONS, options, lambda opt: opt.key not in co.INFER_ENSEMBLE_KEYS)
+    off = co.removed_flags(co.INFER_OPTIONS, options)
+    if off:  # a three-way override set to off drops a recorded store_true flag
+        argv = [word for word in argv if word not in off]
     return co.merge_flags(argv, extra) if extra else argv
+
+
+def selected_run_is_member(cfg: InferenceConfig) -> bool:
+    """Whether the Test page's selected run is one of the ensemble's listed members (its folder, or a file inside it)."""
+    if cfg.run_dir is None:
+        return False
+    run = Path(cfg.run_dir).expanduser().resolve()
+    for member in infer_option(cfg, 'ensemble') or []:
+        path = Path(member).expanduser().resolve()
+        if path == run or run in path.parents:
+            return True
+    return False
+
+
+def model_overrides(cfg: InferenceConfig) -> dict:
+    """The overrides that change the rebuilt model or its labels (cli_options.S_MODEL_OVERRIDE), set to a value."""
+    specs = co.by_key(co.INFER_OPTIONS)
+    return {key: value for key, value in (cfg.options or {}).items()
+            if key in co.MODEL_OVERRIDE_KEYS and not co.is_default(specs[key], value)}
+
+
+def overrides_record(cfg: InferenceConfig, argv: list[str]) -> Optional[dict]:
+    """What overrides.json says about a test that replaced recorded settings, or None when nothing was replaced."""
+    specs = co.by_key(co.INFER_OPTIONS)
+    chosen = {key: value for key, value in (cfg.options or {}).items()
+              if specs.get(key) is not None and specs[key].section in co.OVERRIDE_SECTIONS and not co.is_default(specs[key], value)}
+    if not chosen:
+        return None
+    model = model_overrides(cfg)
+    return {'recorded_run': str(cfg.run_dir) if cfg.run_dir else None,
+            'checkpoint': str(cfg.checkpoint_path) if cfg.checkpoint_path else None,
+            'test_time_overrides': {key: value for key, value in chosen.items() if key not in model},
+            'model_overrides': model, 'model_overrides_confirmed': bool(cfg.confirm_model_overrides),
+            'warning': (MODEL_OVERRIDE_WARNING if model else None), 'argv': list(argv)}
+
+
+MODEL_OVERRIDE_WARNING = ('These overrides change the model rebuilt from the trained weights, or its labels. The weights may '
+                          'still load and give confident predictions that are wrong. They are not what the run was trained '
+                          'and evaluated with.')
+
+
+def write_overrides(cfg: InferenceConfig, argv: list[str]) -> Optional[Path]:
+    """overrides.json next to the predictions, when the test replaced recorded settings."""
+    record = overrides_record(cfg, argv)
+    if record is None:
+        return None
+    path = Path(cfg.out) / 'overrides.json'
+    write_json(path, record)
+    return path
 
 
 def validate_infer_config(cfg: InferenceConfig) -> list[str]:
@@ -798,6 +924,11 @@ def validate_infer_config(cfg: InferenceConfig) -> list[str]:
                           + ', '.join(recorded + (['Answer every clip'] if values.get('no_abstain') else [])) + '.')
     elif values.get('allow_unverified_labels'):
         issues.append('"Allow unverified class indices" only applies to an ensemble.')
+    model = model_overrides(cfg) if not ensemble else {}
+    if model and not cfg.confirm_model_overrides:
+        names = ', '.join(co.by_key(co.INFER_OPTIONS)[key].label for key in model)
+        issues.append(f'{names}: these change the model rebuilt from the trained weights, or its labels. Tick "I understand '
+                      'these overrides change the trained model" to run anyway.')
     if cfg.batch_size < 1:
         issues.append('Batch size must be at least 1.')
     return issues

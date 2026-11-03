@@ -20,8 +20,11 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterable, Optional
 
 BOOL, INT, FLOAT, TEXT, CHOICE, MULTI, WORDS, LINES = 'bool', 'int', 'float', 'text', 'choice', 'multi', 'words', 'lines'
+# A store_true flag as an override of a recorded value: None keeps the record, True sends the flag, False removes it.
+TRI = 'tristate'
 LIST_KINDS = (MULTI, WORDS, LINES)
 DEFAULT_LABEL = '(default)'  # the combo item of a choice whose CLI default is "not given"
+TRI_ITEMS = ('(recorded)', 'on', 'off')
 
 
 @dataclass(frozen=True)
@@ -54,11 +57,10 @@ class Opt:
 
 
 def as_override(opt: Opt, section: str) -> Opt:
-    """The same flag as a "blank = keep what was recorded" control: nothing is emitted until the user sets it."""
-    kind = TEXT if opt.kind in (INT, FLOAT) else opt.kind
-    number = {INT: 'int', FLOAT: 'float'}.get(opt.kind)
-    return replace(opt, kind=NUMBER_TEXT[number] if number else kind, default=[] if opt.kind in LIST_KINDS else
-                   (False if opt.kind == BOOL else None), section=section, required=False)
+    """The same flag as a "blank = keep what was recorded" control: nothing is emitted until the user sets it. A
+    store_true flag becomes a three-way choice, so an override can also turn a recorded flag off."""
+    kind = {INT: NUMBER_TEXT['int'], FLOAT: NUMBER_TEXT['float'], BOOL: TRI}.get(opt.kind, opt.kind)
+    return replace(opt, kind=kind, default=[] if opt.kind in LIST_KINDS else None, section=section, required=False)
 
 
 # Number controls whose default is "not given" are text boxes (blank = not given); these kinds parse them.
@@ -71,6 +73,8 @@ def is_default(opt: Opt, value) -> bool:
         return list(value or []) == list(opt.default or [])
     if opt.kind == BOOL:
         return bool(value) == bool(opt.default)
+    if opt.kind == TRI:
+        return value is None
     if value is None or value == '':
         return opt.default is None
     if isinstance(value, float) and isinstance(opt.default, (int, float)) and not isinstance(opt.default, bool):
@@ -88,8 +92,8 @@ def option_argv(opt: Opt, value) -> list[str]:
     """The flag and its value(s), or [] at the CLI default."""
     if is_default(opt, value) and not opt.required:
         return []
-    if opt.kind == BOOL:
-        return [opt.flag] if value else []
+    if opt.kind in (BOOL, TRI):
+        return [opt.flag] if value else []  # TRI False removes the flag: see removed_flags
     if opt.kind in LIST_KINDS:
         words = [format_value(v) for v in value or []]
         return [opt.flag, *words] if words or opt.remainder else []
@@ -110,10 +114,23 @@ def options_argv(specs: Iterable[Opt], values: dict, applies=None) -> list[str]:
     return argv + tail
 
 
+def removed_flags(specs: Iterable[Opt], values: dict) -> list[str]:
+    """Flags that three-way overrides set to off: the recorded argv must drop them."""
+    return [opt.flag for opt in specs if opt.kind == TRI and values.get(opt.key) is False]
+
+
 def parse_text(opt: Opt, raw) -> tuple[Any, Optional[str]]:
     """A widget's raw value -> (value, problem)."""
     if opt.kind == BOOL:
         return bool(raw), None
+    if opt.kind == TRI:
+        if raw in (None, '', TRI_ITEMS[0]):
+            return None, None
+        if raw in ('on', 'off'):
+            return raw == 'on', None
+        if isinstance(raw, bool):
+            return raw, None
+        return None, f'{opt.label}: choose {", ".join(TRI_ITEMS)}.'
     if opt.kind == MULTI:
         return [c for c in opt.choices if c in (raw or [])], None
     if opt.kind in (WORDS, LINES):
@@ -171,6 +188,9 @@ def coerce_values(specs: Iterable[Opt], values: dict) -> tuple[dict, list[str]]:
             continue
         if opt.kind == BOOL and not isinstance(raw, bool):
             problems.append(f'{opt.label}: expected true or false.')
+            continue
+        if opt.kind == TRI and raw is not None and not isinstance(raw, bool):
+            problems.append(f'{opt.label}: expected true, false or null.')
             continue
         if opt.kind in (INT, OPT_INT) and raw is not None and (isinstance(raw, bool) or not isinstance(raw, int)):
             problems.append(f'{opt.label}: expected a whole number.')
@@ -294,8 +314,9 @@ DEEPTUNE_OPTIONS = (
         False, (), S_EVAL, VISION),
     Opt('--precision', CHOICE, 'Mixed precision', 'bf16 or fp16 on CUDA (default no). Does nothing on CPU.', 'no',
         ('no', 'bf16', 'fp16'), S_RECIPE, VISION),
-    Opt('--seed', OPT_INT, 'Seed', 'Seeds everything, and in deeptune.py also the data split (default: 42 with the reproducible '
-        'seed, else random).', None, (), S_RECIPE, VISION),
+    Opt('--seed', OPT_INT, 'Seed', 'Seeds everything, and in deeptune.py also the data split. Blank: 42, because the GUI ticks '
+        '"Use a reproducible seed (42)" (--fixed-seed) by default for reproducibility; untick it there for a random, recorded '
+        'seed. The command line has no fixed seed unless asked.', None, (), S_RECIPE, VISION),
     Opt('--checkpoint_every', INT, 'Checkpoint every N epochs', 'Write last_checkpoint.pt (default 0 = off).', 0, (), S_RECIPE, VISION),
     Opt('--resume', TEXT, 'Resume from checkpoint', 'A last_checkpoint.pt; use the same settings as the first run.', None, (),
         S_RECIPE, VISION, browse='file'),
@@ -323,8 +344,6 @@ DEEPTUNE_OPTIONS = (
     Opt('--experiment_logger', CHOICE, 'Experiment logger', 'Also log to MLflow or W&B if installed (default none).', 'none',
         ('none', 'mlflow', 'wandb'), S_RECIPE, VISION),
     Opt('--experiment_name', TEXT, 'Experiment name', 'Run name for the experiment logger.', None, (), S_RECIPE, VISION),
-    Opt('--config', TEXT, 'Config file (JSON/YAML)', 'Default values for any flag; the settings on these pages win.', None, (),
-        S_RECIPE, browse='file'),
     Opt('--validation', CHOICE, 'Validation scheme', 'holdout: only the test score. kfold: k fresh models. bootstrap632: '
         "Efron's .632+. Training time is multiplied by the number of models.", 'holdout', ('holdout', 'kfold', 'bootstrap632'),
         S_EVAL, VIDEO),
@@ -365,20 +384,34 @@ def deeptune_applies(modality: str):
 # infer.py (Test page). The run's record supplies the model settings (desktop/config.infer_config_from_run); these
 # controls run the test, and the "override" ones replace a recorded value only when the user fills them in.
 # ---------------------------------------------------------------------------------------------------------------------
-S_TEST, S_OVERRIDE = 'Test options', 'Advanced: override what the run recorded (blank = recorded)'
+S_TEST = 'Test options'
+# Two kinds of override, blank = what the run recorded. Test-time ones change how clips are read for this test. Model-
+# defining ones change the model rebuilt from the trained weights, or its labels: the weights may still load (a pooling or
+# a TSM fold is not in the state dict) and give confident, wrong predictions, so they need an explicit confirmation.
+S_OVERRIDE = 'Advanced: test-time settings (blank = recorded)'
+S_MODEL_OVERRIDE = 'Advanced: change the rebuilt model or its labels (blank = recorded)'
+OVERRIDE_SECTIONS = (S_OVERRIDE, S_MODEL_OVERRIDE)
+_VIDEO_DATA = {opt.key: replace(opt, modalities=()) for opt in VIDEO_DATA_OPTIONS}
 INFER_OPTIONS = (
     Opt('--no_abstain', BOOL, 'Answer every clip (ignore "not sure")', "Ignore the run's abstention.json and give every "
         "clip's prediction.", False, (), S_TEST),
     Opt('--accept_weights_licence', MULTI, 'I accept the licence of these weights', 'Only for opt-in weights whose run did not '
         'record the acceptance.', (), HUB_LICENCES, S_TEST),
-    Opt('--ensemble', LINES, 'Ensemble with these runs', 'Video only: one trained run (folder or weights file) per line, besides '
-        'the selected run. Each member uses its own recorded settings.', (), (), S_TEST, browse='folder'),
+    Opt('--ensemble', LINES, 'Ensemble of exactly these runs', 'Video only: average the class probabilities of exactly the runs '
+        'listed here, one trained run (folder or weights file) per line, at least two. The run selected above is a member '
+        'only if it is listed. Each member uses its own recorded settings.', (), (), S_TEST, browse='folder'),
     Opt('--allow_unverified_labels', BOOL, 'Allow unverified class indices', 'With an ensemble: average runs even if their '
         'class indices cannot be verified. The result says so.', False, (), S_TEST),
     *(as_override(opt, S_OVERRIDE) for opt in (
-        Opt('--test_clips', INT, 'Test clips per video', '', 1),
-        Opt('--test_crops', CHOICE, 'Test crops per clip', '', 1, (1, 3, 5)),
-        Opt('--label_mapping', TEXT, 'Label mapping file', "The run's data_splits_*/label_mapping.json.", browse='file'),
+        Opt('--test_clips', INT, 'Test clips per video', 'More clips per video, averaged.', 1),
+        Opt('--test_crops', CHOICE, 'Test crops per clip', 'More spatial views per clip, averaged.', 1, (1, 3, 5)),
+        *(_VIDEO_DATA[key] for key in ('video_backend', 'temporal_sampling', 'clip_stride', 'clip_duration_sec', 'num_workers',
+                                       'frame_cache')),
+        replace(ARCH_OPTIONS[[o.key for o in ARCH_OPTIONS].index('motion_cache')], modalities=()),
+    )),
+    *(as_override(opt, S_MODEL_OVERRIDE) for opt in (
+        Opt('--label_mapping', TEXT, 'Label mapping file', "Class names for the indices; the run's own "
+            "data_splits_*/label_mapping.json by default. A wrong file renames every prediction.", browse='file'),
         Opt('--model_version', TEXT, 'Model version', ''),
         Opt('--model_str', CHOICE, 'Text model family', '', None, ('BERT', 'gpt2')),
         Opt('--num_classes', INT, 'Number of classes', '', 2),
@@ -388,11 +421,11 @@ INFER_OPTIONS = (
         Opt('--lora_rank', INT, 'LoRA rank', ''),
         Opt('--freeze-backbone', BOOL, 'Freeze backbone', ''),
         Opt('--use-peft', BOOL, 'PEFT / LoRA model', ''),
-        Opt('--num_frames', INT, 'Frames per clip', '', 8),
+        Opt('--num_frames', INT, 'Frames per clip', 'The clip length the model was built for.', 8),
         Opt('--pooling', TEXT, 'Pooling or architecture spec', 'e.g. mean, attention or tsm:tsm_fold_div=8.', 'mean'),
-        *(replace(opt, modalities=()) for opt in ARCH_OPTIONS),
+        *(replace(opt, modalities=()) for opt in ARCH_OPTIONS if opt.key != 'motion_cache'),
         Opt('--unfreeze_backbone', BOOL, 'Whole encoder trained', ''),
-        *(replace(opt, modalities=()) for opt in VIDEO_DATA_OPTIONS if opt.key not in ('test_clips', 'test_crops')),
+        *(_VIDEO_DATA[key] for key in ('motion_source', 'frame_cache_size', 'frame_resize')),
         Opt('--target', TEXT, 'Target column', '', 'labels'),
         Opt('--finetuning-mode', BOOL, 'TabPFN fine-tuned', ''),
         Opt('--time_idx_column', TEXT, 'Time index column', '', 'labels'),
@@ -403,6 +436,7 @@ INFER_OPTIONS = (
 )
 # With --ensemble, infer.py refuses every other flag (infer.ENSEMBLE_FLAGS).
 INFER_ENSEMBLE_KEYS = ('accept_weights_licence', 'allow_unverified_labels', 'ensemble')
+MODEL_OVERRIDE_KEYS = tuple(opt.key for opt in INFER_OPTIONS if opt.section == S_MODEL_OVERRIDE)
 
 
 # ---------------------------------------------------------------------------------------------------------------------

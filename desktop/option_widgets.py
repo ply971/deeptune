@@ -45,6 +45,9 @@ def _widget(prefix: str, opt: co.Opt, callback: Optional[Callable]) -> None:
         elif opt.kind == co.FLOAT:
             dpg.add_input_double(tag=t, label=opt.label, default_value=float(opt.default), format='%.6g', width=150,
                                  step=0, callback=callback)
+        elif opt.kind == co.TRI:
+            dpg.add_combo(tag=t, label=opt.label, items=list(co.TRI_ITEMS), width=220, callback=callback,
+                          default_value=co.TRI_ITEMS[0])
         elif opt.kind == co.CHOICE:
             items = [str(c) for c in opt.choices]
             if opt.default is None:
@@ -131,6 +134,8 @@ def apply(specs: Iterable[co.Opt], prefix: str, values: dict) -> None:
             dpg.set_value(t, int(value))
         elif opt.kind == co.FLOAT:
             dpg.set_value(t, float(value))
+        elif opt.kind == co.TRI:
+            dpg.set_value(t, co.TRI_ITEMS[0] if value is None else ('on' if value else 'off'))
         elif opt.kind == co.CHOICE:
             dpg.set_value(t, co.DEFAULT_LABEL if value is None else str(value))
         elif opt.kind == co.LINES:
