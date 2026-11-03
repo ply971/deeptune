@@ -436,3 +436,9 @@ Keep entries short and factual. This is the handoff between sessions.
 - `tests/test_gui_coverage.py` drives each flag's control through the GUI's argv builder and the real parser; mutation proof: dropping `--use-peft` or `--save_video` fails it. `tests/test_gui_pages.py` covers the pages. Targeted runs: `98 passed` (new), `315 passed, 2 warnings` (desktop + hub), `9 passed` (followups), `254 passed, 2 skipped` (CLI neighbours). Full suite owed.
 - For review: hub backbones offered via `GUI_MODEL_VERSIONS` so `test_hub_backbones.py`'s "GUI list is Phase 7" assertion still holds; its message is now stale. Details in `reports/G1.md`.
 - Next: click through the new pages once, a GPU check of a GUI-launched run, ml-critic review, then Wave 3.
+
+### 2026-11-03 — G1 fix round after V-058 (builder)
+- Must-fixes done: sealed-test wording from `selection.json` facts; Load recipe file instead of `--config` (allow-listed with reason); Test-page overrides split into test-time and model-defining (confirmation tick, log warning, `overrides.json`, three-way yes/no); coverage test now presses each page's Start handler and parses the captured argv (deeptune.py lines through `deeptune.parse_args`, video flags in a video run); ensemble = exactly the listed runs, labels only from a member; frozen-build launches in model selection. Nice-to-haves done (readers, device records, licences unsaved, strategy-flag sync, resume+validation, Seed tooltip).
+- Critic mutants: all 8 caught; my two earlier mutants caught. `test_hub_backbones.py` GUI-list test reworded on its own commit (user decision).
+- Runs: `121 passed` (G1 tests), `315 passed, 2 warnings` (desktop + hub), `9 passed` (followups), `53 passed, 1 warning` (model selection). Full suite still owed.
+- Disk: C: hit 0 MB free during the round; I deleted only my own pytest temp folders (~800 MB). The coordinator should free space before the full suite.
