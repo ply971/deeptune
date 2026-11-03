@@ -30,6 +30,9 @@ jobs:
         pip install torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
         pip install -r requirements.txt
         pip install pytest
+        # select_model.py --search bayes needs Optuna (pyproject's optional `search` extra), so its tests run here too;
+        # without it they skip with a reason.
+        pip install "optuna>=4,<6"
 
     - name: Check (pip check + full test suite)
       env:
