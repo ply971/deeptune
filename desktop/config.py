@@ -22,7 +22,8 @@ import pandas as pd
 # Torch-free (the GUI process must never import torch); see trainers/param_count.py.
 from trainers.param_count import param_count_issue
 from handlers.video_arch import parse_pooling_spec
-from handlers.video_backbones import is_hub_video_backbone
+from handlers.video_backbones import HUB_BACKBONES, hub_backbone, is_hub_video_backbone, weights_choice_problem
+from desktop import cli_options as co
 
 # ---------------------------------------------------------------------------
 # What each modality actually accepts as --model_version, and what each
@@ -58,7 +59,14 @@ MODEL_VERSIONS_BY_MODALITY: dict[str, list[str]] = {
     "timeseries": ["deepAR"],
     "video": [*VIDEO_FRAME_MODEL_VERSIONS, *VIDEO_NATIVE_MODEL_VERSIONS],
 }
-# Accepted from the command line, not offered in the GUI: SigLIP, and the untrained tiny models for tests and smoke runs.
+# Pretrained backbones loaded through transformers (R1, handlers/video_backbones.py). The GUI offers them in the model
+# list of the video modality (GUI_MODEL_VERSIONS), after the torchvision models above; opt-in weights also need their
+# licence ticked on the Model page.
+VIDEO_HUB_MODEL_VERSIONS: list[str] = [v for v, b in HUB_BACKBONES.items() if not b.is_untrained]
+GUI_MODEL_VERSIONS: dict[str, list[str]] = {**MODEL_VERSIONS_BY_MODALITY,
+                                            "video": [*MODEL_VERSIONS_BY_MODALITY["video"], *VIDEO_HUB_MODEL_VERSIONS]}
+# Accepted from the command line: the untrained tiny models for tests and smoke runs, and the hub backbones (which the
+# GUI offers through VIDEO_HUB_MODEL_VERSIONS).
 VIDEO_CLI_ONLY_MODEL_VERSIONS: list[str] = ["siglip", "siglip_tiny", "resnet_tiny", "dummy_video3d", "siglip2_b16", "siglip2_tiny",
                                             "vjepa2_vitl", "vjepa2_tiny", "videomae_b16", "videomae_v2_b16", "videomae_tiny",
                                             "dinov3_vitb16", "dinov3_tiny"]
@@ -114,6 +122,10 @@ class RunConfig:
     # timeseries / deepAR only
     time_idx_column: str = "labels"
 
+    # Every other deeptune.py flag (G1): {key: value} for desktop/cli_options.DEEPTUNE_OPTIONS. Only values that differ
+    # from the CLI default are sent, and only for the modalities where the flag applies.
+    options: dict = field(default_factory=dict)
+
 
 def build_argv(cfg: RunConfig) -> list[str]:
     """Translate a RunConfig into deeptune.py's onecall CLI argument list."""
@@ -168,7 +180,80 @@ def build_argv(cfg: RunConfig) -> list[str]:
     if cfg.modality == "timeseries":
         argv += ["--time_idx_column", cfg.time_idx_column]
 
+    argv += co.options_argv(co.DEEPTUNE_OPTIONS, cfg.options or {}, co.deeptune_applies(cfg.modality))
     return argv
+
+
+def option_value(cfg, key: str):
+    """A G1 option of `cfg` (RunConfig.options), or its CLI default."""
+    return (cfg.options or {}).get(key, co.by_key(co.DEEPTUNE_OPTIONS)[key].empty)
+
+
+def options_issues(cfg: RunConfig) -> list[str]:
+    """GUI-side checks of the G1 options. deeptune.py checks everything again; these catch the common mistakes before a
+    process starts, and say how to fix them."""
+    specs = co.by_key(co.DEEPTUNE_OPTIONS)
+    values, issues = co.coerce_values(co.DEEPTUNE_OPTIONS, cfg.options or {})
+    if issues:
+        return issues
+    get = lambda key: values.get(key, specs[key].empty)  # noqa: E731
+    applies = co.deeptune_applies(cfg.modality)
+    workers = str(get('num_workers')).strip().lower()
+    if cfg.modality == 'video' and workers != 'auto' and not workers.isdigit():
+        issues.append('DataLoader workers must be auto or a whole number of 0 or more.')
+    for key, closed_low in (('video_speed_perturb', True), ('label_smoothing', True), ('calib_fraction', False),
+                            ('abstain_delta', False), ('target_error', False)):
+        value = get(key)
+        if value is None or not applies(specs[key]):
+            continue
+        if not ((0 <= value < 1) if closed_low else (0 < value < 1)):
+            issues.append(f"{specs[key].label} must be {'in [0, 1)' if closed_low else 'between 0 and 1'}.")
+    if applies(specs['mix_prob']) and not 0 < get('mix_prob') <= 1:
+        issues.append('Mix probability must be in (0, 1].')
+    if cfg.modality != 'video':
+        return issues
+    if get('k') < 2:
+        issues.append('Folds (k) must be at least 2.')
+    arch = get('video_arch')
+    hub = hub_backbone(cfg.model_version)
+    if arch not in (None, 'frame_pool') and cfg.pooling != 'mean' and cfg.pooling.partition(':')[0] != arch:
+        issues.append(f'Pooling {cfg.pooling} does not apply to the temporal architecture {arch}: choose mean pooling, '
+                      'or leave the architecture at (default).')
+    if hub is not None and hub.kind == 'video':
+        if arch is not None and arch not in ('attentive_probe', 'linear_probe'):
+            issues.append(f'{cfg.model_version} reads its tokens through a probe: choose attentive_probe or linear_probe '
+                          'as the temporal architecture, or leave it at (default).')
+        if parse_pooling_spec(cfg.pooling)[0] not in ('mean', 'attentive_probe', 'linear_probe'):
+            issues.append(f'{cfg.model_version} reads its tokens through a probe, so frame pooling does not apply: choose mean '
+                          '(the probe is then used).')
+        if hub.fixed_frames is not None and cfg.num_frames != hub.fixed_frames:
+            issues.append(f'{cfg.model_version} only accepts clips of exactly {hub.fixed_frames} frames.')
+    problem = weights_choice_problem(cfg.model_version, get('accept_weights_licence'))
+    if problem:
+        issues.append(problem.split('. To use them')[0] + '. Read the licence, then tick it under "I accept the licence of '
+                      'these weights" (Pretrained backbone and LoRA).')
+    if get('unfreeze_backbone') and (hub is None or not hub.frozen_by_default):
+        issues.append(f'"Train the whole encoder" applies to backbones that are frozen by default (V-JEPA 2, VideoMAE), not '
+                      f'{cfg.model_version}.')
+    if get('unfreeze_backbone') and (cfg.freeze_backbone or cfg.use_peft):
+        issues.append('"Train the whole encoder" cannot go with Freeze backbone or PEFT / LoRA.')
+    if get('video_flip') and not get('video_augment'):
+        issues.append('Flipping is part of augmentation: tick "Augment training clips" too.')
+    if get('cv_only') and get('validation') == 'holdout':
+        issues.append('Cross-validate only needs the kfold or bootstrap632 validation scheme.')
+    if get('cv_only') and (get('test_df') or get('target_error') is not None or get('export_dfanalyze')):
+        issues.append('Cross-validate only trains no final model: leave the test split file, the target error rate and the '
+                      'df-analyze export empty.')
+    if get('target_error') is not None and effective_mode(cfg) != 'cls':
+        issues.append('A target error rate needs classification.')
+    if get('abstain_score') == 'expected_error' and get('no_error_model'):
+        issues.append('The expected_error ranking score needs the per-prediction error model.')
+    if effective_mode(cfg) == 'reg' and (get('mixup_alpha') or get('cutmix_alpha') or get('label_smoothing')):
+        issues.append('Mixup, CutMix and label smoothing are for classification.')
+    test_df = get('test_df')
+    if test_df and (Path(test_df).suffix.lower() != '.parquet' or not Path(test_df).is_file()):
+        issues.append(f'The test split file must be an existing .parquet file: {test_df}')
+    return issues
 
 
 def validate_config(cfg: RunConfig) -> list[str]:
@@ -254,6 +339,12 @@ def validate_config(cfg: RunConfig) -> list[str]:
     return issues
 
 
+def validate_run(cfg: RunConfig) -> list[str]:
+    """What the GUI checks before it starts deeptune.py: validate_config (which deeptune.py also runs on its own command
+    line) plus the G1 options of the advanced sections, which only a GUI-built config holds."""
+    return validate_config(cfg) + options_issues(cfg)
+
+
 def effective_mode(cfg: RunConfig) -> str:
     if cfg.modality == 'timeseries':
         return 'reg'
@@ -302,7 +393,13 @@ def load_config(path: Path) -> RunConfig:
     if set(values) - known:
         raise ValueError('Settings contain unknown fields; this file may need a newer DeepTune version.')
     for key, value in values.items():
-        if key in ('df', 'out'):
+        if key == 'options':
+            if not isinstance(value, dict):
+                raise ValueError('Invalid value for options.')
+            values[key], problems = co.coerce_values(co.DEEPTUNE_OPTIONS, value)
+            if problems:
+                raise ValueError('Invalid settings: ' + ' '.join(problems))
+        elif key in ('df', 'out'):
             if value is not None and not isinstance(value, str):
                 raise ValueError(f'{key} must be a path string.')
             if value:
@@ -316,7 +413,7 @@ def load_config(path: Path) -> RunConfig:
             if not valid or (expected is list and not all(isinstance(v, str) for v in value)):
                 raise ValueError(f'Invalid value for {key}.')
     cfg = RunConfig(**values)
-    if cfg.modality not in MODALITIES or cfg.model_version not in MODEL_VERSIONS_BY_MODALITY[cfg.modality]:
+    if cfg.modality not in MODALITIES or cfg.model_version not in GUI_MODEL_VERSIONS[cfg.modality]:
         raise ValueError('Settings contain an unsupported modality or model.')
     return cfg
 
@@ -509,6 +606,9 @@ class InferenceConfig:
     # video only: the run's recorded test-time data-layer flags (sampling,
     # decoder, --test_clips, workers), passed back to infer.py unchanged.
     video_options: dict = field(default_factory=dict)
+    # The Test page's own controls (G1): {key: value} for desktop/cli_options.INFER_OPTIONS. An "override" control
+    # replaces the recorded value of its flag when filled in; a non-empty `ensemble` runs the ensemble instead.
+    options: dict = field(default_factory=dict)
 
 
 # Video flags that change how test clips are built; their defaults are not
@@ -601,8 +701,21 @@ def infer_config_from_run(results: RunResults, data: Path, out: Path, batch_size
     return cfg
 
 
+def infer_option(cfg: InferenceConfig, key: str):
+    return (cfg.options or {}).get(key, co.by_key(co.INFER_OPTIONS)[key].empty)
+
+
 def build_infer_argv(cfg: InferenceConfig) -> list[str]:
     """Translate an InferenceConfig into infer.py's CLI argument list."""
+    options = cfg.options or {}
+    if infer_option(cfg, 'ensemble'):
+        if cfg.data is None or cfg.out is None:
+            raise ValueError('New data and an output folder are both required.')
+        # infer.py refuses every other flag with --ensemble: each member uses the settings it recorded.
+        argv = ['--modality', 'video', '--data', str(cfg.data), '--out', str(cfg.out), '--batch_size', str(cfg.batch_size)]
+        if cfg.label_mapping_path is not None:
+            argv += ['--label_mapping', str(cfg.label_mapping_path)]
+        return argv + co.options_argv(co.INFER_OPTIONS, options, lambda opt: opt.key in co.INFER_ENSEMBLE_KEYS)
     if cfg.checkpoint_path is None or cfg.data is None or cfg.out is None:
         raise ValueError('A trained run, new data, and an output folder are all required.')
     argv = [
@@ -646,14 +759,15 @@ def build_infer_argv(cfg: InferenceConfig) -> list[str]:
             argv += ['--group_ids', *cfg.group_ids]
         if cfg.history_df_paths:
             argv += ['--history_df', *[str(p) for p in cfg.history_df_paths]]
-    return argv
+    extra = co.options_argv(co.INFER_OPTIONS, options, lambda opt: opt.key not in co.INFER_ENSEMBLE_KEYS)
+    return co.merge_flags(argv, extra) if extra else argv
 
 
 def validate_infer_config(cfg: InferenceConfig) -> list[str]:
     """Cheap, GUI-side sanity checks -- infer.py itself is the source of
     truth and will still validate everything again."""
     issues: list[str] = []
-    if cfg.run_dir is None or cfg.checkpoint_path is None:
+    if (cfg.run_dir is None or cfg.checkpoint_path is None) and not infer_option(cfg, 'ensemble'):
         issues.append('Choose a completed run with a saved checkpoint.')
     if cfg.data is None or not str(cfg.data).strip():
         issues.append('Choose new data to test against.')
@@ -661,9 +775,31 @@ def validate_infer_config(cfg: InferenceConfig) -> list[str]:
         issues.append(f'Data path does not exist: {cfg.data}')
     if cfg.out is None or not str(cfg.out).strip():
         issues.append('Choose an output folder for predictions.')
-    if cfg.modality == 'timeseries' and not cfg.history_df_paths:
+    values, problems = co.coerce_values(co.INFER_OPTIONS, cfg.options or {})
+    issues.extend(problems)
+    if problems:
+        return issues
+    if cfg.modality == 'timeseries' and not cfg.history_df_paths and not values.get('history_df'):
         issues.append("This run's train/validation splits could not be found under its folder; "
                       "DeepAR inference needs them to supply history.")
+    ensemble = values.get('ensemble') or []
+    if ensemble:
+        if cfg.modality != 'video':
+            issues.append('An ensemble is for video runs.')
+        if len(ensemble) < 2:
+            issues.append('An ensemble needs at least two runs, one per line (include the selected run if you want it).')
+        missing = [m for m in ensemble if not Path(m).exists()]
+        if missing:
+            issues.append(f'Ensemble member not found: {missing[0]}')
+        recorded = [opt.label for opt in co.non_default(co.INFER_OPTIONS, values) if opt.key not in co.INFER_ENSEMBLE_KEYS
+                    and opt.key != 'no_abstain']
+        if recorded or values.get('no_abstain'):
+            issues.append('An ensemble runs each member with the settings it recorded: clear '
+                          + ', '.join(recorded + (['Answer every clip'] if values.get('no_abstain') else [])) + '.')
+    elif values.get('allow_unverified_labels'):
+        issues.append('"Allow unverified class indices" only applies to an ensemble.')
+    if cfg.batch_size < 1:
+        issues.append('Batch size must be at least 1.')
     return issues
 
 
