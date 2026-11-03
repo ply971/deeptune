@@ -679,9 +679,15 @@ def test_cli_refuses_the_wrong_frame_count_up_front(capsys):
 
 
 def test_desktop_config_accepts_the_command_line_models():
-    from desktop.config import MODEL_VERSIONS_BY_MODALITY, VIDEO_CLI_ONLY_MODEL_VERSIONS
+    """User decision 2026-11-03: every feature in the desktop app; replaces the Phase-7 exclusion."""
+    from desktop.config import GUI_MODEL_VERSIONS, MODEL_VERSIONS_BY_MODALITY, VIDEO_CLI_ONLY_MODEL_VERSIONS
     assert set(HUB_BACKBONES) <= set(VIDEO_CLI_ONLY_MODEL_VERSIONS)
-    assert not set(HUB_BACKBONES) & set(MODEL_VERSIONS_BY_MODALITY['video']), 'the GUI list is Phase 7'
+    assert not set(HUB_BACKBONES) & set(MODEL_VERSIONS_BY_MODALITY['video']), 'hub backbones are listed apart from torchvision'
+    real = {version for version, info in HUB_BACKBONES.items() if not info.is_untrained}
+    untrained = {version for version, info in HUB_BACKBONES.items() if info.is_untrained}
+    assert real and untrained
+    assert real <= set(GUI_MODEL_VERSIONS['video']), 'every pretrained hub backbone is offered in the desktop app'
+    assert not untrained & set(GUI_MODEL_VERSIONS['video']), 'tiny untrained test models stay command-line only'
 
 
 def test_registry_is_torch_free():
