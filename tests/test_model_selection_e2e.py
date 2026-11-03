@@ -72,6 +72,7 @@ def test_smart_search_end_to_end_with_a_real_feature_probe_screen(tmp_path):
     env = dict(os.environ, CUDA_VISIBLE_DEVICES='-1', OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')
     code = select_model.main(['--df', str(data), '--out', str(out), '--backbones', 'siglip_tiny', 'vjepa2_tiny', '--train_modes', 'frozen', 'full',
                               '--num_frames', '4', '--augmentations', 'off', 'aug', '--top_families', '1', '--recheck_models', '0',
+                              '--screen_views', 'frozen',  # the frozen view only: the probe path, at R3b's first cost
                               '--k', '2', '--epochs', '1', '--batch_size', '4', '--boot', '50', '--no_pilot', '--gpu_memory_gb', 'none',
                               '--profile_clips', '4', '--seed', '7'],
                              runner=SubprocessRunner(env=env))
@@ -89,7 +90,7 @@ def test_smart_search_end_to_end_with_a_real_feature_probe_screen(tmp_path):
         assert '--cv_only' in command and ('--video_augment' in command) == (entry['config'].get('augmentation') == 'aug')
         assert not (frozen and '--video_augment' in command)
     stages = json.loads((out / 'stages.json').read_text())
-    assert stages[0]['stage'] == 'screen protocol' and 'probe' in stages[0]['decision']
+    assert stages[0]['stage'] == 'screen protocol (frozen view)' and 'probe' in stages[0]['decision']
     selection = json.loads((out / 'selection.json').read_text())
     assert selection['strategy'] == 'smart' and selection['test']['n'] == selection['split']['sealed_test']['rows'] > 0
     assert (out / 'profile.json').is_file() and json.loads((out / 'profile.json').read_text())['facts']['clip_probe']['opened'] == 4

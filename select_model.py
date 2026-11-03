@@ -100,21 +100,31 @@ def build_parser() -> argparse.ArgumentParser:
                           'No shell-style splitting, so Windows paths keep their backslashes. Flags select_model.py sets itself '
                           '(data, split, seed, folds, grid axes, epochs, batch size...) are refused.')
     smart = p.add_argument_group('smart search (--search smart)')
-    smart.add_argument('--screen', choices=['auto', 'probe', 'cv'], default='auto',
-                       help='How stage 1 screens: probe = cached frozen features + attentive probe (extract_features.py, '
-                            'train_feature_head.py); cv = short deeptune.py cross-validation (--screen_epochs). auto (default): '
-                            'probe when every screened candidate is a frozen backbone the feature extractor takes, else cv.')
-    smart.add_argument('--screen_epochs', type=_positive_int, default=2, help='Epochs of a cv screening run (default 2).')
-    smart.add_argument('--top_families', type=_positive_int, default=2,
-                       help='Backbone families kept after the first screen, one small model per family (default 2).')
-    smart.add_argument('--top_backbones', type=_positive_int, default=3,
-                       help='Backbones kept after the second screen, which tune (default 3).')
+    # Strategy-specific flags default to None, so a flag given to another strategy can be refused (refuse_foreign_flags).
+    smart.add_argument('--screen', choices=['auto', 'probe', 'cv'], default=None,
+                       help='How the frozen view of stage 1 screens: probe = cached frozen features + attentive probe '
+                            '(extract_features.py, train_feature_head.py); cv = short deeptune.py cross-validation (--screen_epochs). '
+                            'auto (default): probe when every screened backbone can be probed, else cv. An explicit probe that '
+                            'cannot run is refused. The trainable view always uses short cross-validation.')
+    smart.add_argument('--screen_views', choices=['auto', 'frozen', 'trainable'], default=None,
+                       help='Which settings stage 1 screens backbones at. auto (default): a frozen view and a trainable view (the '
+                            'first trainable train mode of the grid) when the grid has both, each keeping its own best, the '
+                            'survivors being their union; frozen features can rank backbones differently from fine-tuning. '
+                            'frozen or trainable: that view only.')
+    smart.add_argument('--screen_epochs', type=_positive_int, default=None, help='Epochs of a cv screening run (default 2).')
+    smart.add_argument('--top_families', type=_positive_int, default=None,
+                       help='Backbone families each screening view keeps, one small model per family (default 2).')
+    smart.add_argument('--top_backbones', type=_positive_int, default=None,
+                       help='Backbones each screening view keeps; the union tunes (default 3).')
     smart.add_argument('--tune_epochs', type=_positive_int, default=None,
                        help='Epochs while tuning (default: --epochs, so tuning runs are the final ranking runs). Fewer makes '
-                            'tuning cheaper; the --final_top best are then cross-validated again with --epochs.')
-    smart.add_argument('--recheck_models', type=int, default=2,
-                       help='Tuned models whose pairs of runner-up settings are re-checked together (default 2; 0 turns it off).')
-    smart.add_argument('--final_top', type=_positive_int, default=3,
+                            'tuning cheaper; the --final_top best tune runs are then cross-validated again with --epochs.')
+    smart.add_argument('--recheck_models', type=int, default=None,
+                       help='Tuned models whose pairs of setting groups are re-checked together (default 2; 0 turns it off).')
+    smart.add_argument('--recheck_full_product', type=int, default=None,
+                       help='Stage 3 tries every combination of two groups\' values when their counts multiply to at most this, '
+                            'else only the two runner-ups together (default 6; 0: runner-ups only).')
+    smart.add_argument('--final_top', type=_positive_int, default=None,
                        help='Candidates in the final grouped cross-validation ranking (default 3).')
     smart.add_argument('--include', nargs='+', default=[], metavar='KEY=VALUE',
                        help='Keep these past the screening cuts, e.g. backbone=r3d_18 or family=vjepa2 (smart only).')
@@ -185,6 +195,23 @@ def _default_augmentations(args):
     return None
 
 
+# Flags that only one strategy (or two) reads: given to another, they would be silently ignored, so they are refused.
+STRATEGY_FLAGS = {
+    ('smart',): ('screen', 'screen_views', 'screen_epochs', 'top_families', 'top_backbones', 'tune_epochs', 'recheck_models',
+                 'recheck_full_product', 'final_top'),
+    ('random', 'bayes'): ('n_trials',),
+    ('bayes',): ('bayes_startup',),
+}
+
+
+def refuse_foreign_flags(args) -> None:
+    for owners, names in STRATEGY_FLAGS.items():
+        given = [f'--{name}' for name in names if getattr(args, name) is not None]
+        if given and args.search not in owners:
+            raise ValueError(f'{" ".join(given)} {"is" if len(given) == 1 else "are"} for --search {" or ".join(owners)} and would be '
+                             f'ignored by --search {args.search}. Leave {"it" if len(given) == 1 else "them"} out, or change --search.')
+
+
 def options_from_args(args):
     from handlers.model_selection.grid import FLIP_AUGMENTATIONS, AXES, Grid, RunSettings, extra_args_problems, extra_augmentation_flags
     from handlers.model_selection.search import SearchOptions, parse_overrides
@@ -207,6 +234,7 @@ def options_from_args(args):
     if include and args.search != 'smart':
         raise ValueError("--include keeps values past the smart search's screening cuts; the other strategies have no cuts. "
                          'Use --fix or --exclude.')
+    refuse_foreign_flags(args)
     axis_of = {field: axis for axis, field in AXES.items()}
     for key, values in fix.items():
         missing = sorted(map(str, values - set(getattr(grid, axis_of[key]))))
@@ -216,8 +244,7 @@ def options_from_args(args):
                            seed=args.seed, epochs=args.epochs, early_stopping_patience=args.early_stopping_patience,
                            batch_size=args.batch_size, num_workers=args.num_workers, boot=args.boot,
                            accept_weights_licence=list(args.accept_weights_licence), deeptune_args=list(args.deeptune_args))
-    strategy_options = {name: getattr(args, name) for name in ('screen', 'screen_epochs', 'top_families', 'top_backbones', 'tune_epochs',
-                                                               'recheck_models', 'final_top', 'n_trials', 'bayes_startup')}
+    strategy_options = {name: getattr(args, name) for owners in STRATEGY_FLAGS.values() for name in owners}
     return SearchOptions(df=args.df, out=args.out, grid=grid, settings=settings, strategy=args.search, metric=args.metric,
                          include=include, exclude=exclude, fix=fix, strategy_options=strategy_options, profile_clips=args.profile_clips,
                          raw_data=args.raw_data, test_fraction=args.test_fraction, max_trainable_params=args.max_trainable_params,
@@ -233,8 +260,8 @@ def main(argv=None, runner=None, footprint_fn=None, probe_runner=None) -> int:
         parser.error('--k must be at least 2.')
     if args.early_stopping_patience < 0 or args.num_workers < 0 or args.boot < 1:
         parser.error('--early_stopping_patience and --num_workers must be 0 or more, and --boot at least 1.')
-    if args.recheck_models < 0 or args.profile_clips < 0:
-        parser.error('--recheck_models and --profile_clips must be 0 or more.')
+    if (args.recheck_models or 0) < 0 or (args.recheck_full_product or 0) < 0 or args.profile_clips < 0:
+        parser.error('--recheck_models, --recheck_full_product and --profile_clips must be 0 or more.')
     if args.search == 'bayes':
         from handlers.model_selection.strategies import BayesStrategy
         try:

@@ -73,7 +73,9 @@ def jitter(*parts, scale: float = 0.02) -> float:
 
 def interaction_surface(seed: int = 0) -> Callable[[Candidate], float]:
     """Known qualities with an interaction: full fine-tuning is best at a low learning rate and worst at a high one, and the
-    base learning rate is the high one. Augmentation helps where weights train (it does not apply to frozen backbones)."""
+    base learning rate is the high one. Augmentation helps where weights train. ASSUMPTION: it adds nothing to a frozen
+    backbone; deeptune.py would augment a frozen run's clips, but the search never runs frozen + augmentation (its rule), so
+    no score here depends on that assumption."""
     backbone = {'resnet_tiny': 0.55, 'siglip_tiny': 0.50, 'vjepa2_tiny': 0.45, 'dinov3_tiny': 0.40, 'siglip2_tiny': 0.47}
     mode_rate = {('frozen', 1e-3): 0.0, ('frozen', 1e-4): -0.05, ('lora:8', 1e-3): -0.03, ('lora:8', 1e-4): 0.08,
                  ('full', 1e-3): -0.20, ('full', 1e-4): 0.20}
@@ -86,6 +88,40 @@ def interaction_surface(seed: int = 0) -> Callable[[Candidate], float]:
             q += 0.02 if int(c.num_frames) > 8 else -0.02
         return float(np.clip(q + jitter('surface', seed, json.dumps(c.config(), sort_keys=True)), 0.05, 0.98))
     return surface
+
+
+_BACKBONES = {'resnet_tiny': 0.55, 'siglip_tiny': 0.50, 'vjepa2_tiny': 0.45}
+_MODE_RATE = {('frozen', 1e-3): 0.0, ('frozen', 1e-4): -0.05, ('lora:8', 1e-3): -0.03, ('lora:8', 1e-4): 0.08,
+              ('full', 1e-3): -0.20, ('full', 1e-4): 0.20}
+
+
+def _critic_surface(seed: int, mode_rate: dict, backbone_by_mode: Optional[dict] = None) -> Callable[[Candidate], float]:
+    """The ml-critic's surfaces (review V-057), as written there: a backbone quality (optionally per train mode), a
+    (train mode, learning rate) effect, +0.04 for augmentation where weights train (the same ASSUMPTION as above for frozen
+    runs), and the same per-candidate jitter."""
+    def surface(c: Candidate) -> float:
+        backbones = (backbone_by_mode or {}).get(c.train_mode, _BACKBONES)
+        q = backbones[c.backbone] + mode_rate[(c.train_mode, c.learning_rate)]
+        q += {'off': 0.0, 'aug': 0.04}.get(c.augmentation, 0.0) if c.train_mode != 'frozen' else 0.0
+        return float(np.clip(q + jitter('surface', seed, json.dumps(c.config(), sort_keys=True)), 0.05, 0.98))
+    return surface
+
+
+def lora_high_rate_surface(seed: int = 0) -> Callable[[Candidate], float]:
+    """Surface A: LoRA is (slightly) best at the high learning rate, full fine-tuning at the low one, and full at the low
+    rate is the best of all. Runner-up x runner-up re-checks do not reveal it: LoRA at the low rate is no better."""
+    return _critic_surface(seed, {**_MODE_RATE, ('lora:8', 1e-4): -0.04})
+
+
+def screen_misleads_surface(seed: int = 0) -> Callable[[Candidate], float]:
+    """Surface B: frozen features rank the backbones in the opposite order to fine-tuning (LoRA or full), so a screen on
+    frozen features alone keeps the wrong backbones."""
+    reversed_order = {'resnet_tiny': 0.45, 'siglip_tiny': 0.50, 'vjepa2_tiny': 0.55}
+    return _critic_surface(seed, _MODE_RATE, {'frozen': _BACKBONES, 'lora:8': reversed_order,
+                                              'full': {'resnet_tiny': 0.45, 'siglip_tiny': 0.50, 'vjepa2_tiny': 0.60}})
+
+
+SURFACES = {'interaction': interaction_surface, 'A_lora_high_rate': lora_high_rate_surface, 'B_screen_misleads': screen_misleads_surface}
 
 
 @dataclass
@@ -279,5 +315,6 @@ def regret_study(work: Path, seeds, grid_args: list, variants: Optional[dict] = 
 def summarize(rows: list) -> pd.DataFrame:
     table = pd.DataFrame(rows)
     return table.groupby('strategy', sort=False).agg(seeds=('seed', 'nunique'), mean_regret=('regret', 'mean'), max_regret=('regret', 'max'),
+                                                     mean_true_quality_regret=('true_quality_regret', 'mean'),
                                                      picked_best=('picked_true_best', 'mean'), mean_cv_runs=('cv_runs', 'mean'),
                                                      mean_screen_runs=('screen_runs', 'mean')).reset_index()

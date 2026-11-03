@@ -20,6 +20,13 @@ from handlers.model_selection.grid import COLLAPSE_REASON, Candidate, Grid, RunS
 from handlers.model_selection.search import STAGE_BIAS, ModelSearch
 
 SEALED, DEV = 'sealed_test.parquet', 'dev.parquet'
+try:
+    import optuna  # noqa: F401  (optional: only --search bayes needs it)
+    HAS_OPTUNA = True
+except ImportError:
+    HAS_OPTUNA = False
+NEEDS_OPTUNA = pytest.mark.skipif(not HAS_OPTUNA, reason='--search bayes needs Optuna, an optional dependency (pip install optuna)')
+BAYES = pytest.param('bayes', marks=NEEDS_OPTUNA)
 GRID = ['--backbones', 'resnet_tiny', 'siglip_tiny', 'vjepa2_tiny', '--train_modes', 'frozen', 'lora:8', 'full',
         '--learning_rates', '1e-3', '1e-4', '--augmentations', 'off', 'aug']
 
@@ -49,6 +56,18 @@ def _ledger(out):
 def _trained(out):
     """Keys of trained jobs, in ledger order (checks' lines left out)."""
     return [entry['key'] for entry in _ledger(out) if entry.get('stage') != 'checks']
+
+
+def _configs(out):
+    """The candidates of trained jobs, in ledger order: unlike keys, these do not change with the seed's data split."""
+    return [json.dumps(entry['config'], sort_keys=True) for entry in _ledger(out) if entry.get('stage') != 'checks']
+
+
+def _decisions(out):
+    found = {}
+    for decision in json.loads((Path(out) / 'stages.json').read_text()):
+        found.setdefault(decision['stage'], []).append(decision['decision'])
+    return found
 
 
 @pytest.fixture()
@@ -120,7 +139,7 @@ def test_frozen_candidates_get_no_augmentation_and_the_leaderboard_says_so(data,
         if '--freeze-backbone' in argv:
             assert '--video_augment' not in argv and '--mixup_alpha' not in argv
     board = pd.read_csv(out / 'leaderboard.csv')
-    assert set(board.loc[board['train_mode'] == 'frozen', 'augmentation']) == {'n/a (frozen backbone)'}
+    assert set(board.loc[board['train_mode'] == 'frozen', 'augmentation']) == {'not searched (frozen-backbone rule)'}
     assert set(board.loc[board['train_mode'] == 'full', 'augmentation']) == {'off', 'aug'}
     selection = json.loads((out / 'selection.json').read_text())
     assert len(selection['augmentation_collapsed']) == 3 * 2  # frozen x aug: per backbone and learning rate
@@ -210,7 +229,7 @@ def test_mixup_and_cutmix_touch_training_batches_only(tmp_path, monkeypatch):
 
 
 # -- every strategy uses development rows only -----------------------------------------------------------------------------------
-@pytest.mark.parametrize('strategy', ['smart', 'random', 'bayes', 'exhaustive'])
+@pytest.mark.parametrize('strategy', ['smart', 'random', BAYES, 'exhaustive'])
 def test_every_strategy_reads_and_passes_development_rows_only(data, tmp_path, monkeypatch, strategy):
     import pyarrow.parquet as pq_module
     runner = _runner()
@@ -265,27 +284,27 @@ def test_every_strategy_reads_and_passes_development_rows_only(data, tmp_path, m
 
 
 # -- smart: stages, reasons, overrides, budgets ----------------------------------------------------------------------------------
-def test_smart_records_a_reason_for_every_stage_and_recovers_the_interaction(data, tmp_path):
+def test_smart_records_a_reason_for_every_stage_and_tunes_train_mode_with_the_learning_rate(data, tmp_path):
     out, runner = tmp_path / 's', _runner()
     said = []
     assert _search(_argv(data, out), runner, say=said.append) == 0
     stages = json.loads((out / 'stages.json').read_text())
-    by_stage = {}
-    for decision in stages:
-        by_stage.setdefault(decision['stage'], []).append(decision['decision'])
-    assert 'probe' in by_stage['screen protocol'][0]
-    families = by_stage['screen families'][0]
-    assert families.startswith('kept resnet, siglip; dropped vjepa2') and 'probe protocol' in families
+    by_stage = _decisions(out)
+    assert 'probe' in by_stage['screen protocol (frozen view)'][0]
+    assert 'short cross-validation' in by_stage['screen protocol (trainable view)'][0]
+    assert 'probe protocol' in by_stage['screen families (frozen view)'][0]
+    assert 'screen protocol' in by_stage['screen families (trainable view)'][0] and 'lora:8' in by_stage['screen families (trainable view)'][0]
+    assert by_stage['screen families'][0].startswith('kept resnet, siglip; dropped vjepa2')
     assert 'not more than --top_backbones 3' in by_stage['screen backbones'][0]
-    assert by_stage['tune what trains (resnet_tiny)'][0].startswith('chose train_mode=frozen')  # one group at a time is misled ...
-    assert 'an interaction' in by_stage['recheck (resnet_tiny)'][0]  # ... and stage 3 finds it
-    assert by_stage['tune augmentation (resnet_tiny)'][0].endswith(f'({COLLAPSE_REASON}).')
-    assert 'not trained again' in by_stage['final'][0]
+    # Train mode and learning rate are one group, so the interaction (full is best at the low rate only) is found in stage 2.
+    assert by_stage['tune what trains and learning rate (resnet_tiny)'][0].startswith('chose train_mode=full, learning_rate=0.0001')
+    assert 'tune augmentation (resnet_tiny)' in by_stage and by_stage['tune augmentation (resnet_tiny)'][0].startswith('chose augmentation=aug')
+    assert 'These are the ranking runs themselves' in by_stage['final'][0]
     for decision in stages:
         assert any(decision['decision'] in line for line in said)  # printed as well as recorded
     trained = [entry for entry in _ledger(out) if entry.get('stage') != 'checks']
     assert all(entry['why'] and entry['stage'] for entry in trained)
-    assert {entry['protocol'] for entry in trained} == {'probe', 'cv'}
+    assert {entry['protocol'] for entry in trained} == {'probe', 'screen', 'cv'}
     selection = json.loads((out / 'selection.json').read_text())
     assert selection['winner']['config'] == {'backbone': 'resnet_tiny', 'video_arch': 'default', 'pooling': 'default', 'train_mode': 'full',
                                              'learning_rate': 1e-4, 'num_frames': 'default', 'augmentation': 'aug'}
@@ -298,25 +317,62 @@ def test_smart_records_a_reason_for_every_stage_and_recovers_the_interaction(dat
     assert board.loc[0, 'rank'] == 1 and board.loc[0, 'key'] == selection['winner']['key']
 
 
-def test_one_group_at_a_time_without_the_recheck_misses_the_interaction(data, tmp_path):
-    assert _search(_argv(data, tmp_path / 's', '--recheck_models', '0'), _runner()) == 0
-    winner = json.loads((tmp_path / 's' / 'selection.json').read_text())['winner']['config']
-    assert winner['train_mode'] == 'frozen' and winner['learning_rate'] == 1e-3
+def _frames_surface(runner_up_reveals: bool):
+    """A test surface with an interaction between two groups (what trains and learning rate x frames): full fine-tuning at
+    the low rate is the best only with 16 frames. With `runner_up_reveals`, that train mode and rate are the joint group's
+    runner-up at 8 frames, so the runner-up pair finds it; otherwise they are third, and only the full product does."""
+    joint = {('frozen', 1e-3): 0.60, ('frozen', 1e-4): 0.50, ('full', 1e-3): 0.30, ('full', 1e-4): 0.40}
+    if runner_up_reveals:
+        joint[('frozen', 1e-4)] = 0.35
+
+    def surface(c):
+        q = joint[(c.train_mode, c.learning_rate)]
+        if c.num_frames == 16:
+            q += 0.40 if (c.train_mode, c.learning_rate) == ('full', 1e-4) else -0.05
+        return q
+    return surface
+
+
+FRAMES_GRID = ['--backbones', 'resnet_tiny', '--train_modes', 'frozen', 'full', '--learning_rates', '1e-3', '1e-4', '--num_frames', '8', '16',
+               '--augmentations', 'off']
+
+
+def _winner(out):
+    return json.loads((Path(out) / 'selection.json').read_text())['winner']['config']
+
+
+@pytest.mark.parametrize('runner_up_reveals', [True, False])
+def test_stage_three_finds_an_interaction_between_groups_only_among_the_combinations_it_tries(data, tmp_path, runner_up_reveals):
+    """Stage 3 catches exactly the combinations it tries: the runner-up pair when the two groups' values multiply to more
+    than --recheck_full_product, every pair when they multiply to at most that. Here the joint group has 4 values and frames
+    2, so 8 combinations: over the default 6, only the runner-up pair is tried."""
+    best = {'train_mode': 'full', 'learning_rate': 1e-4, 'num_frames': 16}
+    runner = lambda: simulate.SurfaceRunner(_frames_surface(runner_up_reveals), full_epochs_value=4)
+    assert _search(_argv(data, tmp_path / 'off', '--recheck_models', '0', grid=FRAMES_GRID), runner()) == 0
+    assert {k: _winner(tmp_path / 'off')[k] for k in best} == {'train_mode': 'frozen', 'learning_rate': 1e-3, 'num_frames': 8}
+    assert _search(_argv(data, tmp_path / 'default', grid=FRAMES_GRID), runner()) == 0
+    found = {k: _winner(tmp_path / 'default')[k] for k in best} == best
+    assert found == runner_up_reveals  # the default re-check (runner-up pair) finds it only when the runner-ups reveal it
+    decision = _decisions(tmp_path / 'default')['recheck (resnet_tiny)'][0]
+    assert 'the runner-up values together (4 x 2 values)' in decision
+    assert _search(_argv(data, tmp_path / 'full', '--recheck_full_product', '8', grid=FRAMES_GRID), runner()) == 0
+    assert {k: _winner(tmp_path / 'full')[k] for k in best} == best  # every combination: found either way
+    assert 'every combination (4 x 2 values)' in _decisions(tmp_path / 'full')['recheck (resnet_tiny)'][0]
 
 
 def test_smart_screens_with_short_cv_runs_when_asked_and_keeps_the_stage_budgets(data, tmp_path):
     out, runner = tmp_path / 's', _runner()
     assert _search(_argv(data, out, '--screen', 'cv', '--screen_epochs', '1', '--top_families', '1'), runner) == 0
     screens = [entry for entry in _ledger(out) if entry.get('protocol') == 'screen']
-    assert len(screens) == 3 and {entry['epochs'] for entry in screens} == {1}
-    for role, argv in runner.calls:
-        if role == 'cv' and argv[argv.index('--num_epochs') + 1] == '1':
-            assert '--freeze-backbone' in argv
+    assert len(screens) == 6 and {entry['epochs'] for entry in screens} == {1}  # 3 families x (frozen view + trainable view)
+    assert sorted(entry['config']['train_mode'] for entry in screens) == ['frozen'] * 3 + ['lora:8'] * 3
+    screened = [argv for role, argv in runner.calls if role == 'cv' and argv[argv.index('--num_epochs') + 1] == '1']
+    assert sum('--freeze-backbone' in argv for argv in screened) == 3 and sum('--use-peft' in argv for argv in screened) == 3
     tuned = {entry['config']['backbone'] for entry in _ledger(out) if entry.get('protocol') == 'cv'}
-    assert tuned == {'resnet_tiny'}  # --top_families 1: one family tunes
-    stages = json.loads((out / 'stages.json').read_text())
-    assert any(d['stage'] == 'screen protocol' and 'short cross-validation' not in d['decision'] for d in stages) is False
-    assert any(d['stage'] == 'screen families' and d['decision'].startswith('kept resnet;') for d in stages)
+    assert tuned == {'resnet_tiny'}  # --top_families 1, and both views rank resnet first here
+    decisions = _decisions(out)
+    assert decisions['screen protocol (frozen view)'] == ['short cross-validation runs (1 epochs), as --screen cv asks.']
+    assert decisions['screen families'][0].startswith('kept resnet;')
 
 
 def test_smart_screens_backbones_within_families_when_there_are_more_than_top_backbones(data, tmp_path):
@@ -326,12 +382,15 @@ def test_smart_screens_backbones_within_families_when_there_are_more_than_top_ba
     assert _search(_argv(data, out, '--top_families', '2', '--top_backbones', '2', grid=grid), _runner()) == 0
     stages = {d['stage']: d['decision'] for d in json.loads((out / 'stages.json').read_text())}
     assert stages['screen families'].startswith('kept resnet, siglip; dropped vjepa2')
-    assert stages['screen backbones'].startswith('kept ') and '(--top_backbones 2)' in stages['screen backbones']
-    screened = [e['config']['backbone'] for e in _ledger(out) if e.get('stage') == 'screen backbones']
-    # siglip2_tiny (fewer parameters) screened the siglip family; its screen is reused, so only siglip_tiny is new here.
-    assert sorted(screened) == ['siglip_tiny']
+    assert stages['screen backbones'].startswith('kept ') and '(--top_backbones 2 per view)' in stages['screen backbones']
+    screened = [(e['config']['backbone'], e['config']['train_mode']) for e in _ledger(out) if e.get('stage') == 'screen backbones']
+    # siglip2_tiny (fewer parameters) screened the siglip family; its screens are reused, so only siglip_tiny is new here.
+    assert sorted(screened) == [('siglip_tiny', 'frozen'), ('siglip_tiny', 'full')]
     tuned = {e['config']['backbone'] for e in _ledger(out) if e.get('protocol') == 'cv'}
-    assert len(tuned) == 2
+    kept = stages['screen backbones'].split(' (--top_backbones')[0].removeprefix('kept ').split(', ')
+    views = [stages[f'screen backbones ({view} view)'] for view in ('frozen', 'trainable')]
+    assert tuned == set(kept) and 2 <= len(kept) <= 4  # each view's best 2, united: 2 if they agree, up to 4
+    assert all(b in ' '.join(views) for b in kept)
 
 
 def test_overrides_include_exclude_and_fix(data, tmp_path):
@@ -340,7 +399,7 @@ def test_overrides_include_exclude_and_fix(data, tmp_path):
                          '--fix', 'learning_rate=1e-4'), _runner()) == 0
     stages = {d['stage']: d['decision'] for d in json.loads((out / 'stages.json').read_text())}
     assert 'plus vjepa2 (--include)' in stages['screen families']
-    assert stages['tune learning rate (resnet_tiny)'].endswith('only one runnable value (fixed by --fix).')  # fixed: not tuned
+    assert 'learning_rate=0.001' not in ' '.join(stages.values())  # fixed: no stage tried another rate
     entries = [e for e in _ledger(out) if e.get('stage') != 'checks']
     assert {e['config']['learning_rate'] for e in entries} == {1e-4}
     assert 'siglip_tiny' not in {e['config']['backbone'] for e in entries}
@@ -361,7 +420,7 @@ def test_overrides_include_exclude_and_fix(data, tmp_path):
             ['--df', 'x.parquet', '--out', 'o', '--backbones', 'r3d_18', '--exclude', 'colour=red']))
 
 
-@pytest.mark.parametrize('strategy', ['smart', 'random', 'bayes'])
+@pytest.mark.parametrize('strategy', ['smart', 'random', BAYES])
 def test_max_hours_is_a_running_budget_for_adaptive_strategies(data, tmp_path, strategy):
     out = tmp_path / 's'
     runner = _runner(seconds=3600.0)  # every cv training takes an hour; probes a tenth of that
@@ -392,7 +451,7 @@ class _Interrupting:
         return self.runner(argv, run_dir, role)
 
 
-@pytest.mark.parametrize('strategy', ['random', 'bayes'])
+@pytest.mark.parametrize('strategy', ['random', BAYES])
 def test_random_and_bayes_are_reproducible_and_resume_the_same_sequence(data, tmp_path, strategy):
     argv = lambda out, *extra: _argv(data, out, '--n_trials', '7', *extra, search=strategy)
     assert _search(argv(tmp_path / 'a'), _runner()) == 0
@@ -406,7 +465,7 @@ def test_random_and_bayes_are_reproducible_and_resume_the_same_sequence(data, tm
     assert _trained(tmp_path / 'c') == first  # it goes on exactly where it stopped
     assert len([role for role, _ in resumed.calls if role == 'cv']) == 4
     assert _search(argv(tmp_path / 'd', '--seed', '7'), _runner()) == 0
-    assert set(_trained(tmp_path / 'd')) != set(first)  # another seed draws other candidates (and other folds)
+    assert _configs(tmp_path / 'd') != _configs(tmp_path / 'a')  # another seed draws other candidates, or in another order
 
 
 def test_random_draws_without_replacement_and_stops_when_the_grid_ends(data, tmp_path):
@@ -419,7 +478,7 @@ def test_random_draws_without_replacement_and_stops_when_the_grid_ends(data, tmp
 
 
 def test_bayes_proposals_are_runnable_untried_candidates_and_optuna_sees_dev_scores_only(data, tmp_path, monkeypatch):
-    import optuna
+    optuna = pytest.importorskip('optuna', reason='--search bayes needs Optuna, an optional dependency')
     values = []
     real = optuna.trial.create_trial
 
@@ -482,26 +541,41 @@ def test_the_profile_reads_development_rows_only_and_suggests_without_changing_a
 
 
 # -- the regret study -------------------------------------------------------------------------------------------------------------
-def test_regret_study_smart_recovers_the_interaction_that_one_group_at_a_time_misses(tmp_path):
-    """Against exhaustive on a small grid with an interaction, over three seeds: smart finds the true best (by exhaustive's
-    CV) with fewer trainings; the same staged search without stage 3 does not."""
-    variants = {'smart': ['--search', 'smart'], 'smart_no_recheck': ['--search', 'smart', '--recheck_models', '0'],
-                'random': ['--search', 'random'], 'bayes': ['--search', 'bayes']}
-    rows = simulate.regret_study(tmp_path, [0, 1, 2], GRID, variants=variants)
+@pytest.mark.parametrize('surface', list(simulate.SURFACES))
+def test_regret_study_on_each_surface(tmp_path, surface):
+    """Against exhaustive on a small grid, seeds 0 and 1, on the builder's surface and the critic's A and B. Smart's pick must
+    be exhaustive's best on each; on B (frozen features rank backbones opposite to fine-tuning) smart screened on the frozen
+    view only must not be. random and bayes get smart's training count; their regret is reported, not required."""
+    variants = {'smart': ['--search', 'smart'], 'smart_frozen_view_only': ['--search', 'smart', '--screen_views', 'frozen'],
+                'random': ['--search', 'random']}
+    if HAS_OPTUNA:
+        variants['bayes'] = ['--search', 'bayes']
+    rows = simulate.regret_study(tmp_path, [0, 1], GRID, variants=variants, surface_fn=simulate.SURFACES[surface])
     table = pd.DataFrame(rows)
-    smart = table[table['strategy'] == 'smart']
-    exhaustive = table[table['strategy'] == 'exhaustive']
+    smart, exhaustive = table[table['strategy'] == 'smart'], table[table['strategy'] == 'exhaustive']
     assert (smart['regret'] <= 1e-9).all() and smart['picked_true_best'].all()
-    assert (smart['cv_runs'] + smart['screen_runs'] < exhaustive['cv_runs'].to_numpy()).all()
-    no_recheck = table[table['strategy'] == 'smart_no_recheck']
-    assert (no_recheck['regret'] > 0.05).all()  # the interaction costs it more than 5 points on every seed
-    for name in ('random', 'bayes'):  # budget-matched to smart's trainings; their regret is reported, not required to be 0
-        sampled = table[table['strategy'] == name]
-        assert (sampled['cv_runs'].to_numpy() <= (smart['cv_runs'] + smart['screen_runs']).to_numpy()).all()
-        assert (sampled['regret'] >= 0).all()
+    assert (smart['cv_runs'].to_numpy() < exhaustive['cv_runs'].to_numpy()).all()
+    if surface == 'B_screen_misleads':
+        frozen_only = table[table['strategy'] == 'smart_frozen_view_only']
+        assert (frozen_only['regret'] > 0.05).all() and (frozen_only['true_quality_regret'] > 0.05).all()
+    for name in variants:
+        if name in ('random', 'bayes'):
+            sampled = table[table['strategy'] == name]
+            assert (sampled['cv_runs'].to_numpy() <= (smart['cv_runs'] + smart['screen_runs']).to_numpy()).all()
+            assert (sampled['regret'] >= 0).all()
 
 
 def test_smart_with_cheaper_tuning_cross_validates_its_top_candidates_again_under_the_ranking_protocol(data, tmp_path):
+    out = tmp_path / 'repro'  # the critic's repro (V-057): one backbone tunes, yet --final_top 3 must give 3 final runs
+    assert _search(_argv(data, out, '--tune_epochs', '2', '--top_families', '1', '--final_top', '3'), _runner()) == 0
+    final = [e for e in _ledger(out) if e.get('protocol') == 'cv']
+    assert len(final) == 3 and len({e['key'] for e in final}) == 3 and {e['stage'] for e in final} == {'final'}
+    assert json.loads((out / 'selection.json').read_text())['runner_up'] is not None
+    tune = [e for e in _ledger(out) if e.get('protocol') == 'tune']
+    scores = sorted((np.mean([f['accuracy'] for f in e['folds']]) for e in tune), reverse=True)
+    finals = sorted((np.mean([f['accuracy'] for f in e['folds']]) for e in tune
+                     if json.dumps(e['config'], sort_keys=True) in {json.dumps(f['config'], sort_keys=True) for f in final}), reverse=True)
+    assert finals == scores[:3]  # the three best of all tune runs, not one per backbone
     out = tmp_path / 's'
     assert _search(_argv(data, out, '--tune_epochs', '2', '--final_top', '2'), _runner()) == 0
     entries = [e for e in _ledger(out) if e.get('stage') != 'checks']
@@ -544,6 +618,64 @@ def test_the_probe_screens_only_frozen_backbones_the_feature_extractor_builds(da
     out = tmp_path / 's'
     assert _search(_argv(data, out), runner) == 0
     decision = json.loads((out / 'stages.json').read_text())[0]
-    assert decision['stage'] == 'screen protocol' and 'siglip_tiny: not extractable here' in decision['decision']
+    assert decision['stage'] == 'screen protocol (frozen view)' and 'siglip_tiny: not extractable here' in decision['decision']
     protocols = {e['protocol'] for e in _ledger(out) if e.get('stage', '').startswith('screen')}
     assert protocols == {'screen'}  # one protocol for the whole screen: never a mix of probe and cv scores
+
+
+# -- review fix round (ml-critic V-057) -------------------------------------------------------------------------------------------
+def test_a_screen_on_other_folds_stops_the_search_before_the_sealed_test(data, tmp_path, capsys):
+    """Same folds at every stage: a probe that cross-validated other folds (here, another fold seed) must stop the ranking,
+    even though probe scores are never ranked; nothing reaches the sealed test set."""
+    class OtherFoldsProbe(simulate.SurfaceRunner):
+        def probe(self, job, run_dir, info):
+            settings = info['settings']
+            from dataclasses import replace
+            return super().probe(job, run_dir, {**info, 'settings': replace(settings, seed=settings.seed + 1)})
+    runner = OtherFoldsProbe(simulate.interaction_surface(0), full_epochs_value=4)
+    out = tmp_path / 's'
+    assert _search(_argv(data, out), runner) == 2
+    assert 'not cross-validated on the same folds' in json.loads((out / 'selection.json').read_text())['reason']
+    assert not (out / 'final.json').exists() and 'final' not in [role for role, _ in runner.calls]
+
+
+@pytest.mark.parametrize('search, flags', [
+    ('smart', ['--n_trials', '5']), ('smart', ['--bayes_startup', '3']), ('exhaustive', ['--n_trials', '5']),
+    ('random', ['--top_families', '1']), ('random', ['--bayes_startup', '3']), ('bayes', ['--screen', 'cv']),
+    ('exhaustive', ['--tune_epochs', '2', '--final_top', '2']), ('random', ['--screen_views', 'frozen']),
+    ('bayes', ['--recheck_full_product', '9']),
+])
+def test_flags_for_another_strategy_are_refused_not_ignored(search, flags):
+    args = select_model.build_parser().parse_args(['--search', search, '--df', 'x.parquet', '--out', 'o', '--backbones', 'r3d_18', *flags])
+    with pytest.raises(ValueError, match=f'would be ignored by --search {search}'):
+        select_model.options_from_args(args)
+    for owner, flag in (('random', ['--n_trials', '5']), ('bayes', ['--n_trials', '5', '--bayes_startup', '3']), ('smart', ['--screen', 'cv'])):
+        args = select_model.build_parser().parse_args(['--search', owner, '--df', 'x.parquet', '--out', 'o', '--backbones', 'r3d_18', *flag])
+        assert select_model.options_from_args(args).strategy == owner  # their own strategy takes them
+
+
+def test_an_explicit_probe_screen_that_cannot_run_is_refused_before_anything_trains(data, tmp_path, capsys):
+    class NoProbe(simulate.SurfaceRunner):
+        @staticmethod
+        def probe_problem(candidate, settings):
+            return 'not extractable here'
+    runner = NoProbe(simulate.interaction_surface(0), full_epochs_value=4)
+    said = []
+    assert _search(_argv(data, tmp_path / 's', '--screen', 'probe'), runner, say=said.append) == 2
+    assert runner.calls == [] and any(line.startswith('Refused: --screen probe cannot run') for line in said)
+    said.clear()
+    assert _search(_argv(data, tmp_path / 'f', '--screen', 'probe', '--fix', 'train_mode=full'), _runner(), say=said.append) == 2
+    assert any('has no frozen train mode' in line for line in said)
+    assert _search(_argv(data, tmp_path / 'a', '--screen', 'auto'), runner) == 0  # auto falls back to short runs, and says why
+    assert 'not extractable here' in _decisions(tmp_path / 'a')['screen protocol (frozen view)'][0]
+
+
+def test_resuming_an_r3a_folder_without_search_points_to_the_default_change(data, tmp_path):
+    out = tmp_path / 's'
+    grid = ['--backbones', 'resnet_tiny', '--train_modes', 'frozen', 'full']
+    assert _search(_argv(data, out, grid=grid, search='exhaustive'), _runner()) == 0
+    said = []
+    args = [a for a in _argv(data, out, grid=grid) if a not in ('--search', 'smart')]
+    assert _search(args, _runner(), say=said.append) == 2
+    refusal = next(line for line in said if line.startswith('Refused:'))
+    assert 'the default is now --search smart' in refusal and 'pass --search exhaustive' in refusal

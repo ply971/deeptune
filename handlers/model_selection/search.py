@@ -13,7 +13,9 @@ Strategies (strategies.py, smart.py) decide which candidates run, under which pr
 smart (the default), random and bayes. A strategy only ever names candidates and protocols (jobs.py); the engine below
 builds every command line itself, always with `role='cv'` on dev.parquet, and keeps the ledger. Strategies read results
 back through `StrategyContext`, which serves development-row cross-validation scores only. So a new strategy has no way to
-reach the sealed test file, and its runs are checked, recorded, resumed and fold-checked like R3a's.
+reach the sealed test file through that interface, and its runs are checked, recorded, resumed and fold-checked like R3a's.
+This is a convention of the interface (Python cannot hide the engine from a strategy that goes around it); the sealing
+test (tests/test_model_selection_strategies.py) enforces it for every shipped strategy.
 """
 from __future__ import annotations
 
@@ -133,7 +135,8 @@ STRATEGIES = {**BASE_STRATEGIES, 'smart': SmartStrategy}
 
 class StrategyContext:
     """What a strategy may see and ask for. Every job it gets runs `role='cv'` on dev.parquet; every score it reads is a
-    mean over the development folds. It has no handle on the sealed test file, the final run or the runner."""
+    mean over the development folds. By convention a strategy uses only these methods, never the engine (`_search`) behind
+    them, which holds the runner and the paths; the sealing test checks that the shipped strategies keep to it."""
 
     def __init__(self, search: 'ModelSearch', checked: list):
         self._search = search
@@ -329,8 +332,13 @@ class ModelSearch:
             return None, problem
         if manifest['grid'] != grid:
             if not self.o.allow_grid_change:
+                hint = ''
+                if manifest.get('strategy') == 'exhaustive' and self.o.strategy == 'smart' and manifest['grid'].get('augmentations') == ['off']:
+                    hint = (' This folder was searched with --search exhaustive, and the default is now --search smart, which adds an '
+                            'augmentation axis: to resume it as it was, pass --search exhaustive (its augmentation default is off).')
                 return None, ('the grid differs from the one this search started with. Pass --allow_grid_change to keep the results '
-                              'of candidates still in the grid, train the new ones, and leave the dropped ones out of the leaderboard.')
+                              'of candidates still in the grid, train the new ones, and leave the dropped ones out of the leaderboard.'
+                              + hint)
             manifest['grid_history'].append(manifest['grid'])
             manifest['grid'] = grid
             _write_json(path, manifest)
@@ -498,6 +506,10 @@ class ModelSearch:
         checked = self.check_candidates(dev, split['dev']['fingerprint'])
         self._record_decisions(checked, ledger)
         ctx = self.context = StrategyContext(self, checked)
+        refusal = self.strategy.check(ctx)
+        if refusal:
+            self.say(f'Refused: {refusal}')
+            return EXIT_REFUSED
         runnable = ctx.runnable
         retry = ('failed', 'did_not_fit') if o.retry_failed else ()
         finished = {key for key, entry in ledger.items() if _finished(entry) and entry['status'] not in retry}

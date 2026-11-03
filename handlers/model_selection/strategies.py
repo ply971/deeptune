@@ -66,6 +66,10 @@ class Strategy:
     def settings(self) -> dict:
         return {}
 
+    def check(self, ctx):
+        """Why this strategy refuses to start on these candidates (before anything trains), or None."""
+        return None
+
     def plan(self, ctx) -> Plan:
         raise NotImplementedError
 

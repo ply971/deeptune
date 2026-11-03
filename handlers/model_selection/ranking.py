@@ -80,14 +80,14 @@ def fold_stats(entry: dict, metric: str) -> tuple[Optional[float], Optional[floa
 
 
 def _augmentation_column(config: dict) -> str:
-    """What the augmentation column says: the value, or that it did not apply (a frozen backbone; R3b)."""
+    """What the augmentation column says: the value, or that the search's rule left it out (a frozen backbone; R3b)."""
     from handlers.model_selection.grid import augmentation_applies
     value = config.get('augmentation', 'off')
     try:
         applies = augmentation_applies(config.get('train_mode', 'frozen'))
     except ValueError:
         applies = True
-    return value if applies else 'n/a (frozen backbone)'
+    return value if applies else 'not searched (frozen-backbone rule)'
 
 
 def leaderboard(entries: list, metric: str, mode: str) -> pd.DataFrame:

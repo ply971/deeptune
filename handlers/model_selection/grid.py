@@ -17,8 +17,11 @@ Augmentations (R3b; training rows only: deeptune.py never augments validation, h
     aug_mix       aug, plus mixup (alpha 0.2) or CutMix (alpha 1.0) on half the batches (--mix_prob 0.5); classification only
     aug_flip      aug plus --video_flip; only with select_model.py --allow_flip, since a mirror turns left motion into right
     aug_mix_flip  aug_mix plus --video_flip; the same condition
-Augmentation applies only to candidates whose backbone weights train. A frozen candidate trains a head on fixed backbone
-features, so its augmentation axis collapses to `off`, and the collapse is recorded (Grid.collapsed).
+Augmentation is searched only for candidates whose backbone weights train. This is a rule of the search, not a law: a
+frozen run through deeptune.py still builds a train=True dataset (trainers/video/train.py), so --video_augment would
+change the clips its head sees. The rule keeps the grid smaller and matches the cached-feature probe, which extracts each
+clip once without augmentation. A frozen candidate's augmentation axis therefore collapses to `off`, and the collapse is
+recorded (Grid.collapsed).
 """
 from __future__ import annotations
 
@@ -47,8 +50,9 @@ AUGMENTATIONS = {'off': [], 'aug': _AUG, 'aug_mix': _AUG + _MIX, 'aug_flip': _AU
 FLIP_AUGMENTATIONS = ('aug_flip', 'aug_mix_flip')
 # deeptune.py destinations an augmentation value sets: --deeptune_args may not also set them while the axis is searched.
 AUGMENTATION_DESTS = ('video_augment', 'video_flip', 'video_speed_perturb', 'mixup_alpha', 'cutmix_alpha', 'mix_prob')
-COLLAPSE_REASON = ('augmentation does not apply: a frozen backbone trains only a head on fixed features, so the '
-                   'augmentation axis collapses to off for it')
+COLLAPSE_REASON = ('augmentation is not searched on a frozen backbone (a rule of this search, to keep its cost down and match '
+                   'the cached-feature probe, which never augments; deeptune.py itself would augment the clips a frozen '
+                   "backbone's head sees), so the augmentation axis collapses to off for it")
 
 
 def parse_train_mode(text: str) -> tuple[str, Optional[int]]:
@@ -74,7 +78,8 @@ def _learning_rate(value) -> float:
 
 
 def augmentation_applies(train_mode: str) -> bool:
-    """Augmentation is searched only where backbone weights train (full, lora, partial), never on a frozen backbone."""
+    """The search's rule: augmentation is searched only where backbone weights train (full, lora, partial), not on a frozen
+    backbone (see the module docstring for why it is a rule and not a fact about deeptune.py)."""
     return parse_train_mode(train_mode)[0] != 'frozen'
 
 
@@ -192,7 +197,7 @@ class Grid:
         collapsed = self.combinations() - self.size()
         if collapsed:
             product += (f' = {self.combinations()} combinations, {collapsed} of them folded into others (augmentation does '
-                        'not apply to a frozen backbone)')
+                        'is not searched on a frozen backbone, by rule)')
         return product + f' = {self.size()} candidates'
 
     def expand(self) -> list[Candidate]:
