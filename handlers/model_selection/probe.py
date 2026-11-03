@@ -27,7 +27,7 @@ from typing import Optional
 import numpy as np
 
 from handlers.model_selection.grid import DEFAULT, parse_train_mode
-from handlers.model_selection.runner import REPO, RunResult, failure_reason, result_from_exit
+from handlers.model_selection.runner import REPO, RunResult, failure_reason, result_from_exit, script_command
 
 PROBE_EPOCHS, PROBE_LR, DEFAULT_FRAMES = 10, 1e-3, 8
 LOG_FILE = 'probe.log'
@@ -85,8 +85,8 @@ class FeatureProbeRunner:
     def _call(self, script: str, argv: list, log) -> int:
         log.write(f'# {self.python} {script} {subprocess.list2cmdline([str(a) for a in argv])}\n')
         log.flush()
-        process = subprocess.Popen([self.python, '-u', str(REPO / script), *map(str, argv)], stdout=log, stderr=subprocess.STDOUT,
-                                   cwd=str(REPO), env=self.env)
+        command, cwd = script_command(self.python, REPO / script)
+        process = subprocess.Popen([*command, *map(str, argv)], stdout=log, stderr=subprocess.STDOUT, cwd=str(cwd), env=self.env)
         try:
             return process.wait()
         except KeyboardInterrupt:

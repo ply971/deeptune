@@ -42,6 +42,21 @@ def failure_reason(text: str) -> str:
     return lines[-1][:500] if lines else 'no output'
 
 
+def script_command(python: str, script: Path) -> tuple[list, Path]:
+    """(command before the script's arguments, working folder) for running one of DeepTune's entry points.
+
+    From a checkout this is `python -u script` in the repository, as before. In the frozen desktop build (packaging/)
+    `sys.executable` is the desktop executable itself and there is no script on disk, so the entry point runs through that
+    executable's worker sentinels (desktop/app.py): --deeptune-worker for deeptune.py, --tool-worker <name> for the
+    others."""
+    script = Path(script)
+    if getattr(sys, 'frozen', False):
+        executable = Path(sys.executable)
+        sentinel = ['--deeptune-worker'] if script.name == 'deeptune.py' else ['--tool-worker', script.stem]
+        return [str(executable), *sentinel], executable.parent
+    return [python, '-u', str(script)], REPO
+
+
 def result_from_exit(returncode: int, seconds: float, output: str) -> RunResult:
     if returncode == 0:
         return RunResult('ok', seconds)
@@ -65,8 +80,8 @@ class SubprocessRunner:
         with open(log_path, 'w', encoding='utf-8') as log:
             log.write(f'# role: {role}\n# {self.python} {self.script} {subprocess.list2cmdline([str(a) for a in argv])}\n')
             log.flush()
-            process = subprocess.Popen([self.python, '-u', str(self.script), *map(str, argv)], stdout=log, stderr=subprocess.STDOUT,
-                                       cwd=str(REPO), env=self.env)
+            command, cwd = script_command(self.python, self.script)
+            process = subprocess.Popen([*command, *map(str, argv)], stdout=log, stderr=subprocess.STDOUT, cwd=str(cwd), env=self.env)
             try:
                 returncode = process.wait()
             except KeyboardInterrupt:
