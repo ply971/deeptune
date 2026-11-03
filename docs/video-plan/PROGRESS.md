@@ -1,4 +1,4 @@
-﻿# PROGRESS — DeepTune Video Analysis
+# PROGRESS — DeepTune Video Analysis
 
 Claude Code: update this file at the end of **every** session. Newest entry on top.
 Keep entries short and factual. This is the handoff between sessions.
