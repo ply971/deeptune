@@ -380,6 +380,9 @@ class _Interrupting:
     def __init__(self, runner, on_call):
         self.runner, self.on_call, self.count = runner, on_call, 0
 
+    def __getattr__(self, name):  # probe and probe_problem: the same screens as an uninterrupted run
+        return getattr(self.runner, name)
+
     def __call__(self, argv, run_dir, role):
         if role == 'cv':
             self.count += 1
