@@ -1123,6 +1123,9 @@ def on_test_run_selected(sender: ItemId = 0, app_data: Any = None, user_data: st
     except (OSError, ValueError) as exc:
         _set_status(f'Cannot read this run: {exc}', ERROR)
         return
+    if _selected_test_run is None or _selected_test_run.run_dir != results.run_dir:
+        # An override describes one run's model; another run starts from its own record again.
+        ow.apply([opt for opt in co.INFER_OPTIONS if opt.section == co.S_OVERRIDE], INFER, {})
     _selected_test_run = results
     # Whatever predictions/metrics are on screen belong to whichever run was
     # selected (or tested) before this one -- clear them so switching runs

@@ -425,6 +425,26 @@ def test_test_page_options_go_into_the_inference_config(gui, tmp_path):
     assert parsed.no_abstain and parsed.test_crops == 3 and parsed.batch_size == 4
 
 
+def test_choosing_another_test_run_clears_the_overrides_of_the_last_one(gui, tmp_path):
+    from desktop import option_widgets as ow
+    spec = co.by_key(co.INFER_OPTIONS)
+    runs = []
+    for name in ('deeptune-a', 'deeptune-b'):
+        train = tmp_path / name / 'trainval_output_x'
+        train.mkdir(parents=True)
+        (train / 'model_weights.pth').write_bytes(b'w')
+        runs.append(tmp_path / name)
+    gui._test_run_history = {'a': runs[0], 'b': runs[1]}
+    gui.on_test_run_selected(user_data='a')
+    gui.dpg.set_value(ow.tag('infer', spec['model_version']), 'r3d_18')
+    gui.dpg.set_value(ow.tag('infer', spec['no_abstain']), True)
+    gui.on_test_run_selected(user_data='a')
+    assert gui.dpg.get_value(ow.tag('infer', spec['model_version'])) == 'r3d_18'
+    gui.on_test_run_selected(user_data='b')
+    assert gui.dpg.get_value(ow.tag('infer', spec['model_version'])) == ''
+    assert gui.dpg.get_value(ow.tag('infer', spec['no_abstain']))  # a test option, not an override, stays
+
+
 class _FakeHandle:
     def __init__(self):
         self.log_queue, self.done_queue = queue.Queue(), queue.Queue()

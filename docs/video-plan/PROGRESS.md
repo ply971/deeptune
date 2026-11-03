@@ -430,3 +430,9 @@ Keep entries short and factual. This is the handoff between sessions.
 - Honest limit: the 30-candidate simulated grid is too small to separate smart from bayes; real comparison is the GPU gate in reports/R3b.md (needs the user).
 - A background test run was killed by Claude Code for low memory; reran in the foreground in two batches. Full suite still owed.
 - Next: G1 GUI catch-up (worktree `.claude/wt/G1`, branch `video/G1-gui-catchup`).
+
+### 2026-11-03 — G1 GUI catch-up built (builder, branch `video/G1-gui-catchup`)
+- Every flag of deeptune.py, infer.py, select_model.py, ensemble.py, extract_features.py, train_feature_head.py and track.py (273) has a GUI control; allow-list empty. Specs in `desktop/cli_options.py`; new pages Model Selection (dry run gates the search; sealed-test score shown as the honest number), Ensemble, Features & Probes; Advanced settings on the Model page; Test options and overrides; More tracking options; sidebar Device (`CUDA_VISIBLE_DEVICES`); reports read from disk on Results/Test.
+- `tests/test_gui_coverage.py` drives each flag's control through the GUI's argv builder and the real parser; mutation proof: dropping `--use-peft` or `--save_video` fails it. `tests/test_gui_pages.py` covers the pages. Targeted runs: `98 passed` (new), `315 passed, 2 warnings` (desktop + hub), `9 passed` (followups), `254 passed, 2 skipped` (CLI neighbours). Full suite owed.
+- For review: hub backbones offered via `GUI_MODEL_VERSIONS` so `test_hub_backbones.py`'s "GUI list is Phase 7" assertion still holds; its message is now stale. Details in `reports/G1.md`.
+- Next: click through the new pages once, a GPU check of a GUI-launched run, ml-critic review, then Wave 3.
