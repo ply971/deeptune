@@ -28,13 +28,30 @@ class DeepTuneVisionOptions:
     Class for dynamically creating DeepTune's CLI arguments.
     """
     def __init__(self, run_type: RunType, args=None):
+        self._build_parser(run_type)
+
+        # --- training basics (T1): --config file values become defaults, explicit flags win ---
+        apply_config_defaults(self.parser, args)
+        # --- end training basics ---
+        parsed_args = self.parser.parse_args(args)
+        self._read_parsed_args(run_type, parsed_args, args)
+
+    @classmethod
+    def build_parser(cls, run_type: RunType) -> ArgumentParser:
+        """The parser of `run_type` with every flag, without parsing, seeding or printing anything. For tools that read
+        the flags, such as the desktop GUI coverage test (tests/test_gui_coverage.py)."""
+        options = cls.__new__(cls)
+        options._build_parser(run_type)
+        return options.parser
+
+    def _build_parser(self, run_type: RunType) -> None:
         self.parser = ArgumentParser(
             description=f"CLI for {run_type.value} pipeline.",
             formatter_class=RawTextHelpFormatter
         )
         self.mode = run_type
         self._add_default_args()
-        
+
         if run_type == RunType.TabPFNTRAIN:
             self._add_tabpfn_train_args()
         if run_type == RunType.TabPFNEVAL:
@@ -52,10 +69,7 @@ class DeepTuneVisionOptions:
         if run_type == (RunType.TIMESERIES):
             self._add_timeseries_args()
 
-        # --- training basics (T1): --config file values become defaults, explicit flags win ---
-        apply_config_defaults(self.parser, args)
-        # --- end training basics ---
-        parsed_args = self.parser.parse_args(args)
+    def _read_parsed_args(self, run_type: RunType, parsed_args, args) -> None:
         # --- training basics (T1) ---
         self.config: Optional[str] = parsed_args.config
         if run_type in (RunType.TRAIN, RunType.ONECALL):

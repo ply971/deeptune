@@ -31,6 +31,11 @@ def training_log_dir(ckpt_directory) -> Path:
     return path.parent if path.is_file() else path
 
 
+def build_parser():
+    """deeptune.py's argument parser, built without parsing anything (the desktop GUI coverage test reads it)."""
+    return DeepTuneVisionOptions.build_parser(RunType.ONECALL)
+
+
 def parse_args(argv=None):
     """Parse and check a deeptune.py command line without running it. Every refusal ends in the parser's error (exit
     code 2) with its reason, so select_model.py checks each candidate with this function and the rules live in one place.
