@@ -32,7 +32,7 @@ def test_select_model_end_to_end_through_deeptune_subprocesses(tmp_path):
     from handlers.model_selection.runner import SubprocessRunner
     data, out = _dataset(tmp_path), tmp_path / 'search'
     env = dict(os.environ, CUDA_VISIBLE_DEVICES='-1', OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')
-    code = select_model.main(['--df', str(data), '--out', str(out), '--backbones', 'resnet_tiny', 'vjepa2_tiny', '--num_frames', '4',
+    code = select_model.main(['--search', 'exhaustive', '--df', str(data), '--out', str(out), '--backbones', 'resnet_tiny', 'vjepa2_tiny', '--num_frames', '4',
                               '--k', '2', '--epochs', '1', '--batch_size', '4', '--boot', '50', '--no_pilot', '--gpu_memory_gb', 'none',
                               '--seed', '7'],
                              runner=SubprocessRunner(env=env))

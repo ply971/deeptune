@@ -79,9 +79,21 @@ def fold_stats(entry: dict, metric: str) -> tuple[Optional[float], Optional[floa
     return float(values.mean()), float(values.std(ddof=1)) if len(values) > 1 else None
 
 
+def _augmentation_column(config: dict) -> str:
+    """What the augmentation column says: the value, or that it did not apply (a frozen backbone; R3b)."""
+    from handlers.model_selection.grid import augmentation_applies
+    value = config.get('augmentation', 'off')
+    try:
+        applies = augmentation_applies(config.get('train_mode', 'frozen'))
+    except ValueError:
+        applies = True
+    return value if applies else 'n/a (frozen backbone)'
+
+
 def leaderboard(entries: list, metric: str, mode: str) -> pd.DataFrame:
-    """One row per candidate. Done candidates first, best first; the rest after, with their status and reason.
-    Ties keep grid order."""
+    """One row per candidate and protocol. Done candidates of the ranking protocol (cv) first, best first, with a rank;
+    the rest after, with their status and reason: screening and tuning results of other protocols (protocol column) are
+    listed without a rank, as their scores are not comparable with cv scores. Ties keep grid order."""
     if metric not in METRICS[mode]:
         raise ValueError(f'Unknown metric {metric!r} for {mode}; choose one of {sorted(METRICS[mode])}.')
     direction = METRICS[mode][metric]
@@ -90,15 +102,17 @@ def leaderboard(entries: list, metric: str, mode: str) -> pd.DataFrame:
         mean, std = fold_stats(entry, metric) if entry['status'] == 'done' else (None, None)
         interval = entry.get('intervals', {}).get(metric, {}) if entry['status'] == 'done' else {}
         config = {name: entry['config'].get(name) for name in CANDIDATE_FIELDS}
+        config['augmentation'] = _augmentation_column(entry['config'])
         rows.append({'key': entry['key'], 'candidate': entry.get('label', ''), **config, 'status': entry['status'],
                      f'cv_{metric}_mean': mean, f'cv_{metric}_fold_sd': std, 'folds': len(entry.get('folds', [])),
                      f'oof_{metric}_low': interval.get('low'), f'oof_{metric}_high': interval.get('high'),
                      'interval_unit': interval.get('unit'), 'trainable_params': entry.get('footprint', {}).get('trainable_params'),
+                     'protocol': entry.get('protocol', 'cv'), 'stage': entry.get('stage', ''),
                      'seconds': entry.get('seconds'), 'reason': entry.get('reason', ''), '_order': order})
     table = pd.DataFrame(rows)
     if table.empty:
         return table
-    ranked = table[(table['status'] == 'done') & table[f'cv_{metric}_mean'].notna()].copy()
+    ranked = table[(table['status'] == 'done') & table[f'cv_{metric}_mean'].notna() & (table['protocol'] == 'cv')].copy()
     ranked['_score'] = ranked[f'cv_{metric}_mean'] * direction
     ranked = ranked.sort_values(['_score', '_order'], ascending=[False, True], kind='stable').drop(columns='_score')
     ranked.insert(0, 'rank', np.arange(1, len(ranked) + 1))

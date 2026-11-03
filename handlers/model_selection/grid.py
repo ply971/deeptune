@@ -9,6 +9,16 @@ Train modes (what trains):
     lora:R        --use-peft at LoRA rank R (--lora_rank R on native video models; on 2D backbones the rank is also the
                   head's width, so it is passed as --embed_size R, as deeptune.py documents)
     partial:N     --trainable_params N: the head, then the top backbone layers while they fit in N parameters (A1)
+
+Augmentations (R3b; training rows only: deeptune.py never augments validation, held-out or test rows):
+    off           none
+    aug           --video_augment (temporal jitter, one random-resized crop and colour jitter per clip) plus
+                  --video_speed_perturb 0.1 (playback speed in [0.9, 1.1])
+    aug_mix       aug, plus mixup (alpha 0.2) or CutMix (alpha 1.0) on half the batches (--mix_prob 0.5); classification only
+    aug_flip      aug plus --video_flip; only with select_model.py --allow_flip, since a mirror turns left motion into right
+    aug_mix_flip  aug_mix plus --video_flip; the same condition
+Augmentation applies only to candidates whose backbone weights train. A frozen candidate trains a head on fixed backbone
+features, so its augmentation axis collapses to `off`, and the collapse is recorded (Grid.collapsed).
 """
 from __future__ import annotations
 
@@ -25,9 +35,20 @@ DEFAULT = 'default'
 TRAIN_MODE_FORMS = 'frozen, full, lora:R or partial:COUNT'
 # Axis name in the grid file and on the command line -> Candidate field.
 AXES = {'backbones': 'backbone', 'video_archs': 'video_arch', 'poolings': 'pooling', 'train_modes': 'train_mode',
-        'learning_rates': 'learning_rate', 'num_frames': 'num_frames'}
+        'learning_rates': 'learning_rate', 'num_frames': 'num_frames', 'augmentations': 'augmentation'}
 DEFAULT_AXES = {'backbones': None, 'video_archs': [DEFAULT], 'poolings': [DEFAULT], 'train_modes': ['frozen'],
-                'learning_rates': [1e-4], 'num_frames': [DEFAULT]}
+                'learning_rates': [1e-4], 'num_frames': [DEFAULT], 'augmentations': ['off']}
+
+SPEED_PERTURB, MIXUP_ALPHA, CUTMIX_ALPHA, MIX_PROB = '0.1', '0.2', '1.0', '0.5'
+_AUG = ['--video_augment', '--video_speed_perturb', SPEED_PERTURB]
+_MIX = ['--mixup_alpha', MIXUP_ALPHA, '--cutmix_alpha', CUTMIX_ALPHA, '--mix_prob', MIX_PROB]
+AUGMENTATIONS = {'off': [], 'aug': _AUG, 'aug_mix': _AUG + _MIX, 'aug_flip': _AUG + ['--video_flip'],
+                 'aug_mix_flip': _AUG + _MIX + ['--video_flip']}
+FLIP_AUGMENTATIONS = ('aug_flip', 'aug_mix_flip')
+# deeptune.py destinations an augmentation value sets: --deeptune_args may not also set them while the axis is searched.
+AUGMENTATION_DESTS = ('video_augment', 'video_flip', 'video_speed_perturb', 'mixup_alpha', 'cutmix_alpha', 'mix_prob')
+COLLAPSE_REASON = ('augmentation does not apply: a frozen backbone trains only a head on fixed features, so the '
+                   'augmentation axis collapses to off for it')
 
 
 def parse_train_mode(text: str) -> tuple[str, Optional[int]]:
@@ -52,6 +73,18 @@ def _learning_rate(value) -> float:
     return rate
 
 
+def augmentation_applies(train_mode: str) -> bool:
+    """Augmentation is searched only where backbone weights train (full, lora, partial), never on a frozen backbone."""
+    return parse_train_mode(train_mode)[0] != 'frozen'
+
+
+def _augmentation(value) -> str:
+    value = str(value)
+    if value not in AUGMENTATIONS:
+        raise ValueError(f'Unknown augmentation {value!r}; use one of {", ".join(AUGMENTATIONS)}.')
+    return value
+
+
 def _frames(value):
     if value == DEFAULT:
         return DEFAULT
@@ -69,21 +102,37 @@ class Candidate:
     train_mode: str = 'frozen'
     learning_rate: float = 1e-4
     num_frames: object = DEFAULT
+    augmentation: str = 'off'
 
     def config(self) -> dict:
-        """Canonical and JSON-ready: the identity of this candidate in the ledger."""
-        return asdict(self)
+        """Canonical and JSON-ready: the identity of this candidate in the ledger. `augmentation` is left out when it is
+        off, so a candidate without augmentation keeps the key R3a gave it and older ledgers resume."""
+        config = asdict(self)
+        if config['augmentation'] == 'off':
+            config.pop('augmentation')
+        return config
 
     def label(self) -> str:
         parts = [self.backbone, self.video_arch, self.pooling, self.train_mode, f'lr={self.learning_rate:g}',
                  f'{self.num_frames} frames' if self.num_frames != DEFAULT else DEFAULT]
+        if self.augmentation != 'off':
+            parts.append(self.augmentation)
         return ' | '.join(str(part) for part in parts)
 
     def build_key(self) -> str:
-        """Everything that shapes the model, so candidates differing only in learning rate share one preflight build."""
+        """Everything that shapes the model, so candidates differing only in learning rate (or augmentation, which changes
+        the inputs and not the model) share one preflight build."""
         config = self.config()
         config.pop('learning_rate')
+        config.pop('augmentation', None)
         return json.dumps(config, sort_keys=True)
+
+    def replace(self, **values) -> 'Candidate':
+        """This candidate with some axes changed, and the augmentation collapsed to off on a frozen backbone."""
+        config = {**asdict(self), **values}
+        if not augmentation_applies(config['train_mode']):
+            config['augmentation'] = 'off'
+        return Candidate(**config)
 
 
 @dataclass
@@ -94,6 +143,7 @@ class Grid:
     train_modes: list = field(default_factory=lambda: ['frozen'])
     learning_rates: list = field(default_factory=lambda: [1e-4])
     num_frames: list = field(default_factory=lambda: [DEFAULT])
+    augmentations: list = field(default_factory=lambda: ['off'])
 
     def __post_init__(self):
         for name in AXES:
@@ -106,6 +156,7 @@ class Grid:
             parse_train_mode(mode)
         self.learning_rates = [_learning_rate(v) for v in self.learning_rates]
         self.num_frames = [_frames(v) for v in self.num_frames]
+        self.augmentations = [_augmentation(v) for v in self.augmentations]
         self.backbones, self.video_archs, self.poolings, self.train_modes = (
             [str(v) for v in values] for values in (self.backbones, self.video_archs, self.poolings, self.train_modes))
 
@@ -127,19 +178,45 @@ class Grid:
     def to_dict(self) -> dict:
         return {name: list(getattr(self, name)) for name in AXES}
 
-    def size(self) -> int:
+    def combinations(self) -> int:
         size = 1
         for name in AXES:
             size *= len(getattr(self, name))
         return size
 
+    def size(self) -> int:
+        return len(self.expand())
+
     def formula(self) -> str:
-        return ' x '.join(f'{len(getattr(self, name))} {name}' for name in AXES) + f' = {self.size()} candidates'
+        product = ' x '.join(f'{len(getattr(self, name))} {name}' for name in AXES)
+        collapsed = self.combinations() - self.size()
+        if collapsed:
+            product += (f' = {self.combinations()} combinations, {collapsed} of them folded into others (augmentation does '
+                        'not apply to a frozen backbone)')
+        return product + f' = {self.size()} candidates'
 
     def expand(self) -> list[Candidate]:
-        """Every combination, in a fixed order (backbones vary slowest)."""
+        """Every combination, in a fixed order (backbones vary slowest). A frozen candidate appears once, with augmentation
+        off, at the place of its first combination."""
         axes = [getattr(self, name) for name in AXES]
-        return [Candidate(*combination) for combination in itertools.product(*axes)]
+        seen, out = set(), []
+        for combination in itertools.product(*axes):
+            candidate = Candidate(*combination).replace()
+            if candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
+        return out
+
+    def collapsed(self) -> list[dict]:
+        """Each combination the augmentation collapse folded into another candidate, with the reason."""
+        axes = [getattr(self, name) for name in AXES]
+        found = []
+        for combination in itertools.product(*axes):
+            asked = Candidate(*combination)
+            kept = asked.replace()
+            if kept != asked:
+                found.append({'asked': asked.label(), 'runs_as': kept.label(), 'reason': COLLAPSE_REASON})
+        return found
 
 
 @dataclass
@@ -193,12 +270,14 @@ def _deeptune_parser():
         return DeepTuneVisionOptions(RunType.ONECALL, args=['--modality', 'video', '--df', 'x.parquet', '--out', 'x']).parser
 
 
-def extra_args_problems(extra: list) -> list[str]:
-    """Why these extra deeptune.py words cannot be passed to every run. Each word that starts with a dash is matched to a
-    deeptune.py flag the way argparse matches it (exact, else a unique prefix), so `--d` or `--see` are caught too."""
+def _extra_actions(extra: list) -> tuple[list, list[str]]:
+    """([(word, argparse action)], problems) for the flag words of `extra`. Each word that starts with a dash is matched to
+    a deeptune.py flag the way argparse matches it (exact, else a unique prefix), so `--d` or `--see` are caught too."""
+    if not any(str(word).startswith('-') for word in extra):
+        return [], []
     parser = _deeptune_parser()
     options = parser._option_string_actions  # argparse's own table of option strings
-    problems = []
+    found, problems = [], []
     for word in map(str, extra):
         if not word.startswith('-') or _NUMBER.match(word):
             continue
@@ -213,9 +292,22 @@ def extra_args_problems(extra: list) -> list[str]:
                 problems.append(f'{word!r} is ' + ('an ambiguous abbreviation of deeptune.py flags.' if matches else 'not a deeptune.py flag.'))
                 continue
             action = matches.pop()
+        found.append((word, action))
+    return found, problems
+
+
+def extra_args_problems(extra: list) -> list[str]:
+    """Why these extra deeptune.py words cannot be passed to every run."""
+    found, problems = _extra_actions(extra)
+    for word, action in found:
         if action.dest in RESERVED_DESTS:
             problems.append(f'{word!r} sets deeptune.py\'s {action.dest}, which select_model.py controls: {RESERVED_DESTS[action.dest]}.')
     return problems
+
+
+def extra_augmentation_flags(extra: list) -> list[str]:
+    """The words of `extra` that set augmentation (they then reach every run, frozen ones included)."""
+    return [word for word, action in _extra_actions(extra)[0] if action.dest in AUGMENTATION_DESTS]
 
 
 def train_mode_flags(train_mode: str, backbone: str) -> list[str]:
@@ -265,6 +357,8 @@ def candidate_argv(candidate: Candidate, settings: RunSettings, df, out, role: s
     if candidate.num_frames != DEFAULT:
         argv += ['--num_frames', str(candidate.num_frames)]
     argv += train_mode_flags(candidate.train_mode, candidate.backbone)
+    if augmentation_applies(candidate.train_mode):
+        argv += AUGMENTATIONS[candidate.augmentation]
     if settings.accept_weights_licence:
         argv += ['--accept_weights_licence', *settings.accept_weights_licence]
     argv += list(settings.deeptune_args)
