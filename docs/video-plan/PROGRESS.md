@@ -449,3 +449,10 @@ Keep entries short and factual. This is the handoff between sessions.
 - Critic mutants: all 8 caught; my two earlier mutants caught. `test_hub_backbones.py` GUI-list test reworded on its own commit (user decision).
 - Runs: `121 passed` (G1 tests), `315 passed, 2 warnings` (desktop + hub), `9 passed` (followups), `53 passed, 1 warning` (model selection). Full suite still owed.
 - Disk: C: hit 0 MB free during the round; I deleted only my own pytest temp folders (~800 MB). The coordinator should free space before the full suite.
+
+### 2026-11-03 — G1 merged (coordinator)
+- G1 GUI catch-up merged `1eff3ff` after ml-critic V-058 and a fix round. Every flag of deeptune.py, infer.py, select_model.py, ensemble.py, extract_features.py, train_feature_head.py and track.py is reachable from the desktop app through the pages' real Start handlers (272/273; `--config` allow-listed because "Load recipe file" fills the widgets instead).
+- The user approved rewording `test_desktop_config_accepts_the_command_line_models` (6b908ea): real hub backbones must be in the GUI list, tiny ones must not.
+- Merged tree: `462 passed, 2 warnings` (GUI coverage, GUI pages, desktop, hub, followups, splits).
+- Open: nobody has looked at the new pages on screen yet (user click-through requested); no GPU run from the GUI; the full suite is still owed. Another session is running a real-benchmarks campaign (see its entry above): no second full suite or GPU job while it runs.
+- Next: Wave 3 (timeline, CtxPL port, unsupervised analysis, explainability), with GUI controls built in.
