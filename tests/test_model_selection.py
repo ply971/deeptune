@@ -120,7 +120,7 @@ def fake_footprint(args, num_classes, measure):
 
 
 def _argv(data, out, *extra, backbones=('resnet_tiny', 'siglip_tiny')):
-    return ['--df', str(data), '--out', str(out), '--backbones', *backbones, '--k', '3', '--epochs', '2', '--boot', '60',
+    return ['--search', 'exhaustive', '--df', str(data), '--out', str(out), '--backbones', *backbones, '--k', '3', '--epochs', '2', '--boot', '60',
             '--gpu_memory_gb', 'none', *extra]
 
 

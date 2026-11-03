@@ -1,11 +1,15 @@
-"""Automatic model selection for video: train every candidate of a grid with grouped k-fold cross-validation on development
-rows, rank them, refit the winner and score it once on a sealed test set (R3a; handlers/model_selection/).
+"""Automatic model selection for video: cross-validate candidates of a grid with grouped k-fold on development rows, rank
+them, refit the winner and score it once on a sealed test set (R3a, R3b; handlers/model_selection/).
 
-    python select_model.py --df clips.parquet --out search --backbones resnet18 r3d_18 --train_modes frozen lora:8 --dry_run
-    python select_model.py --df clips.parquet --out search --grid grid.json --k 5 --yes
+    python select_model.py --df clips.parquet --out search --backbones resnet18 r3d_18 vjepa2_vitl --train_modes frozen lora:8 full
+    python select_model.py --df clips.parquet --out search --search exhaustive --grid grid.json --k 5 --yes
+    python select_model.py --df clips.parquet --out search --search random --n_trials 20 --grid grid.json
 
-Exhaustive grids explode: the candidate count is the product of the axis lengths, and every candidate trains k times.
-The run count and a rough time estimate are printed before anything trains. Rerunning with the same --out resumes.
+Strategies: smart (default; staged: profile, screen, tune one group at a time, re-check interactions, final CV),
+exhaustive (every candidate), random (seeded draws without replacement) and bayes (Optuna's TPE; optional dependency).
+All of them share one sealed test set, ledger and resume. Exhaustive grids explode: the candidate count is the product of
+the axis lengths, and every candidate trains k times. The run count and a rough time estimate are printed before anything
+trains. Rerunning with the same --out resumes.
 """
 from __future__ import annotations
 
@@ -29,13 +33,19 @@ def _fraction(text: str) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from handlers.model_selection.grid import AUGMENTATIONS, CUTMIX_ALPHA, MIX_PROB, MIXUP_ALPHA, SPEED_PERTURB
     from handlers.model_selection.ranking import DEFAULT_METRIC, METRICS
-    from handlers.model_selection.search import STRATEGIES
+    from handlers.model_selection.search import OVERRIDE_KEYS, STRATEGIES
     from trainers.param_count import parse_param_count
     p = argparse.ArgumentParser(description='Pick the best video model of a grid by grouped cross-validation, with a sealed test set.',
                                 formatter_class=argparse.RawTextHelpFormatter, allow_abbrev=False)
-    p.add_argument('--search', choices=sorted(STRATEGIES), default='exhaustive',
-                   help='exhaustive (default, for now the only one): train every candidate of the grid.')
+    p.add_argument('--search', choices=sorted(STRATEGIES), default='smart',
+                   help='smart (default): profile the data, screen backbone families then backbones cheaply, tune one setting group '
+                        'at a time on the best, re-check pairs of settings together, then rank the top by grouped CV.\n'
+                        'exhaustive: every candidate of the grid.\n'
+                        'random: seeded random candidates without replacement, up to --n_trials or --max_hours.\n'
+                        'bayes: Optuna TPE over the grid (needs `pip install optuna`), up to --n_trials or --max_hours.\n'
+                        'Every strategy selects on development folds only; only the final winner sees the sealed test set.')
     data = p.add_argument_group('data')
     data.add_argument('--df', type=Path, required=True,
                       help='The video dataset, a .parquet file as deeptune.py takes it (or a clip folder / CSV list with --raw-data).')
@@ -61,6 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
                       help='What trains: frozen (default), full, lora:R (LoRA rank R) or partial:COUNT (--trainable_params COUNT).')
     grid.add_argument('--learning_rates', nargs='+', type=float, default=None, metavar='LR', help='Learning rates (default 1e-4).')
     grid.add_argument('--num_frames', nargs='+', default=None, metavar='T', help='Frames per clip (default: default, which is 8).')
+    grid.add_argument('--augmentations', nargs='+', default=None, choices=list(AUGMENTATIONS), metavar='AUG',
+                      help='Training augmentation, searched like any axis: off; aug (--video_augment with --video_speed_perturb '
+                           f'{SPEED_PERTURB}); aug_mix (aug plus mixup {MIXUP_ALPHA} / CutMix {CUTMIX_ALPHA} on {MIX_PROB} of the '
+                           'batches, classification only); aug_flip and aug_mix_flip (also --video_flip, only with --allow_flip). '
+                           'Applies only where backbone weights train: frozen candidates run once, without augmentation. '
+                           'Default: off aug aug_mix for --search smart (off aug for regression), off for the others.')
+    grid.add_argument('--allow_flip', action='store_true',
+                      help='Allow aug_flip and aug_mix_flip. A mirror turns left motion into right motion: state with this flag that '
+                           'your labels do not depend on direction.')
     run = p.add_argument_group('training and scoring')
     run.add_argument('--k', type=_positive_int, default=5, help='Cross-validation folds per candidate (default 5, at least 2).')
     run.add_argument('--metric', default=None,
@@ -80,6 +99,47 @@ def build_parser() -> argparse.ArgumentParser:
                      help='More deeptune.py flags for every run, as separate words, LAST on the line: --deeptune_args --precision bf16. '
                           'No shell-style splitting, so Windows paths keep their backslashes. Flags select_model.py sets itself '
                           '(data, split, seed, folds, grid axes, epochs, batch size...) are refused.')
+    smart = p.add_argument_group('smart search (--search smart)')
+    # Strategy-specific flags default to None, so a flag given to another strategy can be refused (refuse_foreign_flags).
+    smart.add_argument('--screen', choices=['auto', 'probe', 'cv'], default=None,
+                       help='How the frozen view of stage 1 screens: probe = cached frozen features + attentive probe '
+                            '(extract_features.py, train_feature_head.py); cv = short deeptune.py cross-validation (--screen_epochs). '
+                            'auto (default): probe when every screened backbone can be probed, else cv. An explicit probe that '
+                            'cannot run is refused. The trainable view always uses short cross-validation.')
+    smart.add_argument('--screen_views', choices=['auto', 'frozen', 'trainable'], default=None,
+                       help='Which settings stage 1 screens backbones at. auto (default): a frozen view and a trainable view (the '
+                            'first trainable train mode of the grid) when the grid has both, each keeping its own best, the '
+                            'survivors being their union; frozen features can rank backbones differently from fine-tuning. '
+                            'frozen or trainable: that view only.')
+    smart.add_argument('--screen_epochs', type=_positive_int, default=None, help='Epochs of a cv screening run (default 2).')
+    smart.add_argument('--top_families', type=_positive_int, default=None,
+                       help='Backbone families each screening view keeps, one small model per family (default 2).')
+    smart.add_argument('--top_backbones', type=_positive_int, default=None,
+                       help='Backbones each screening view keeps; the union tunes (default 3).')
+    smart.add_argument('--tune_epochs', type=_positive_int, default=None,
+                       help='Epochs while tuning (default: --epochs, so tuning runs are the final ranking runs). Fewer makes '
+                            'tuning cheaper; the --final_top best tune runs are then cross-validated again with --epochs.')
+    smart.add_argument('--recheck_models', type=int, default=None,
+                       help='Tuned models whose pairs of setting groups are re-checked together (default 2; 0 turns it off).')
+    smart.add_argument('--recheck_full_product', type=int, default=None,
+                       help='Stage 3 tries every combination of two groups\' values when their counts multiply to at most this, '
+                            'else only the two runner-ups together (default 6; 0: runner-ups only).')
+    smart.add_argument('--final_top', type=_positive_int, default=None,
+                       help='Candidates in the final grouped cross-validation ranking (default 3).')
+    smart.add_argument('--include', nargs='+', default=[], metavar='KEY=VALUE',
+                       help='Keep these past the screening cuts, e.g. backbone=r3d_18 or family=vjepa2 (smart only).')
+    sampled = p.add_argument_group('random and bayes search')
+    sampled.add_argument('--n_trials', type=_positive_int, default=None,
+                         help='Candidates to train (default: until --max_hours or the grid is exhausted).')
+    sampled.add_argument('--bayes_startup', type=_positive_int, default=None,
+                         help='bayes: random trials before TPE models the results (default: a quarter of --n_trials, at least 3; 5 '
+                              'without --n_trials).')
+    overrides = p.add_argument_group('overrides (every strategy)')
+    overrides.add_argument('--exclude', nargs='+', default=[], metavar='KEY=VALUE',
+                           help='Skip candidates with this value, e.g. backbone=swin3d_b, train_mode=full or family=videomae. Keys: '
+                                f'{", ".join(OVERRIDE_KEYS)}, family. Recorded as skipped with the reason.')
+    overrides.add_argument('--fix', nargs='+', default=[], metavar='KEY=VALUE',
+                           help='Pin an axis to a value, e.g. learning_rate=1e-4: other values are skipped, and smart does not tune it.')
     limits = p.add_argument_group('limits and checks')
     limits.add_argument('--max_trainable_params', type=parse_param_count, default=None, metavar='COUNT',
                         help='Skip candidates that would train more parameters than this (e.g. 5M). Default: no limit.')
@@ -92,7 +152,11 @@ def build_parser() -> argparse.ArgumentParser:
                              'Building loads each backbone\'s weights, downloading them if they are not cached.')
     limits.add_argument('--no_pilot', dest='pilot', action='store_false',
                         help='Do not time a 1-epoch, 2-fold pilot of the cheapest candidate; the time estimate is then unknown.')
-    limits.add_argument('--max_hours', type=float, default=8.0, help='Refuse to start if the estimate is longer than this, unless --yes (default 8).')
+    limits.add_argument('--max_hours', type=float, default=8.0,
+                        help='exhaustive: refuse to start if the estimate is longer than this, unless --yes. smart, random, bayes: '
+                             'a running budget; no new training starts once the trainings in the ledger add up to it (default 8).')
+    limits.add_argument('--profile_clips', type=int, default=16,
+                        help='Development clips the data profile opens for clip length and a quick motion probe (default 16; 0: none).')
     limits.add_argument('--yes', action='store_true', help='Run even over --max_hours, or a large run without a time estimate.')
     limits.add_argument('--dry_run', action='store_true', help='Check the grid and print the counts and estimate; train nothing, not even the pilot.')
     limits.add_argument('--estimate_only', action='store_true', help='Run the pilot, print the estimate, and stop.')
@@ -115,36 +179,99 @@ def _gpu_memory(text: str):
     return None
 
 
+def _default_augmentations(args):
+    """--search smart tunes augmentation as one more group by default; the other strategies leave it off unless asked."""
+    if args.augmentations is not None:
+        return args.augmentations
+    if args.grid is not None:
+        import json
+        if 'augmentations' in json.loads(Path(args.grid).read_text(encoding='utf-8')):
+            return None  # the grid file's own axis
+    if args.search == 'smart':
+        from handlers.model_selection.grid import extra_augmentation_flags
+        if extra_augmentation_flags(args.deeptune_args):
+            return None  # the user set augmentation for every run through --deeptune_args: respected, with a warning
+        return ['off', 'aug', 'aug_mix'] if args.mode == 'cls' else ['off', 'aug']
+    return None
+
+
+# Flags that only one strategy (or two) reads: given to another, they would be silently ignored, so they are refused.
+STRATEGY_FLAGS = {
+    ('smart',): ('screen', 'screen_views', 'screen_epochs', 'top_families', 'top_backbones', 'tune_epochs', 'recheck_models',
+                 'recheck_full_product', 'final_top'),
+    ('random', 'bayes'): ('n_trials',),
+    ('bayes',): ('bayes_startup',),
+}
+
+
+def refuse_foreign_flags(args) -> None:
+    for owners, names in STRATEGY_FLAGS.items():
+        given = [f'--{name}' for name in names if getattr(args, name) is not None]
+        if given and args.search not in owners:
+            raise ValueError(f'{" ".join(given)} {"is" if len(given) == 1 else "are"} for --search {" or ".join(owners)} and would be '
+                             f'ignored by --search {args.search}. Leave {"it" if len(given) == 1 else "them"} out, or change --search.')
+
+
 def options_from_args(args):
-    from handlers.model_selection.grid import Grid, RunSettings, extra_args_problems
-    from handlers.model_selection.search import SearchOptions
+    from handlers.model_selection.grid import FLIP_AUGMENTATIONS, AXES, Grid, RunSettings, extra_args_problems, extra_augmentation_flags
+    from handlers.model_selection.search import SearchOptions, parse_overrides
     problems = extra_args_problems(args.deeptune_args)
     if problems:
         raise ValueError('--deeptune_args: ' + ' '.join(problems))
     grid = Grid.from_sources(args.grid, backbones=args.backbones, video_archs=args.video_archs, poolings=args.poolings,
-                             train_modes=args.train_modes, learning_rates=args.learning_rates, num_frames=args.num_frames)
+                             train_modes=args.train_modes, learning_rates=args.learning_rates, num_frames=args.num_frames,
+                             augmentations=_default_augmentations(args))
+    flips = sorted(set(grid.augmentations) & set(FLIP_AUGMENTATIONS))
+    if flips and not args.allow_flip:
+        raise ValueError(f'--augmentations {" ".join(flips)} flips clips, which turns left motion into right motion. Pass --allow_flip '
+                         'only if your labels do not depend on direction.')
+    if grid.augmentations != ['off'] and extra_augmentation_flags(args.deeptune_args):
+        raise ValueError(f'--deeptune_args sets augmentation ({", ".join(extra_augmentation_flags(args.deeptune_args))}) while '
+                         '--augmentations searches it: use one of them.')
+    include = parse_overrides(args.include, '--include', ('family',))
+    exclude = parse_overrides(args.exclude, '--exclude', ('family',))
+    fix = parse_overrides(args.fix, '--fix')
+    if include and args.search != 'smart':
+        raise ValueError("--include keeps values past the smart search's screening cuts; the other strategies have no cuts. "
+                         'Use --fix or --exclude.')
+    refuse_foreign_flags(args)
+    axis_of = {field: axis for axis, field in AXES.items()}
+    for key, values in fix.items():
+        missing = sorted(map(str, values - set(getattr(grid, axis_of[key]))))
+        if missing:
+            raise ValueError(f"--fix {key}={missing[0]}: not a value of the grid's {axis_of[key]} axis {getattr(grid, axis_of[key])}.")
     settings = RunSettings(mode=args.mode, num_classes=args.num_classes, target=args.target, grouper=args.grouper, k=args.k,
                            seed=args.seed, epochs=args.epochs, early_stopping_patience=args.early_stopping_patience,
                            batch_size=args.batch_size, num_workers=args.num_workers, boot=args.boot,
                            accept_weights_licence=list(args.accept_weights_licence), deeptune_args=list(args.deeptune_args))
+    strategy_options = {name: getattr(args, name) for owners in STRATEGY_FLAGS.values() for name in owners}
     return SearchOptions(df=args.df, out=args.out, grid=grid, settings=settings, strategy=args.search, metric=args.metric,
+                         include=include, exclude=exclude, fix=fix, strategy_options=strategy_options, profile_clips=args.profile_clips,
                          raw_data=args.raw_data, test_fraction=args.test_fraction, max_trainable_params=args.max_trainable_params,
                          gpu_memory_gb=_gpu_memory(args.gpu_memory_gb), preflight=args.preflight, pilot=args.pilot, dry_run=args.dry_run,
                          estimate_only=args.estimate_only, yes=args.yes, max_hours=args.max_hours, allow_grid_change=args.allow_grid_change,
                          retry_failed=args.retry_failed, rescore_sealed_test=args.rescore_sealed_test)
 
 
-def main(argv=None, runner=None, footprint_fn=None) -> int:
+def main(argv=None, runner=None, footprint_fn=None, probe_runner=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.k < 2:
         parser.error('--k must be at least 2.')
     if args.early_stopping_patience < 0 or args.num_workers < 0 or args.boot < 1:
         parser.error('--early_stopping_patience and --num_workers must be 0 or more, and --boot at least 1.')
+    if (args.recheck_models or 0) < 0 or (args.recheck_full_product or 0) < 0 or args.profile_clips < 0:
+        parser.error('--recheck_models, --recheck_full_product and --profile_clips must be 0 or more.')
+    if args.search == 'bayes':
+        from handlers.model_selection.strategies import BayesStrategy
+        try:
+            BayesStrategy.require_optuna()  # optional: imported only for this strategy
+        except ImportError as exc:
+            parser.error(str(exc))
     try:
         options = options_from_args(args)
         from handlers.model_selection.search import ModelSearch
-        search = ModelSearch(options, runner=runner, footprint_fn=footprint_fn)
+        search = ModelSearch(options, runner=runner, footprint_fn=footprint_fn, probe_runner=probe_runner)
     except ValueError as exc:
         parser.error(str(exc))
     return search.run()

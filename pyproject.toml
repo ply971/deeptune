@@ -13,6 +13,8 @@ dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 test = ["pytest>=7.4,<10"]
+# select_model.py --search bayes (Optuna's TPE sampler). Optional: nothing else imports it.
+search = ["optuna>=4,<6"]
 
 [project.scripts]
 deeptune = "deeptune:main"

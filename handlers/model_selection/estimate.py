@@ -35,6 +35,18 @@ def search_seconds(pilot_seconds: float, costs: list, pilot_cost: Optional[float
     return total
 
 
+def jobs_seconds(pilot_seconds: float, jobs: list, pilot_cost: Optional[float], k: int, final_epochs: int, final_needed: bool) -> float:
+    """Like search_seconds, for jobs of different epochs: `jobs` is [(cost, epochs)]. A staged search's plan is an upper
+    bound on its jobs, so this is too. A probe job (cached features) is counted as one epoch of its backbone: the
+    extraction is one forward pass over the clips, and the probe's own training is small next to it."""
+    per_job = [candidate_seconds(pilot_seconds, cost, pilot_cost, k, epochs) for cost, epochs in jobs]
+    total = sum(per_job)
+    if final_needed and jobs:
+        dearest = max(candidate_seconds(pilot_seconds, cost, pilot_cost, k, final_epochs) for cost, _ in jobs)
+        total += dearest / k * (k / (k - 1))
+    return total
+
+
 def describe_hours(seconds: Optional[float]) -> str:
     if seconds is None:
         return 'unknown'
