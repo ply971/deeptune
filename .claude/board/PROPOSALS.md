@@ -265,3 +265,11 @@
 ### P-121 · ML Critic · 2026-10-31 (appended by coordinator)
 - Idea: clip-weighted risk with a per-group clip cap (test E[W - alpha A] <= 0 on rescaled per-group sums); prediction sets from the one-score-per-group reduction.
 - Why: the group-weighted guarantee can differ from clip-weighted error when big groups err more (simulated 0.061 vs 0.160). Cost: M. Status: open
+
+### P-122 · ML Critic · 2026-11-03 03:50
+- Idea: select_model.py tie and noise handling. Among candidates within the paired-bootstrap noise of the best (the one-standard-error rule, Breiman et al. 1984; Hastie et al. ESL 7.10), pick the cheapest (fewest trainable params, then FLOPs) instead of the first in grid order. Record how many configurations were compared, so the winner's-curse note is concrete.
+- Why: dev sets of about 36 to 300 clips move accuracy in 1/n steps. In the R3b regret runs, exact CV ties occur (bayes 0 regret, but the true best picked 3 of 4 times on surface B). Grid order is an arbitrary tie-breaker. The cheaper model is easier to deploy and less overfit to the folds.
+- Cost: S. ranking.py, smart.py _sweep and recheck, selection.json. No new dependency.
+- Risk: the threshold choice; paired intervals are already optimistic after selection (search.py:729). Keep it opt-in at first (--tie_rule first|cheapest_within_se).
+- Fits depth-first: yes. It deepens R3 and adds no new area.
+- Status: open
