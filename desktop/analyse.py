@@ -38,8 +38,10 @@ from . import config as gc
 LIMIT_NOTE = ('A trained clip classifier answers only with its own classes. Tracking and counting use the '
               'selected detector, not your model for clip classification. Choose Trained cat detector '
               'to use your fine-tuned cat checkpoint.')
-TRACKER_NOTE = ('Counts are tracker estimates (unique track IDs), not measured accuracy. A track that is lost '
-                'and found again can be counted twice, so check the overlay before you trust a count.')
+TRACKER_NOTE = ('Counts are tracker estimates (unique track IDs), not measured accuracy. The default tracker '
+                'joins an object that is lost and found again within 3 seconds when its motion, size and look '
+                'agree, but a longer absence, or two objects that swap places, can still change a count, so '
+                'check the overlay before you trust it.')
 CONFIDENCE_NOTE = "Confidence is the model's own score, not a measured accuracy on this video."
 EXPECTED_ERROR_NOTE = ('The expected error comes from validation clips only, so it cannot tell when this video shows '
                        'something the model never trained on.')

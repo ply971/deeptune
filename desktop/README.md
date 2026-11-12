@@ -228,9 +228,13 @@ differ on clip settings, when class names do not fit the class count, and when `
 reports that the error model was refused.
 
 **Find, track and count** runs `track.py` on what you type (Grounding DINO or OWLv2,
-then ByteTrack). You get an overlay video, which the preview plays, and a table of
-count, first seen and last seen per prompt. Counts are tracker estimates: a track
-that is lost and found again can be counted twice, so check the overlay. A result with
+then the BoT-SORT tracker). You get an overlay video, which the preview plays, and a table of
+count, first seen and last seen per prompt. The tracker follows camera motion and each
+object's appearance, then joins a track that was lost and found again within 3 seconds,
+fills short gaps and drops boxes seen on fewer than 3 frames. **More tracking options →
+Tracker = bytetrack** gives the plain tracker used before, and the other new options there
+change one part at a time. Counts are still tracker estimates: a longer absence, or two
+lookalike objects that swap places, can change a count, so check the overlay. A result with
 no tracks is reported as that, with what the detector returned and what would change it.
 
 Keep **Frames step** at 1 for counts you mean to rely on. A step above 1 is faster, but
