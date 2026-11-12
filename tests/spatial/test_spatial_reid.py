@@ -39,7 +39,7 @@ def test_auto_picks_cnn_only_when_its_weights_are_cached(tmp_path, monkeypatch):
     assert reid.resolve_reid('auto') == 'cnn'
     assert reid.resolve_reid('none') == 'none' and reid.resolve_reid('color') == 'color'
     with pytest.raises(ValueError):
-        reid.resolve_reid('osnet')
+        reid.resolve_reid('resnet50')   # unknown names are refused
     assert reid.build_embedder('none') is None
     assert isinstance(reid.build_embedder('color'), reid.ColorHistEmbedder)
 
@@ -120,3 +120,69 @@ def test_track_outputs_report_birth_and_matched_feature():
     assert out[2].start_step == 2 and out[2].birth_box == pytest.approx((30, 0, 40, 10))
     assert out[2].birth_score == pytest.approx(0.8)
     assert out[2].feat == pytest.approx(B)
+
+
+# --- OSNet-AIN person Re-ID -------------------------------------------------------------------------------
+
+
+def test_osnet_is_a_choice_but_never_picked_by_auto(tmp_path, monkeypatch):
+    monkeypatch.setenv('TORCH_HOME', str(tmp_path))
+    assert 'osnet' in reid.REID_CHOICES
+    assert reid.resolve_reid('osnet') == 'osnet'
+    assert reid.resolve_reid('auto') in ('cnn', 'color')
+
+
+def test_osnet_network_gives_512d_features_and_loads_its_own_state_strictly(tmp_path):
+    torch = pytest.importorskip('torch')
+    from spatial.osnet import OSNetAIN, load_osnet_ain
+    torch.manual_seed(0)
+    net = OSNetAIN().eval()
+    x = torch.randn(2, 3, 256, 128)
+    with torch.inference_mode():
+        y = net(x)
+    assert y.shape == (2, 512) and bool((y >= 0).all())          # Linear + BatchNorm1d + ReLU, as upstream
+    # The released checkpoints keep a classifier head; it is dropped, everything else must match exactly.
+    state = dict(net.state_dict())
+    state['classifier.weight'] = torch.zeros(10, 512)
+    state['classifier.bias'] = torch.zeros(10)
+    torch.save(state, tmp_path / 'w.pt')
+    with torch.inference_mode():
+        assert torch.equal(load_osnet_ain(tmp_path / 'w.pt')(x), y)
+    del state['conv5.bn.running_mean']
+    torch.save(state, tmp_path / 'bad.pt')
+    with pytest.raises(RuntimeError):
+        load_osnet_ain(tmp_path / 'bad.pt')
+
+
+def test_osnet_weights_with_the_wrong_checksum_are_refused(tmp_path, monkeypatch):
+    pytest.importorskip('huggingface_hub')
+    import huggingface_hub
+    fake = tmp_path / reid.OSNET_FILE
+    fake.write_bytes(b'not the weights')
+    calls = []
+
+    def fake_download(repo, filename, revision=None, local_files_only=False):
+        calls.append((repo, filename, revision, local_files_only))
+        return str(fake)
+
+    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', fake_download)
+    with pytest.raises(RuntimeError, match='SHA-256'):
+        reid.osnet_weights(download=False)
+    assert calls == [(reid.OSNET_REPO, reid.OSNET_FILE, reid.OSNET_REVISION, True)]   # pinned revision
+
+
+def test_osnet_embedder_feeds_256x128_crops_and_normalises():
+    torch = pytest.importorskip('torch')
+    seen = []
+
+    class Probe(torch.nn.Module):
+        def forward(self, x):
+            seen.append(tuple(x.shape))
+            return x.mean(dim=(2, 3))      # [B, 3]: mean normalised colour
+
+    e = reid.OsnetEmbedder(device='cpu', batch_size=2, model=Probe())
+    out = e.embed(_frame(), [(0, 0, 20, 20), (10, 10, 30, 30), (50, 0, 70, 20)])
+    assert seen == [(2, 3, 256, 128), (1, 3, 256, 128)]
+    assert out.shape == (3, 3) and np.linalg.norm(out, axis=1) == pytest.approx(np.ones(3), abs=1e-5)
+    assert out[0] @ out[1] > 0.99 and out[0] @ out[2] < out[0] @ out[1]
+    assert e.describe()['name'] == 'osnet' and e.describe()['sha256'] == reid.OSNET_SHA256

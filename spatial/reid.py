@@ -22,6 +22,12 @@ Backends
   torchvision, BSD-3-Clause; ImageNet terms apply) of each crop. Generic
   appearance features, not a person-Re-ID model, so they work for any prompt
   (cats, cars, lobsters). Downloads about 45 MB once.
+- ``osnet``: OSNet-AIN x1.0, a network trained for person re-identification
+  (Torchreid's multi-source MSMT17 + DukeMTMC-reID + CUHK03 model, MIT licence;
+  those datasets are for research use, so it is never picked by ``auto``).
+  People only. 256x128 crops, 512-d. Downloads 8.9 MB once from the Hugging Face
+  mirror ``LibreYOLO/LibreReID-osnet`` at a pinned revision; the file's SHA-256
+  is checked before it is loaded.
 
 :func:`resolve_reid` turns ``auto`` into ``cnn`` when the ResNet-18 weights are
 already in the local torch hub cache, and ``color`` otherwise, so a default run
@@ -34,8 +40,12 @@ from typing import Sequence
 
 import numpy as np
 
-REID_CHOICES = ('auto', 'cnn', 'color', 'none')
+REID_CHOICES = ('auto', 'cnn', 'osnet', 'color', 'none')
 CNN_WEIGHTS_FILE = 'resnet18-f37072fd.pth'  # torchvision ResNet18_Weights.IMAGENET1K_V1
+OSNET_REPO = 'LibreYOLO/LibreReID-osnet'
+OSNET_REVISION = '98f8d8651b6c18772a8b2879f1d740b3278a1a3d'
+OSNET_FILE = 'osnet_ain_x1_0.pt'
+OSNET_SHA256 = '34c24e98b6b70c8b62480f846fd0d581aa2fd1535bc0276aecf1f10430b731d1'
 
 
 def _normalise(x: np.ndarray) -> np.ndarray:
@@ -110,14 +120,16 @@ class CnnEmbedder:
         self._std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
         self.dim = None
 
-    def embed(self, frame: np.ndarray, boxes: Sequence) -> np.ndarray:
+    def _resize(self, crop: np.ndarray) -> np.ndarray:
         import cv2
+        return cv2.resize(np.ascontiguousarray(crop), (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+
+    def embed(self, frame: np.ndarray, boxes: Sequence) -> np.ndarray:
         import torch
         boxes = list(boxes)
         if not boxes:
             return np.zeros((0, self.dim or 512), np.float32)
-        crops = [cv2.resize(np.ascontiguousarray(c), (self.size, self.size), interpolation=cv2.INTER_LINEAR)
-                 for c in _crop_boxes(frame, boxes)]
+        crops = [self._resize(c) for c in _crop_boxes(frame, boxes)]
         feats = []
         with torch.inference_mode():
             for start in range(0, len(crops), self.batch_size):
@@ -133,6 +145,40 @@ class CnnEmbedder:
         return {'name': self.name, 'backbone': 'resnet18', 'weights': 'IMAGENET1K_V1',
                 'licence': 'BSD-3-Clause (torchvision); ImageNet terms apply', 'device': self.device,
                 'crop_size': self.size}
+
+
+def osnet_weights(download: bool = True) -> Path:
+    """Path of the pinned OSNet-AIN weights, downloading them if needed; refuses a file with the wrong SHA-256."""
+    import hashlib
+    from huggingface_hub import hf_hub_download
+    path = Path(hf_hub_download(OSNET_REPO, OSNET_FILE, revision=OSNET_REVISION, local_files_only=not download))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != OSNET_SHA256:
+        raise RuntimeError(f'{path} has SHA-256 {digest}, expected {OSNET_SHA256}; delete it and download again')
+    return path
+
+
+class OsnetEmbedder(CnnEmbedder):
+    """OSNet-AIN x1.0 person Re-ID features (see module docstring), 512-d. ``model`` may be injected (tests)."""
+
+    name = 'osnet'
+
+    def __init__(self, device: str = 'auto', size=(256, 128), batch_size: int = 32, model=None):
+        if model is None:
+            from spatial.osnet import load_osnet_ain
+            model = load_osnet_ain(osnet_weights())
+        super().__init__(device=device, size=128, batch_size=batch_size, model=model)
+        self.height, self.width = (int(v) for v in size)
+
+    def _resize(self, crop: np.ndarray) -> np.ndarray:
+        import cv2
+        return cv2.resize(np.ascontiguousarray(crop), (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+
+    def describe(self) -> dict:
+        return {'name': self.name, 'backbone': 'osnet_ain_x1_0',
+                'weights': f'{OSNET_REPO}@{OSNET_REVISION[:8]}/{OSNET_FILE} (Torchreid MS+D+C)',
+                'sha256': OSNET_SHA256, 'licence': 'MIT (Torchreid); trained on research-use Re-ID datasets',
+                'device': self.device, 'crop_size': [self.height, self.width]}
 
 
 def cnn_weights_cached() -> bool:
@@ -162,4 +208,6 @@ def build_embedder(choice: str, device: str = 'auto'):
         return None
     if choice == 'color':
         return ColorHistEmbedder()
+    if choice == 'osnet':
+        return OsnetEmbedder(device=device)
     return CnnEmbedder(device=device)

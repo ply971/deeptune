@@ -112,8 +112,9 @@ def get_parser() -> argparse.ArgumentParser:
                         'Default: from --tracker.')
     p.add_argument('--reid', choices=REID_CHOICES, default=None,
                    help='Appearance embedding per box: cnn (ResNet-18 ImageNet features, 45 MB download once), '
-                        'color (HSV histogram, no download), none, or auto (cnn when its weights are already '
-                        'cached, else color). Default: from --tracker.')
+                        'osnet (OSNet-AIN person re-identification, people only, 9 MB download once; trained on '
+                        'research-use datasets, so never chosen by auto), color (HSV histogram, no download), none, '
+                        'or auto (cnn when its weights are already cached, else color). Default: from --tracker.')
     p.add_argument('--appearance_thresh', type=float, default=0.25,
                    help='Largest appearance distance (1 - cos) / 2 that may join a box to a nearby track '
                         '(default 0.25, as BoT-SORT).')

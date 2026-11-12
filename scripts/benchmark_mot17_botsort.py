@@ -9,7 +9,8 @@ Variants (all with ByteTrack's reference thresholds, nothing tuned on MOT17):
 
 - ``bytetrack``  plain ByteTrack (must reproduce the earlier ``mot17-run01`` numbers)
 - ``cmc``        + sparse optical-flow camera-motion compensation
-- ``reid``       + ResNet-18 appearance in the fused BoT-SORT cost
+- ``reid``       + appearance in the fused BoT-SORT cost (``--reid cnn``: ImageNet ResNet-18,
+                 the default; ``--reid osnet``: OSNet-AIN person Re-ID, keys get an ``_osnet`` suffix)
 - ``post``       + offline linking (motion only), interpolation, birth boxes, min length 3
 - ``botsort``    everything: track.py's default ``--tracker botsort``
 
@@ -201,8 +202,8 @@ def main():
     parser.add_argument('--sequences', choices=('all', 'dev', 'heldout'), default='all',
                         help='all 7 videos, the 3 development videos, or the 4 held-out videos')
     parser.add_argument('--cache', type=Path, default=None, help='Where cached affines/embeddings go (default OUT/cache)')
-    parser.add_argument('--reid', choices=('cnn', 'color'), default='cnn',
-                        help='Appearance for the Re-ID variants: ResNet-18 (cnn) or HSV colour histograms (color); '
+    parser.add_argument('--reid', choices=('cnn', 'osnet', 'color'), default='cnn',
+                        help='Appearance for the Re-ID variants: ResNet-18 (cnn), OSNet-AIN person Re-ID (osnet) or HSV colour histograms (color); '
                              'cached per model')
     parser.add_argument('--appearance_thresh', type=float, default=0.25,
                         help="Tracker's fused-cost appearance gate (track.py --appearance_thresh)")

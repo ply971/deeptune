@@ -115,7 +115,7 @@ def test_injected_embedder_is_used(tmp_path, long_gap_video):
 @pytest.mark.parametrize('extra', [
     ['--link_max_gap_s', '-1'], ['--interpolate_max_gap_s', '-0.5'], ['--min_track_len', '0'],
     ['--link_appearance_thresh', '1.5'], ['--appearance_thresh', '2'], ['--proximity_thresh', '0'],
-    ['--tracker', 'sort'], ['--reid', 'osnet'], ['--cmc', 'orb'],
+    ['--tracker', 'sort'], ['--reid', 'resnet50'], ['--cmc', 'orb'],
 ], ids=lambda a: ' '.join(a))
 def test_bad_tracker_arguments_are_usage_errors(tmp_path, long_gap_video, extra, capsys):
     video, _ = long_gap_video

@@ -660,8 +660,10 @@ TRACK_OPTIONS = (
         ('botsort', 'bytetrack'), T_MORE),
     Opt('--cmc', CHOICE, 'Camera-motion compensation', 'sparse: follow a moving or shaking camera; none: off '
         '(blank: from Tracker).', None, ('sparse', 'none'), T_MORE),
-    Opt('--reid', CHOICE, 'Appearance (Re-ID)', 'cnn: ResNet-18 features (45 MB download once); color: colour histogram; '
-        'auto: cnn if already downloaded, else color (blank: from Tracker).', None, ('auto', 'cnn', 'color', 'none'), T_MORE),
+    Opt('--reid', CHOICE, 'Appearance (Re-ID)', 'cnn: ResNet-18 features (45 MB download once); osnet: a person '
+        're-identification model, for people only (9 MB download once; research-use training data); color: colour '
+        'histogram; auto: cnn if already downloaded, else color (blank: from Tracker).', None,
+        ('auto', 'cnn', 'osnet', 'color', 'none'), T_MORE),
     Opt('--appearance_thresh', FLOAT, 'Appearance threshold', 'Largest look difference that may join a nearby box to a '
         'track (default 0.25).', 0.25, (), T_MORE),
     Opt('--proximity_thresh', FLOAT, 'Proximity threshold', 'Appearance only helps for boxes overlapping with IoU at '
