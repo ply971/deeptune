@@ -152,7 +152,8 @@ def precompute(folder: Path, frames: dict, length: int, cache: Path, embedder, n
     return (data.get('affines') if need_cmc else None), emb_per_frame
 
 
-def track_sequence(folder: Path, output: Path, variant: str, cache_dir: Path, embedder):
+def track_sequence(folder: Path, output: Path, variant: str, cache_dir: Path, embedder,
+                   appearance_thresh: float = 0.25, link_appearance_thresh: float | None = None):
     info = configparser.ConfigParser()
     info.read(folder / 'seqinfo.ini')
     length = info.getint('Sequence', 'seqLength')
@@ -163,7 +164,7 @@ def track_sequence(folder: Path, output: Path, variant: str, cache_dir: Path, em
     affines, embs = precompute(folder, frames, length, cache_dir / f'{folder.name}.npz', embedder,
                                v['cmc'], v['reid'])
     start = time.perf_counter()
-    online = OnlineTracking(fps, emit_birth=v['birth'])
+    online = OnlineTracking(fps, {'appearance_thresh': appearance_thresh}, emit_birth=v['birth'])
     if v['cmc']:
         online.tracker.motion_compensator = ReplayCMC(affines)
     dummy = np.zeros((1, 1, 3), np.uint8)  # CMC replays cached affines; it only needs a frame to be given
@@ -173,7 +174,8 @@ def track_sequence(folder: Path, output: Path, variant: str, cache_dir: Path, em
     post = None
     if v['link'] or v['interp'] or v['minlen']:
         defaults = PostSettings()
-        post = PostSettings(link=LinkSettings() if v['link'] else LinkSettings(max_gap_s=0),
+        link = LinkSettings() if link_appearance_thresh is None else LinkSettings(appearance_thresh=link_appearance_thresh)
+        post = PostSettings(link=link if v['link'] else LinkSettings(max_gap_s=0),
                             interpolate_max_gap_s=defaults.interpolate_max_gap_s if v['interp'] else 0,
                             min_track_len=defaults.min_track_len if v['minlen'] else 1)
     rows, stats = online.finish(fps, 1, post)
@@ -199,6 +201,13 @@ def main():
     parser.add_argument('--sequences', choices=('all', 'dev', 'heldout'), default='all',
                         help='all 7 videos, the 3 development videos, or the 4 held-out videos')
     parser.add_argument('--cache', type=Path, default=None, help='Where cached affines/embeddings go (default OUT/cache)')
+    parser.add_argument('--reid', choices=('cnn', 'color'), default='cnn',
+                        help='Appearance for the Re-ID variants: ResNet-18 (cnn) or HSV colour histograms (color); '
+                             'cached per model')
+    parser.add_argument('--appearance_thresh', type=float, default=0.25,
+                        help="Tracker's fused-cost appearance gate (track.py --appearance_thresh)")
+    parser.add_argument('--link_appearance_thresh', type=float, default=None,
+                        help="Offline linker's appearance gate (track.py --link_appearance_thresh; default its 0.3)")
     args = parser.parse_args()
     sys.path.insert(0, str(args.trackeval.resolve()))
     for name, builtin in (('float', float), ('int', int)):  # TrackEval 12c8791 uses removed NumPy aliases
@@ -209,8 +218,8 @@ def main():
     cache_root = args.cache or args.out / 'cache'
     embedder = None
     if any(VARIANTS[v]['reid'] for v in args.variants):
-        from spatial.reid import CnnEmbedder
-        embedder = CnnEmbedder(device=args.device)
+        from spatial.reid import build_embedder
+        embedder = build_embedder(args.reid, device=args.device)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Path(__file__).resolve().parents[1],
                                        text=True).strip()
     report_path = args.out / 'report.json'
@@ -225,6 +234,11 @@ def main():
     for detector in args.detectors:
         for variant in args.variants:
             key = f'{variant}_{detector}' + ('' if args.sequences == 'all' else f'_{args.sequences}')
+            if VARIANTS[variant]['reid']:
+                key += '' if args.reid == 'cnn' else f'_{args.reid}'
+                key += '' if args.appearance_thresh == 0.25 else f'_a{args.appearance_thresh:g}'
+            if VARIANTS[variant]['link'] and args.link_appearance_thresh is not None:
+                key += f'_l{args.link_appearance_thresh:g}'
             if key in report['experiments']:
                 print(f'skip {key} (done)', flush=True)
                 continue
@@ -235,7 +249,8 @@ def main():
                 print(f'Track {key}: {seq}', flush=True)
                 observations.append(track_sequence(args.data / 'train' / seq,
                                                    args.out / 'trackers' / key / 'data' / f'{seq}.txt', variant,
-                                                   cache_root / detector, embedder))
+                                                   cache_root / (detector if args.reid == 'cnn' else f'{detector}-{args.reid}'),
+                                                   embedder, args.appearance_thresh, args.link_appearance_thresh))
             evaluator = trackeval.Evaluator(dict(USE_PARALLEL=False, PRINT_CONFIG=False, PRINT_ONLY_COMBINED=True,
                                                  PLOT_CURVES=False, PRINT_RESULTS=False,
                                                  LOG_ON_ERROR=str(args.out / 'evaluation-errors.log')))
@@ -256,6 +271,9 @@ def main():
                            IDSW=int(combined['CLEAR']['IDSW']), FP=int(combined['CLEAR']['CLR_FP']),
                            FN=int(combined['CLEAR']['CLR_FN']))
             report['experiments'][key] = dict(variant=variant, detector=detector, sequences_set=args.sequences,
+                                              reid=args.reid if VARIANTS[variant]['reid'] else None,
+                                              appearance_thresh=args.appearance_thresh,
+                                              link_appearance_thresh=args.link_appearance_thresh,
                                               metrics=metrics,
                                               sequences=observations)
             report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')

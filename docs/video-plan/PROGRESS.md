@@ -20,6 +20,14 @@ Keep entries short and factual. This is the handoff between sessions.
 
 ## Session log
 
+### 2026-11-13 - S4/S5: person Re-ID (OSNet) and appearance thresholds - no change to defaults (Claude Code)
+- User approved the OSNet download and the reruns ("OK for all", "ok"). Reports: `docs/video-plan/reports/S5-appearance-sweep.md` (this branch), `S4-osnet.md` (branch `video/S4-osnet-reid`, not merged).
+- S4: OSNet-AIN x1.0 ported (strict load, SHA-pinned weights, research-use training data so never `auto`). MOT17 dev, full botsort HOTA vs ResNet-18: FRCNN +0.03, SDP +0.18, DPM -0.57. No gain, held-out not run, branch left unmerged.
+- S5: dev sweep of the tracker gate (0.05-0.5) and the link gate (0.1-0.5): noise-level, no consistent direction, defaults stay. Colour histograms vs ResNet-18: dev +0.04 to +0.58; held-out +0.0 / +0.8 / -1.2 (FRCNN/SDP/DPM): about equal, so the fresh-install fallback is not a regression (answers V-062).
+- Takeaway: appearance moves MOT17 HOTA by about +-1; the detector moved it 4.5. Further tracking gains are in detection.
+- Timeline experiment (r3d_18, GPU) stopped twice by Claude Code's low-memory guard (second time in epoch 1 validation, training loss 0.436); not rerun. Suggested: the user runs it with `--num_workers 0`.
+- Only a benchmark script changed on S5 (no library code); not merged yet.
+
 ### 2026-11-12 (overnight) - S3: better tracking (BoT-SORT parts, offline repair, D-FINE) (Claude Code)
 - **User asked (asleep, autonomous):** "finish the project ... the tracking ... is not using everything and the models aren't good enough".
 - **Branch `video/S3-botsort`** (worktree `.claude/wt/S3`), commits 91d9585, 762ae64, 7181c51. Report: `docs/video-plan/reports/S3-botsort.md`.
