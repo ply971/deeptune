@@ -47,7 +47,7 @@ if str(ROOT) not in sys.path:
 # only happen in this worker process, never in the long-lived GUI process
 # itself. An unfrozen `python desktop/app.py` never takes this branch;
 # runner.py keeps using a real python.exe + the on-disk script path there.
-_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head")  # desktop/tools.TOOLS
+_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head", "analyse_embeddings")  # desktop/tools.TOOLS
 if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", "--track-worker", "--tool-worker"):
     # PyInstaller's windowed bootloader doesn't reliably pick up
     # PYTHONIOENCODING for this process's stdio the way a plain python.exe

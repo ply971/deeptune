@@ -30,8 +30,10 @@ from desktop.log_stream import LineBuffer
 from desktop import runner
 from desktop.runner import RunHandle, start_tool_run, tool_argv
 
-PREFIX = {'select_model': 'sel', 'ensemble': 'ens', 'extract_features': 'feat', 'train_feature_head': 'probe'}
-PAGE = {'select_model': 'select', 'ensemble': 'ensemble', 'extract_features': 'features', 'train_feature_head': 'features'}
+PREFIX = {'select_model': 'sel', 'ensemble': 'ens', 'extract_features': 'feat', 'train_feature_head': 'probe',
+          'analyse_embeddings': 'emb'}
+PAGE = {'select_model': 'select', 'ensemble': 'ensemble', 'extract_features': 'features', 'train_feature_head': 'features',
+        'analyse_embeddings': 'features'}
 LOG = {'select': 'select_log', 'ensemble': 'ensemble_log', 'features': 'features_log'}
 RESULTS = {'select': 'select_results_container', 'ensemble': 'ensemble_results_container', 'features': 'features_results_container'}
 
@@ -169,7 +171,8 @@ def shutdown() -> None:
 # --- results ----------------------------------------------------------------------------------------------------------
 def show_results(tool: str, out: Path) -> None:
     reader = {'select_model': tools.selection_sections, 'ensemble': tools.ensemble_sections,
-              'extract_features': tools.feature_sections, 'train_feature_head': tools.probe_sections}[tool]
+              'extract_features': tools.feature_sections, 'train_feature_head': tools.probe_sections,
+              'analyse_embeddings': tools.embedding_analysis_sections}[tool]
     try:
         sections = reader(out)
     except OSError as exc:
@@ -225,7 +228,7 @@ def _update_buttons() -> None:
     dpg.configure_item('select_stop_button', enabled=select_running)
     dpg.configure_item('ensemble_start_button', enabled='ensemble' not in _running)
     dpg.configure_item('ensemble_stop_button', enabled='ensemble' in _running)
-    for tool in ('extract_features', 'train_feature_head'):
+    for tool in ('extract_features', 'train_feature_head', 'analyse_embeddings'):
         dpg.configure_item(f'{tool}_start_button', enabled='features' not in _running)
     dpg.configure_item('features_stop_button', enabled='features' in _running)
 
@@ -242,7 +245,8 @@ def on_changed(sender: Any = 0, app_data: Any = None, user_data: Any = None) -> 
     """Any control changed: refresh the command line, the readiness text and the buttons."""
     for tool, page, tag in (('select_model', 'select', 'select_command'), ('ensemble', 'ensemble', 'ensemble_command'),
                             ('extract_features', 'features', 'extract_features_command'),
-                            ('train_feature_head', 'features', 'train_feature_head_command')):
+                            ('train_feature_head', 'features', 'train_feature_head_command'),
+                            ('analyse_embeddings', 'features', 'analyse_embeddings_command')):
         try:
             dpg.set_value(tag, command_line(tool))
         except ValueError as exc:
@@ -399,6 +403,15 @@ def build(shell) -> None:
                                             lambda: start('train_feature_head'), None, True)])
             _command('train_feature_head_command')
         dpg.add_spacer(height=10)
+        with shell.card('3. CLUSTER CLIPS AND FIND UNUSUAL ONES'):
+            dpg.add_text('From a run\'s clip embeddings: PCA and LDA, K-Means and hierarchical clustering (checked '
+                         'against the labels when there are any), and an autoencoder that flags clips unlike the rest.',
+                         color=colors.muted, wrap=850)
+            ow.render(co.EMBEDDING_ANALYSIS_OPTIONS, 'emb', on_changed, headers=False)
+            _launch_row('features_embeddings', [('analyse_embeddings_start_button', 'Analyse embeddings',
+                                                 lambda: start('analyse_embeddings'), None, True)])
+            _command('analyse_embeddings_command')
+        dpg.add_spacer(height=10)
         with shell.card('STATUS'):
             with ui.group(horizontal=True):
                 dpg.add_button(tag='features_stop_button', label='Stop', callback=lambda: stop('features'), enabled=False)
@@ -412,6 +425,7 @@ def build(shell) -> None:
             with ui.group(horizontal=True):
                 dpg.add_button(label='Show feature folder', callback=on_refresh, user_data='extract_features')
                 dpg.add_button(label='Show probe results', callback=on_refresh, user_data='train_feature_head')
+                dpg.add_button(label='Show embedding analysis', callback=on_refresh, user_data='analyse_embeddings')
             with ui.child_window(tag=RESULTS['features'], height=320, horizontal_scrollbar=True):
-                dpg.add_text('The feature folder and the probe metrics appear here.', color=colors.muted)
+                dpg.add_text('The feature folder, the probe metrics and the embedding analysis appear here.', color=colors.muted)
     on_changed()

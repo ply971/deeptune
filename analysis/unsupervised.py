@@ -29,7 +29,7 @@ everything. Outputs go to ``--out``: ``summary.json``, ``pca.csv``,
 PNG plots (``pca.png``, ``lda.png``, ``kmeans_sweep.png``, ``dendrogram.png``,
 ``anomaly.png``).
 
-    python -m analysis.unsupervised --embeddings run/embed_output_x/x_cls_embeddings.parquet --out run/unsupervised
+    python analyse_embeddings.py --embeddings run/embed_output_x/x_cls_embeddings.parquet --out run/unsupervised
 """
 from __future__ import annotations
 
@@ -440,8 +440,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--pca_components', type=int, default=None)
     p.add_argument('--target_fpr', type=float, default=0.05,
                    help='Share of normal clips the anomaly threshold may flag (default 0.05).')
-    p.add_argument('--outlier_label', action='append', default=[],
-                   help='Rows with this label are known outliers: never used to fit, scored for AUC. Repeatable.')
+    p.add_argument('--outlier_label', nargs='+', default=[],
+                   help='Labels of known outliers: never used to fit, scored for AUC (e.g. --outlier_label noise blank).')
     p.add_argument('--role_column', default=None,
                    help="Column saying fit/val/test per row (else: random 60/20/20 split; 'train' counts as fit).")
     p.add_argument('--ae_epochs', type=int, default=200)

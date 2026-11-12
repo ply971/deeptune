@@ -673,3 +673,32 @@ def device_env(device: str) -> dict:
     if device.startswith('cuda:') and device[5:].isdigit():
         return {'CUDA_VISIBLE_DEVICES': device[5:]}
     raise ValueError(f'Unknown device {device!r}; choose one of {", ".join(DEVICES)}.')
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# analyse_embeddings.py (Features & probes page, card 3): unsupervised analysis of clip embeddings.
+# ---------------------------------------------------------------------------------------------------------------------
+EMBEDDING_ANALYSIS_OPTIONS = (
+    Opt('--embeddings', TEXT, 'Embedding table', "A run's embed_output_*/*_embeddings.parquet, or any CSV/parquet with "
+        'numeric feature columns.', None, required=True, browse='file'),
+    Opt('--out', TEXT, 'Output folder', 'summary.json, clusters.csv, anomaly.csv and the plots go here.', None, required=True,
+        browse='folder'),
+    Opt('--label_column', TEXT, 'Label column', 'Used for LDA and to score the clusters (ARI/NMI). Blank if none.', 'label'),
+    Opt('--feature_prefix', TEXT, 'Feature columns start with', 'Blank: the columns named 0, 1, 2, ... (DeepTune embeddings).'),
+    Opt('--k_min', INT, 'Fewest clusters to try', '', 2),
+    Opt('--k_max', INT, 'Most clusters to try', 'K-Means runs for every k in the range; the best silhouette is suggested.', 8),
+    Opt('--n_init', INT, 'K-Means restarts', 'k-means++ restarts per k; the best is kept.', 10),
+    Opt('--linkage', CHOICE, 'Hierarchical linkage', 'ward, average, complete or single.', 'ward',
+        ('ward', 'average', 'complete', 'single')),
+    Opt('--pca_components', OPT_INT, 'PCA components', 'Blank: all.'),
+    Opt('--target_fpr', FLOAT, 'Unusual-clip false alarm rate', 'Share of normal clips the anomaly threshold may flag.', 0.05),
+    Opt('--outlier_label', WORDS, 'Known outlier labels', 'Labels of clips known to be unusual: never used to fit the '
+        'autoencoder; used to report AUC and detection rate.', ()),
+    Opt('--role_column', TEXT, 'Fit/val/test column', "A column saying fit, val or test per row ('train' = fit). "
+        'Blank: a random 60/20/20 split.'),
+    Opt('--ae_epochs', INT, 'Autoencoder epochs', '', 200),
+    Opt('--ae_bottleneck', INT, 'Autoencoder bottleneck', '', 8),
+    Opt('--ae_hidden', INT, 'Autoencoder hidden units', '', 64),
+    Opt('--seed', INT, 'Seed', '', 0),
+    Opt('--no_plots', BOOL, 'No plots', 'Skip the PNG plots.', False),
+)
