@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, auto_detector, build_detector,
+                            describe_auto_choice,
                             check_coco_prompts, check_grounding_dino_prompts, clean_prompts)
 from spatial.track import ByteTracker
 from spatial import io as sio
@@ -143,6 +144,8 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
     args.detector_requested = args.detector
     if args.detector == 'auto':
         args.detector = auto_detector(args.prompt)
+        args.detector_choice = describe_auto_choice(args.prompt)
+        print(args.detector_choice, flush=True)
     if args.detector == 'dfine':
         try:
             check_coco_prompts(args.prompt)

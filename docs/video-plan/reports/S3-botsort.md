@@ -25,11 +25,21 @@ good ... it's not using everything and the models aren't good enough". Two probl
 12c8791) on the labelled MOT17 training videos. Detections are the MOT17 public ones (FRCNN, SDP, DPM),
 so only the tracker differs. Decisions were made on videos **02, 04, 05** (dev); the numbers that count
 are the four **held-out** videos **09, 10, 11, 13**, run once after the decisions were fixed.
-Appearance vectors are ResNet-18 ImageNet features; camera motion is computed on the real frames.
+Appearance vectors are ResNet-18 ImageNet features (`--reid cnn`); camera motion is computed on the real frames.
+A fresh install without the ResNet-18 weights gets `--reid auto` = colour histograms, which were **not
+measured** here.
+
+**Disclosure (review V-062).** The held-out videos were not untouched before the design was final. The
+first run (`D:/DeepTuneBenchmarks/results/mot17-botsort01`, before the `--sequences` option existed) scored
+all 7 videos, held-out ones included, with the first, permissive linking: botsort 45.81 vs ByteTrack 47.28
+HOTA (FRCNN, all 7). Linking was then made unambiguous. The development videos alone showed the same harm
+(table below: IDF1 56.6 -> 49.6), so the decision does not depend on the held-out videos, but "decided on dev
+only" is not literally true. No later setting was changed after a held-out number was seen.
 
 One protocol detail: the new pipeline clips boxes to the frame. The old benchmark wrote boxes partly
-outside the frame, which moved the old baseline from 47.36 to 47.28 HOTA on dev (FRCNN). All
-comparisons below use the clipped baseline, so the only difference is the tracker.
+outside the frame, which moved the old ByteTrack baseline from 47.36 to 47.28 HOTA (FRCNN, **all 7 videos**,
+not dev; the dev baseline is 47.84). All comparisons below use the clipped baseline, so the only difference
+is the tracker.
 
 ### Development set (02, 04, 05; FRCNN detections)
 
@@ -142,12 +152,35 @@ vectors and camera motion, `ByteTracker` is the same code path.
 
 Full CPU suite at 7181c51 (`CUDA_VISIBLE_DEVICES=-1`, `-m "not seed_study"` as in `check.ps1`, in nine chunks): **2261 passed, 5 skipped, 0 failed** (sum of `.artifacts/s3-suite/chunk-*.xml`); `pip check` clean.
 
+### Held-out, per video (HOTA, ByteTrack -> BoT-SORT)
+
+| Video | FRCNN | SDP | DPM |
+|---|---|---|---|
+| 09 | 47.2 -> 49.0 | 47.3 -> 50.2 | 35.1 -> 38.5 |
+| 10 | 39.7 -> 42.7 | 45.6 -> 52.9 | 28.8 -> 33.6 |
+| 11 | 53.7 -> **53.0** | 55.9 -> 59.6 | 38.3 -> 43.2 |
+| 13 | 45.8 -> 50.5 | 50.7 -> 52.1 | 19.8 -> 23.7 |
+
+11 of 12 pairs improve; MOT17-11 with FRCNN detections loses 0.7. The three detection streams share the same
+four videos, so this is **4 independent videos with no confidence interval**; a one-sided sign test over the
+videos gives p = 0.0625 (all four improve on average). Read the gains as consistent but not established.
+
 ## Limits
 
 - MOT17 is pedestrians from street cameras. Animals, sports and handheld phone video can behave
   differently; the cat clips are two videos, not a benchmark.
 - Re-ID uses ImageNet features, not a Re-ID-trained network (none with a clean licence was cached;
   downloads need the user's OK). A pedestrian Re-ID model (e.g. OSNet) would likely help crowds.
+- The end-to-end table compares each detector's own `track.py` defaults (thresholds, input resolution):
+  defaults against defaults, not matched settings.
+- Gap filling and first-box emission add false positives (held-out FRCNN false positives 1,406 -> 3,217).
+- Long videos (review V-062): the offline pass now keeps appearance vectors only on each track's first and
+  last 10 rows and compares only tracklets that start within `--link_max_gap_s` of each other's end, giving
+  the same links (tested against the all-pairs version); 10,000 tracklets link in about 5 s on CPU. The
+  output rows themselves still grow with the video.
+- `--detector auto` sends ambiguous COCO words (mouse, tie, remote, kite, keyboard, orange) to Grounding
+  DINO, so a lab mouse is not read as a computer mouse; `computer mouse` etc. still go to D-FINE. `track.py`
+  prints and records the choice.
 - Two lookalike objects that cross while both are hidden can still swap IDs; an object gone longer
   than `--link_max_gap_s` comes back with a new ID; counts in crowds are upper bounds.
 - D-FINE only knows the 80 COCO classes; anything else goes to Grounding DINO / OWLv2 (`auto` does this).

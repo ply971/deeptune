@@ -89,7 +89,13 @@ COCO_SYNONYMS = {
     'cellphone': 'cell phone', 'ball': 'sports ball', 'table': 'dining table', 'plant': 'potted plant',
     'doughnut': 'donut', 'hair dryer': 'hair drier', 'fridge': 'refrigerator', 'lorry': 'truck',
     'cattle': 'cow', 'calf': 'cow', 'lamb': 'sheep', 'pony': 'horse', 'laptop computer': 'laptop',
+    'computer mouse': 'mouse', 'necktie': 'tie', 'remote control': 'remote', 'tv remote': 'remote',
+    'computer keyboard': 'keyboard', 'paper kite': 'kite',
 }
+# COCO names that usually mean something else in a tracking prompt (a lab mouse, the kite bird, a musical keyboard,
+# a tied score...). ``auto`` sends them to the open-vocabulary detector; the unambiguous synonyms above
+# (``computer mouse``, ``necktie``...) still reach D-FINE, and ``--detector dfine`` accepts the bare words.
+AMBIGUOUS_COCO_WORDS = frozenset({'mouse', 'tie', 'remote', 'kite', 'keyboard', 'orange'})
 
 
 def coco_class(prompt: str) -> str | None:
@@ -128,13 +134,37 @@ def check_coco_prompts(prompts: Sequence[str]) -> dict[str, str]:
     return out
 
 
+def _is_ambiguous(prompt: str) -> bool:
+    p = ' '.join(str(prompt).lower().replace('-', ' ').replace('_', ' ').split())
+    singular = {p, p[:-1] if p.endswith('s') else p, p[:-2] if p.endswith('es') else p}
+    return bool(singular & AMBIGUOUS_COCO_WORDS)
+
+
 def auto_detector(prompts: Sequence[str]) -> str:
-    """``dfine`` when every prompt is a COCO class (and none repeats one), else ``grounding_dino``."""
+    """``dfine`` when every prompt is an unambiguous COCO class (and none repeats one), else ``grounding_dino``."""
+    if any(_is_ambiguous(p) for p in prompts):
+        return 'grounding_dino'
     try:
         check_coco_prompts(prompts)
         return 'dfine'
     except ValueError:
         return 'grounding_dino'
+
+
+def describe_auto_choice(prompts: Sequence[str]) -> str:
+    """One line saying which detector ``auto`` picked for these prompts and why (printed and recorded by track.py)."""
+    if auto_detector(prompts) == 'dfine':
+        mapping = check_coco_prompts(prompts)
+        return 'auto -> dfine: ' + ', '.join(f'{p!r} = COCO {c!r}' for c, p in mapping.items())
+    ambiguous = [p for p in prompts if _is_ambiguous(p)]
+    if ambiguous:
+        return (f'auto -> grounding_dino: {ambiguous} could mean several things (D-FINE would read them as COCO '
+                f'{sorted({coco_class(p) for p in ambiguous} - {None})}); use --detector dfine to force that')
+    try:
+        check_coco_prompts(prompts)
+    except ValueError as exc:
+        return f'auto -> grounding_dino: {exc}'
+    return 'auto -> grounding_dino'
 
 # Score scales differ a lot between the two models (OWLv2 rarely exceeds 0.5),
 # so thresholds default per backend. The tracker's high/new-track thresholds are

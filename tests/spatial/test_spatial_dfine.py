@@ -108,3 +108,29 @@ def test_dfine_with_a_non_coco_prompt_is_a_usage_error(tmp_path, lobster_like, c
         track.main(['--video', str(video), '--prompt', 'lobster', '--detector', 'dfine', '--out', str(tmp_path / 'o')],
                    detector=FakeDetector({}))
     assert exc.value.code == 2 and 'COCO' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('prompt', ['mouse', 'Mice', 'mouses', 'kite', 'kites', 'tie', 'remote', 'keyboard', 'orange'])
+def test_auto_sends_ambiguous_coco_words_to_the_open_vocabulary_detector(prompt):
+    # Review V-062: a lab-mouse run must not silently become a "computer mouse" detector.
+    assert auto_detector([prompt]) == 'grounding_dino'
+    assert auto_detector(['person', prompt]) == 'grounding_dino'
+
+
+@pytest.mark.parametrize('prompt,want', [('computer mouse', 'mouse'), ('necktie', 'tie'), ('remote control', 'remote'),
+                                         ('computer keyboard', 'keyboard')])
+def test_unambiguous_names_of_those_classes_still_reach_dfine(prompt, want):
+    assert coco_class(prompt) == want and auto_detector([prompt]) == 'dfine'
+
+
+def test_auto_choice_is_explained_printed_and_recorded(tmp_path, lobster_like, capsys):
+    from spatial.detect import describe_auto_choice
+    assert describe_auto_choice(['people']) == "auto -> dfine: 'people' = COCO 'person'"
+    assert 'mouse' in describe_auto_choice(['mouse']) and '--detector dfine' in describe_auto_choice(['mouse'])
+    assert 'lobster' in describe_auto_choice(['lobster'])
+    video, scene = lobster_like
+    track.main(['--video', str(video), '--prompt', 'mouse', '--out', str(tmp_path / 'a'), '--reid', 'color'],
+               detector=FakeDetector({}))
+    saved = json.loads((tmp_path / 'a' / 'track_arguments.json').read_text())
+    assert saved['detector'] == 'grounding_dino' and saved['detector_choice'].startswith('auto -> grounding_dino')
+    assert 'auto -> grounding_dino' in capsys.readouterr().out

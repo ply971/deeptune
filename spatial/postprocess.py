@@ -34,6 +34,7 @@ Nothing here imports torch.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -184,19 +185,38 @@ def link_tracklets(tracklets: dict[int, Tracklet], fps: float, settings: LinkSet
     mapping = {i: i for i in ids}
     if len(ids) < 2 or s.max_gap_s <= 0:
         return mapping
-    cost = np.full((len(ids), len(ids)), np.inf)
-    for r, ia in enumerate(ids):
-        for c, ib in enumerate(ids):
-            if ia != ib:
-                cost[r, c] = link_cost(tracklets[ia], tracklets[ib], fps, s)
+    # Only tracklets starting after a's end and within max_gap_s can pass link_cost's gates, so candidates come
+    # from the start times sorted once (binary search) instead of all N x N pairs: long videos stay fast.
+    by_start = sorted(ids, key=lambda i: tracklets[i].first)
+    starts = [tracklets[i].first for i in by_start]
+    reach = s.max_gap_s * fps
+    pairs: dict[tuple[int, int], float] = {}
+    for ia in ids:
+        a = tracklets[ia]
+        lo = bisect_right(starts, a.last)
+        hi = bisect_right(starts, a.last + reach + 1e-9 * max(1.0, reach))
+        for ib in by_start[lo:hi]:
+            if ib != ia:
+                cost = link_cost(a, tracklets[ib], fps, s)
+                if np.isfinite(cost):
+                    pairs[ia, ib] = cost
     if s.unambiguous:
-        ok = np.isfinite(cost)
-        single = (ok.sum(axis=1, keepdims=True) == 1) & (ok.sum(axis=0, keepdims=True) == 1)
-        cost = np.where(ok & single, cost, np.inf)
-    if not np.isfinite(cost).any():
+        out_degree = Counter(ia for ia, _ in pairs)
+        in_degree = Counter(ib for _, ib in pairs)
+        successor = {ia: ib for (ia, ib) in pairs if out_degree[ia] == 1 and in_degree[ib] == 1}
+    else:
+        rows = sorted({ia for ia, _ in pairs})
+        cols = sorted({ib for _, ib in pairs})
+        if not pairs:
+            return mapping
+        r_of, c_of = {i: n for n, i in enumerate(rows)}, {i: n for n, i in enumerate(cols)}
+        cost = np.full((len(rows), len(cols)), np.inf)
+        for (ia, ib), value in pairs.items():
+            cost[r_of[ia], c_of[ib]] = value
+        matches, _, _ = linear_assignment(cost, 1.0)
+        successor = {rows[r]: cols[c] for r, c in matches.tolist()}
+    if not successor:
         return mapping
-    matches, _, _ = linear_assignment(cost, 1.0)
-    successor = {ids[r]: ids[c] for r, c in matches.tolist()}
     has_pred = set(successor.values())
     for head in ids:
         if head in has_pred:

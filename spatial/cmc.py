@@ -29,6 +29,7 @@ plain ByteTrack. The frame size may not change between calls (a new size resets)
 """
 from __future__ import annotations
 
+from collections import deque
 from typing import Sequence
 
 import numpy as np
@@ -65,7 +66,7 @@ class SparseFlowCMC:
         self._prev_points = None
         self._shape = None
         self.last_inliers = 0
-        self.history: list[np.ndarray] = []
+        self.history: deque = deque(maxlen=256)  # recent affines (debugging); bounded for long videos
 
     def reset(self) -> None:
         self._prev = self._prev_points = self._shape = None

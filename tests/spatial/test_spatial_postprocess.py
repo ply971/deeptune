@@ -145,3 +145,73 @@ def test_tracklet_end_feature_ignores_missing_vectors():
                  feats=[None, np.array([3.0, 4.0]), None])
     assert t.end_feature(10, True) == pytest.approx([0.6, 0.8])
     assert Tracklet(2, frames=[0], boxes=[(0, 0, 1, 1)], scores=[1], labels=['a'], feats=[None]).end_feature(5, False) is None
+
+
+# --- scaling (review V-062): sparse candidates must give the dense answer, and stay fast ------------------------
+
+def _dense_reference(tracklets, fps, s):
+    """The original all-pairs version of link_tracklets, kept here as the oracle."""
+    from spatial.postprocess import link_cost
+    from spatial.track import linear_assignment
+    ids_ = sorted(tracklets)
+    mapping = {i: i for i in ids_}
+    cost = np.full((len(ids_), len(ids_)), np.inf)
+    for r, ia in enumerate(ids_):
+        for c, ib in enumerate(ids_):
+            if ia != ib:
+                cost[r, c] = link_cost(tracklets[ia], tracklets[ib], fps, s)
+    if s.unambiguous:
+        ok = np.isfinite(cost)
+        single = (ok.sum(axis=1, keepdims=True) == 1) & (ok.sum(axis=0, keepdims=True) == 1)
+        cost = np.where(ok & single, cost, np.inf)
+    if not np.isfinite(cost).any():
+        return mapping
+    matches, _, _ = linear_assignment(cost, 1.0)
+    successor = {ids_[r]: ids_[c] for r, c in matches.tolist()}
+    has_pred = set(successor.values())
+    for head in ids_:
+        if head in has_pred:
+            continue
+        node = head
+        while node in successor:
+            node = successor[node]
+            mapping[node] = head
+    return mapping
+
+
+def _random_fragments(seed, n_objects=12, length=300):
+    rng = np.random.default_rng(seed)
+    rows, tid = [], 1
+    for _ in range(n_objects):
+        x0, y, vx = rng.uniform(0, 400), rng.uniform(0, 300), rng.uniform(-2, 2)
+        feat = rng.normal(size=8)
+        start = int(rng.integers(0, length // 2))
+        while start < length:
+            n = int(rng.integers(5, 40))
+            frames = list(range(start, min(length, start + n)))
+            rows += rows_for(tid, frames, x0=x0, vx=vx, y=y, feat=feat + rng.normal(0, 0.3, 8))
+            tid += 1
+            start += n + int(rng.integers(1, 60))
+    return rows
+
+
+@pytest.mark.parametrize('seed', range(6))
+@pytest.mark.parametrize('unambiguous', [True, False])
+def test_sparse_linking_equals_the_all_pairs_version(seed, unambiguous):
+    rows = _random_fragments(seed)
+    s = LinkSettings(unambiguous=unambiguous)
+    tracklets = tracklets_from_rows(rows)
+    assert link_tracklets(tracklets, 25.0, s) == _dense_reference(tracklets, 25.0, s)
+
+
+def test_linking_ten_thousand_tracklets_is_fast():
+    import time
+    rows = []
+    for tid in range(1, 10001):        # 10,000 short tracklets over about an hour at 25 fps
+        start = tid * 9
+        rows += rows_for(tid, [start, start + 1, start + 2], x0=float(tid % 50) * 30, y=float(tid % 7) * 40)
+    tracklets = tracklets_from_rows(rows)
+    begin = time.perf_counter()
+    mapping = link_tracklets(tracklets, 25.0, LinkSettings())
+    assert time.perf_counter() - begin < 20.0      # the all-pairs version needed about 9 s for 2,000
+    assert len(mapping) == 10000

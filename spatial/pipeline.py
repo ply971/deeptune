@@ -1,6 +1,8 @@
 """Video -> detections -> ByteTrack / BoT-SORT tracks -> post-processing -> output files."""
 from __future__ import annotations
 
+from collections import deque
+
 import time
 from pathlib import Path
 from typing import Sequence
@@ -25,10 +27,20 @@ class OnlineTracking:
     ``emit_birth`` adds each track's first detection, which ByteTrack outputs only
     from its second (confirming) step. Rows keep the matched detection's
     appearance vector under ``feat`` until :meth:`finish` (the offline linker uses it).
+
+    ``feature_window`` bounds that memory on long videos: ``None`` keeps every
+    vector; ``k`` keeps them only on each track's first ``k`` and last ``k`` rows,
+    which are all the linker reads (:meth:`Tracklet.end_feature` with
+    ``LinkSettings.feature_window = k``), so the result is the same; ``0`` keeps none.
     """
 
     def __init__(self, steps_per_second: float, tracker_kwargs: dict | None = None, embedder=None,
-                 cmc: str = 'none', emit_birth: bool = False):
+                 cmc: str = 'none', emit_birth: bool = False, feature_window: int | None = None):
+        if feature_window is not None and feature_window < 0:
+            raise ValueError('feature_window must be None or >= 0')
+        self.feature_window = feature_window
+        self._rows_per_track: dict[int, int] = {}
+        self._tail: dict[int, deque] = {}
         if cmc not in CMC_CHOICES:
             raise ValueError(f'cmc must be one of {CMC_CHOICES}, got {cmc!r}')
         self.compensator = None
@@ -62,15 +74,32 @@ class OnlineTracking:
             birth_frame = self._step_frame.get(t.start_step)
             if (self.emit_birth and t.track_id not in self._emitted and t.birth_box is not None
                     and birth_frame is not None and birth_frame != frame_index):
-                self.rows.append({'frame': birth_frame, 'track_id': t.track_id,
-                                  'box': _clip_box(t.birth_box, frame_w, frame_h),
-                                  'score': float(t.birth_score), 'label': t.label})
+                self._append({'frame': birth_frame, 'track_id': t.track_id,
+                              'box': _clip_box(t.birth_box, frame_w, frame_h),
+                              'score': float(t.birth_score), 'label': t.label})
             self._emitted.add(t.track_id)
             row = {'frame': frame_index, 'track_id': t.track_id, 'box': _clip_box(t.box, frame_w, frame_h),
                    'score': t.score, 'label': t.label}
-            if t.feat is not None:
+            if t.feat is not None and self.feature_window != 0:
                 row['feat'] = t.feat.astype('float32')
-            self.rows.append(row)
+            self._append(row)
+
+    def _append(self, row: dict) -> None:
+        """Add a row; with ``feature_window = k`` drop ``feat`` from rows that are neither among their
+        track's first k nor (any more) its last k rows."""
+        self.rows.append(row)
+        k = self.feature_window
+        if not k:
+            return
+        tid = row['track_id']
+        index = self._rows_per_track.get(tid, 0)
+        self._rows_per_track[tid] = index + 1
+        tail = self._tail.setdefault(tid, deque())
+        tail.append((index, row))
+        if len(tail) > k:
+            old_index, old_row = tail.popleft()
+            if old_index >= k:
+                old_row.pop('feat', None)
 
     def finish(self, fps: float, every_n_frames: int = 1, post=None) -> tuple[list[dict], dict | None]:
         """Apply the offline post-processing (if any) and drop the appearance vectors."""
@@ -122,7 +151,9 @@ def track_video(video_path, prompts: Sequence[str], detector: Detector, out_dir,
     info = sio.video_info(video_path)  # fails before any output folder is created
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    online = OnlineTracking(info.fps / every_n_frames, tracker_kwargs, embedder, cmc, emit_birth)
+    linking = post is not None and post.link.max_gap_s > 0
+    online = OnlineTracking(info.fps / every_n_frames, tracker_kwargs, embedder, cmc, emit_birth,
+                            feature_window=post.link.feature_window if linking else 0)
 
     det_frames: list[dict] = []
     batch_idx: list[int] = []

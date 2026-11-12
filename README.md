@@ -862,7 +862,10 @@ a generated clip.
 `scripts/benchmark_mot17_botsort.py` scores the trackers with the official
 TrackEval on the labelled MOT17 training videos, using the public detections
 (so only the tracker differs). Design decisions used videos 02, 04 and 05;
-the numbers below are the four **held-out** videos (09, 10, 11, 13):
+the numbers below are the four **held-out** videos (09, 10, 11, 13), with ResNet-18 appearance
+(`--reid cnn`; a fresh install's `auto` uses colour histograms until those weights are downloaded, which was
+not measured). Four videos and no confidence interval: 11 of the 12 video/detection pairs improve, and one
+early run did score all seven videos before the linking rule was final (details in the report):
 
 | Public detections | Tracker | HOTA | IDF1 | MOTA | ID switches |
 |---|---|---|---|---|---|
@@ -885,7 +888,8 @@ settings exactly as `track.py` resolves them; `scripts/benchmark_mot17_e2e.py`):
 | D-FINE-L | bytetrack | 44.5 | 44.2 | 45.5 | 54.0 | 46.6 | 221 | 20.8 |
 | D-FINE-L | botsort (**new default**) | **46.5** | 45.3 | 48.2 | **56.2** | 46.5 | 179 | 20.8 |
 
-The detector matters most: D-FINE alone lifts DetA by about 6 points and runs 6x faster. BoT-SORT raises
+The detector matters most: D-FINE alone lifts DetA by about 6 points and runs 6x faster (RTX 5060 laptop GPU,
+batch 4; each detector with its own `track.py` defaults, not matched settings). BoT-SORT raises
 HOTA and IDF1 with every detector but not MOTA, because filling gaps also extends false tracks (most with
 OWLv2); with a noisy detector raise `--box_threshold`.
 
