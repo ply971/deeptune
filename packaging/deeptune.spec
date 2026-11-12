@@ -93,6 +93,8 @@ hiddenimports = [
     "src.nlp.multilingual_bert_peft",
     # desktop/app.py's --tool-worker (G1) imports these entry points by name.
     "select_model", "ensemble", "extract_features", "train_feature_head", "analyse_embeddings",
+    # ... and G2's evaluators (by module name; the scripts/ benchmarks are not packaged)
+    "evaluators.video.localization_report", "evaluators.video.report", "evaluators.video.abstention_fit",
     "analysis.unsupervised", "analysis.timeline",
 ]
 

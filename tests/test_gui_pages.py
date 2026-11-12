@@ -465,8 +465,8 @@ def test_model_selection_starts_only_after_a_dry_run_of_the_same_settings(gui, t
     from desktop import tool_pages
     launched = []
 
-    def fake_start(cfg, extra=None):
-        launched.append(tool_pages.tool_argv(cfg, extra))
+    def fake_start(cfg, extra=None, leading=None):  # start_tool_run's signature (G2 added leading words)
+        launched.append(tool_pages.tool_argv(cfg, extra, leading))
         return _FakeHandle()
     monkeypatch.setattr(tool_pages, 'start_tool_run', fake_start)
     data = tmp_path / 'dev.parquet'

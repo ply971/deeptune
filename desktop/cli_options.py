@@ -41,6 +41,7 @@ class Opt:
     remainder: bool = False  # argparse.REMAINDER: emitted last, words as given
     hidden: bool = False  # no widget of its own: a button sets it (e.g. select_model.py --dry_run)
     browse: str = ''  # 'file' or 'folder': the widget gets a Browse button
+    repeat: bool = False  # argparse action='append': the flag is repeated before each word
 
     @property
     def key(self) -> str:
@@ -96,6 +97,8 @@ def option_argv(opt: Opt, value) -> list[str]:
         return [opt.flag] if value else []  # TRI False removes the flag: see removed_flags
     if opt.kind in LIST_KINDS:
         words = [format_value(v) for v in value or []]
+        if opt.repeat:
+            return [part for word in words for part in (opt.flag, word)]
         return [opt.flag, *words] if words or opt.remainder else []
     text = format_value(value)
     # A value that starts with '-' would be read as a flag: --flag=value keeps it a value.
@@ -725,4 +728,176 @@ EMBEDDING_ANALYSIS_OPTIONS = (
     Opt('--ae_hidden', INT, 'Autoencoder hidden units', '', 64),
     Opt('--seed', INT, 'Seed', '', 0),
     Opt('--no_plots', BOOL, 'No plots', 'Skip the PNG plots.', False),
+)
+
+
+# --- G2: the Evaluate & Benchmarks page ------------------------------------------------------------------------------
+# evaluators/video/localization_report.py
+LOCALIZATION_OPTIONS = (
+    Opt('--ground_truth', TEXT, 'Ground-truth segments', 'CSV with video-id, t-start, t-end, label (a benchmark '
+        'gt_segments.csv has these).', None, required=True, browse='file'),
+    Opt('--predictions', TEXT, 'Predicted segments', "CSV with video-id, t-start, t-end, label, score (e.g. a timeline "
+        "run's segments).", None, required=True, browse='file'),
+    Opt('--out', TEXT, 'Output folder', 'localization_report.json and per_class_ap.csv go here.', None, required=True,
+        browse='folder'),
+    Opt('--boundary_tiou', FLOAT, 'Boundary-error tIoU', 'Overlap (tIoU) at which a prediction counts as matched for '
+        'the boundary error (default 0.5).', 0.5),
+    Opt('--uncertainty_column', TEXT, 'Uncertainty column', 'Column of the predictions with a per-segment uncertainty '
+        'in [0, 1]: also checks it against the false positives. Blank: no check.'),
+    Opt('--split', TEXT, 'Name of these rows', 'Recorded with the uncertainty check (default validation).', 'validation'),
+)
+
+# evaluators/video/abstention_fit.py
+ABSTENTION_FIT_OPTIONS = (
+    Opt('--checkpoint', TEXT, 'Run weights', "The run's model_weights.pth; cli_arguments.json beside it supplies the "
+        'model settings. The rule is saved beside it (abstention.json).', None, required=True, browse='file'),
+    Opt('--calib_df', TEXT, 'Calibration rows', 'Labelled rows (Parquet or CSV) whose groups the model never saw.', None,
+        required=True, browse='file'),
+    Opt('--target_error', OPT_FLOAT, 'Target error', 'Between 0 and 1, e.g. 0.1: the answered clips may be wrong at most '
+        'this often.', None, required=True),
+    Opt('--abstain_delta', FLOAT, 'Failure chance', 'Chance that the guarantee fails over the calibration draw '
+        '(default 0.05).', 0.05),
+    Opt('--abstain_guarantee', CHOICE, 'What the target bounds', 'selective_risk: errors among answered clips; '
+        'silent_error: wrong answers among all clips.', 'selective_risk', ('selective_risk', 'silent_error')),
+    Opt('--abstain_score', CHOICE, 'What ranks clips', 'max_prob: the top class probability; expected_error: the '
+        "run's error model.", 'max_prob', ('max_prob', 'expected_error')),
+    Opt('--grouper', TEXT, 'Group column', "Blank: the run's grouper, else 'group' when the file has one."),
+    Opt('--other_df', LINES, 'More files to check for overlap', "On top of the run's own data_splits_* folder, which is "
+        'always checked. Overlap voids the guarantee. One path per line.', (), browse='file'),
+    Opt('--split_name', TEXT, 'Name of these rows', "'validation', 'test' and 'train' are refused (default calibration).",
+        'calibration'),
+    Opt('--batch_size', INT, 'Batch size', 'Default 16.', 16),
+)
+
+# evaluators/video/report.py ("Compare two" adds the first word compare)
+EVAL_REPORT_OPTIONS = (
+    Opt('--eval_dir', TEXT, 'Evaluation folder', "Report: a run's eval_output_* folder (with predictions.csv). The "
+        'report is written into it.', None, browse='folder'),
+    Opt('--a', TEXT, 'Compare: first evaluation folder', '', None, browse='folder'),
+    Opt('--b', TEXT, 'Compare: second evaluation folder', 'Same test set as the first, in the same order.', None,
+        browse='folder'),
+    Opt('--test_df', TEXT, 'Evaluated split', 'Its group column sets the resampling unit of the intervals.', None,
+        browse='file'),
+    Opt('--grouper', TEXT, 'Group column', "Of the evaluated split (default 'group')."),
+    Opt('--fit_dir', TEXT, 'Temperature-fit folder', 'Evaluation folder of validation or out-of-fold rows to fit the '
+        'temperature on (needs their name below).', None, browse='folder'),
+    Opt('--fit_split', TEXT, 'Name of the fit rows', 'e.g. validation. Must not be test.'),
+    Opt('--mapping', TEXT, 'Label mapping', 'label_mapping.json, for class names.', None, browse='file'),
+    Opt('--train_df', TEXT, 'Training split', 'For the chance row.', None, browse='file'),
+    Opt('--n_boot', INT, 'Bootstrap resamples', 'Default 2000.', 2000),
+    Opt('--seed', INT, 'Bootstrap seed', 'Default 0.', 0),
+)
+
+MOT17_VARIANTS = ('bytetrack', 'cmc', 'reid', 'online', 'interp', 'link', 'birth', 'minlen', 'post', 'botsort')
+MOT17_DETECTIONS = ('FRCNN', 'SDP', 'DPM')
+MOT17_SEQUENCES = ('all', 'dev', 'heldout')
+_MOT17_DATA = Opt('--data', TEXT, 'MOT17 folder', 'The MOT17 root, with train/<sequence>/{img1,det,gt}.', None,
+                  required=True, browse='folder')
+_TRACKEVAL = Opt('--trackeval', TEXT, 'TrackEval folder', 'A checkout of the official TrackEval source (scores HOTA, '
+                 'IDF1, MOTA).', None, required=True, browse='folder')
+_BENCH_OUT = Opt('--out', TEXT, 'Output folder', 'report.json and the tracker outputs go here. Rerunning into it adds '
+                 'to report.json.', None, required=True, browse='folder')
+
+# scripts/benchmark_mot17_botsort.py
+MOT17_BOTSORT_OPTIONS = (
+    _MOT17_DATA, _TRACKEVAL, _BENCH_OUT,
+    Opt('--variants', MULTI, 'Tracker variants', 'ByteTrack, then each BoT-SORT piece added in turn, up to the full '
+        'botsort.', MOT17_VARIANTS, MOT17_VARIANTS),
+    Opt('--detectors', MULTI, 'Public detections', "MOT17's three public detection sets.", MOT17_DETECTIONS,
+        MOT17_DETECTIONS),
+    Opt('--sequences', CHOICE, 'Videos', 'all 7, the 3 development videos (02/04/05), or the 4 held-out ones. Choose '
+        'settings on dev; run held-out once.', 'all', MOT17_SEQUENCES),
+    Opt('--device', TEXT, 'Device', 'auto, cuda or cpu (default auto).', 'auto'),
+    Opt('--cache', TEXT, 'Cache folder', 'Cached camera-motion affines and appearance vectors (blank: OUT/cache).', None,
+        browse='folder'),
+    Opt('--reid', CHOICE, 'Appearance (Re-ID)', 'cnn: ResNet-18; osnet: OSNet-AIN person Re-ID (9 MB download once, '
+        'research-use training data); color: HSV colour histograms.', 'cnn', ('cnn', 'osnet', 'color')),
+    Opt('--appearance_thresh', FLOAT, 'Tracker appearance gate', "track.py's --appearance_thresh (default 0.25).", 0.25),
+    Opt('--link_appearance_thresh', OPT_FLOAT, 'Linker appearance gate', "track.py's --link_appearance_thresh (blank: "
+        'its default 0.3).'),
+)
+
+# scripts/benchmark_mot17_e2e.py
+MOT17_E2E_OPTIONS = (
+    _MOT17_DATA, _TRACKEVAL, _BENCH_OUT,
+    Opt('--detectors', MULTI, 'Detectors', 'Run on the frames themselves (no public detections), prompt "person".',
+        ('dfine', 'grounding_dino', 'owlv2'), ('dfine', 'grounding_dino', 'owlv2')),
+    Opt('--trackers', MULTI, 'Trackers', '', ('bytetrack', 'botsort'), ('bytetrack', 'botsort')),
+    Opt('--sequences', CHOICE, 'Videos', 'Default heldout (the 4 held-out videos).', 'heldout', MOT17_SEQUENCES),
+    Opt('--batch_size', INT, 'Detector batch size', 'Frames per detector call (default 4; lower it if the GPU runs out '
+        'of memory).', 4),
+    Opt('--device', TEXT, 'Device', 'auto, cuda or cpu (default auto).', 'auto'),
+)
+
+# scripts/timeline_untrimmed.py
+TIMELINE_EXPERIMENT_OPTIONS = (
+    Opt('--out', TEXT, 'Output folder', 'report.json, report.md, the synthetic videos and the runs go here.', None,
+        required=True, browse='folder'),
+    Opt('--model', TEXT, 'Model', 'deeptune.py --model_version (default r3d_18).', 'r3d_18'),
+    Opt('--epochs', INT, 'Epochs', 'Default 6.', 6),
+    Opt('--batch_size', INT, 'Batch size', 'Default 16.', 16),
+    Opt('--num_frames', INT, 'Frames per window', 'Default 8.', 8),
+    Opt('--n_videos', INT, 'Untrimmed videos', 'How many synthetic videos to make (default 40).', 40),
+    Opt('--n_classes', INT, 'Action classes', 'Default 3.', 3),
+    Opt('--window_sec', FLOAT, 'Window (s)', 'Default 1.6.', 1.6),
+    Opt('--stride_sec', FLOAT, 'Stride (s)', 'Between windows on the test videos (default 0.4).', 0.4),
+    Opt('--train_stride_sec', FLOAT, 'Training stride (s)', 'Default 0.4.', 0.4),
+    Opt('--smooth_windows', INT, 'Smoothing (windows)', 'Default 3.', 3),
+    Opt('--min_segment_sec', FLOAT, 'Shortest segment (s)', 'Default 0.8.', 0.8),
+    Opt('--skip_static', FLOAT, 'Skip still windows', 'Motion threshold for the second timeline, which skips still windows (default 0.5).', 0.5),
+    Opt('--seed', INT, 'Seed', 'Default 0.', 0),
+    Opt('--extra', LINES, 'More deeptune.py flags (one word per line)', 'e.g. --num_workers on one line and 0 on the next '
+        '(use this if the laptop runs low on memory).', (), remainder=True),
+)
+
+# scripts/run_motion_benchmark.py
+MOTION_TASKS = ('direction', 'scene_bias', 'periodic', 'speed')
+MOTION_BENCHMARK_OPTIONS = (
+    Opt('--task', CHOICE, 'Task', 'direction: left vs right motion; scene_bias: a background shortcut; periodic: '
+        'oscillation; speed: regression.', None, MOTION_TASKS, required=True),
+    Opt('--models', WORDS, 'Models', 'Model specs, e.g. single_frame:resnet18 mean:resnet18 attention:resnet18 '
+        'tsm:resnet18 two_stream:resnet18 r3d_18 flow_logreg (dummy for a quick CPU check).', (), required=True),
+    Opt('--out', TEXT, 'Output folder', 'results.csv, results.json and results.md go here.', None, required=True,
+        browse='folder'),
+    Opt('--data', TEXT, 'Existing benchmark folder', 'A folder made earlier (with dataset.json). Blank: generate one.',
+        None, browse='folder'),
+    Opt('--n_train', INT, 'Training clips', 'Default 700.', 700),
+    Opt('--n_test', INT, 'Test clips', 'Default 400.', 400),
+    Opt('--n_val', INT, 'Validation clips', 'At least 1 (default 200).', 200),
+    Opt('--size', INT, 'Frame size', 'Generated frame side in pixels (default 64).', 64),
+    Opt('--num_frames', OPT_INT, 'Frames per clip', 'Blank: 12 (periodic 16).'),
+    Opt('--seed', INT, 'Data seed', 'Also the model seed unless one is given (default 0).', 0),
+    Opt('--model_seed', OPT_INT, 'Model seed', 'Blank: the data seed. Change it to repeat a run on the same data.'),
+    Opt('--codec', TEXT, 'Codec', 'Video codec of the generated clips (default auto).', 'auto'),
+    Opt('--epochs', INT, 'Epochs', 'Default 5.', 5),
+    Opt('--batch_size', INT, 'Batch size', 'Default 8.', 8),
+    Opt('--lr', FLOAT, 'Learning rate', 'Default 0.001.', 1e-3),
+    Opt('--added_layers', INT, 'Added layers', '1 or 2 (default 1).', 1),
+    Opt('--embed_size', INT, 'Embedding size', 'Default 256.', 256),
+    Opt('--freeze_backbone', BOOL, 'Freeze the backbone', 'Train only the added head.', False),
+    Opt('--use_peft', BOOL, 'Use PEFT (LoRA)', '', False),
+    Opt('--resize', INT, 'Resize for 2D backbones', 'Frame side fed to 2D backbones (default 112).', 112),
+    Opt('--hflip', BOOL, 'Random horizontal flip', 'Refused on the direction task (a flip changes its label).', False),
+    Opt('--threads', INT, 'CPU threads', 'torch CPU threads; keep low on a laptop (default 4).', 4),
+)
+
+# scripts/train_cat_detector.py
+CAT_DETECTOR_OPTIONS = (
+    Opt('--data', TEXT, 'Oxford-IIIT Pet folder', 'Where the dataset is (or goes, with Download).', None, required=True,
+        browse='folder'),
+    Opt('--out', TEXT, 'Output folder', 'splits.json, the weights and report.json go here.', None, required=True,
+        browse='folder'),
+    Opt('--download', BOOL, 'Download the dataset', 'The full images and annotations from the Oxford site (MD5 '
+        'checked).', False),
+    Opt('--prepare-only', BOOL, 'Prepare the splits only', 'Write splits.json and stop; trains nothing.', False),
+    Opt('--mirror-subset', BOOL, 'Download only the needed images', 'From a Hugging Face mirror of the original files '
+        '(annotations MD5 checked).', False),
+    Opt('--device', TEXT, 'Device', 'Default cuda.', 'cuda'),
+    Opt('--epochs', INT, 'Epochs', 'Default 5.', 5),
+    Opt('--train-count', INT, 'Training images', 'Default 900.', 900),
+    Opt('--val-count', INT, 'Validation images', 'Default 240.', 240),
+    Opt('--test-count', INT, 'Test images', 'Default 300.', 300),
+    Opt('--seed', INT, 'Seed', 'Default 42.', 42),
+    Opt('--exclude-image', WORDS, 'Images to leave out', 'Image IDs known to be unavailable; logged, with no replacement.',
+        (), repeat=True),
 )

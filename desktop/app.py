@@ -47,7 +47,9 @@ if str(ROOT) not in sys.path:
 # only happen in this worker process, never in the long-lived GUI process
 # itself. An unfrozen `python desktop/app.py` never takes this branch;
 # runner.py keeps using a real python.exe + the on-disk script path there.
-_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head", "analyse_embeddings")  # desktop/tools.TOOLS
+_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head", "analyse_embeddings",
+                 # G2: the evaluators run by module name (desktop/tools.TOOLS[...].module); scripts/ is checkout-only
+                 "evaluators.video.localization_report", "evaluators.video.report", "evaluators.video.abstention_fit")
 if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", "--track-worker", "--tool-worker"):
     # PyInstaller's windowed bootloader doesn't reliably pick up
     # PYTHONIOENCODING for this process's stdio the way a plain python.exe
@@ -128,6 +130,7 @@ NAV_ITEMS = [
     ("select", "08   Model Selection"),
     ("ensemble", "09   Ensemble"),
     ("features", "10   Features & Probes"),
+    ("evaluate", "11   Evaluate & Benchmarks"),
 ]
 DT = 'dt'  # widget-tag prefix of the deeptune.py options on the Model page (desktop/cli_options.DEEPTUNE_OPTIONS)
 INFER = 'infer'  # ... and of the infer.py options on the Test page (INFER_OPTIONS)

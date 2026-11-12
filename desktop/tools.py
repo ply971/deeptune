@@ -1,6 +1,7 @@
 """The GUI side of the other entry points (G1): select_model.py, ensemble.py, extract_features.py and
 train_feature_head.py, plus readers for what runs leave on disk (selection leaderboard, validation report, abstention,
-ensemble and probe results).
+ensemble and probe results). G2 adds the Evaluate & Benchmarks page: the video evaluators (run as modules) and the
+benchmark scripts in scripts/ (source checkout only).
 
 Pure Python (json, csv via pandas, pathlib): no torch and no Dear PyGui, so tests drive it directly. The widgets are
 in desktop/tool_pages.py; the processes start through desktop/runner.start_tool_run.
@@ -18,12 +19,19 @@ import pandas as pd
 from desktop import cli_options as co
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 @dataclass(frozen=True)
 class Tool:
     name: str
-    script: str
+    script: str  # relative to the repository root
     specs: tuple
     title: str
+    module: str = ''  # run as `python -m module` (the evaluators set up no import path of their own)
+    checkout_only: bool = False  # scripts/ benchmarks: not part of the packaged app
+    out_key: str = 'out'  # the setting that names the output folder ('checkpoint': the folder of that file)
+    results: tuple = ()  # files the results view reads from the output folder (G1 tools have readers of their own)
 
 
 TOOLS = {tool.name: tool for tool in (
@@ -32,6 +40,23 @@ TOOLS = {tool.name: tool for tool in (
     Tool('extract_features', 'extract_features.py', co.EXTRACT_OPTIONS, 'Feature extraction'),
     Tool('train_feature_head', 'train_feature_head.py', co.PROBE_OPTIONS, 'Feature probe'),
     Tool('analyse_embeddings', 'analyse_embeddings.py', co.EMBEDDING_ANALYSIS_OPTIONS, 'Embedding analysis'),
+    Tool('localization_report', 'evaluators/video/localization_report.py', co.LOCALIZATION_OPTIONS, 'Localisation report',
+         module='evaluators.video.localization_report', results=('localization_report.json', 'per_class_ap.csv')),
+    Tool('eval_report', 'evaluators/video/report.py', co.EVAL_REPORT_OPTIONS, 'Evaluation report',
+         module='evaluators.video.report', out_key='eval_dir',
+         results=('evaluation_report.json', 'metric_intervals.csv', 'per_class_metrics.csv')),
+    Tool('abstention_fit', 'evaluators/video/abstention_fit.py', co.ABSTENTION_FIT_OPTIONS, 'Abstention fit',
+         module='evaluators.video.abstention_fit', out_key='checkpoint', results=('abstention.json',)),
+    Tool('run_motion_benchmark', 'scripts/run_motion_benchmark.py', co.MOTION_BENCHMARK_OPTIONS, 'Motion benchmark',
+         checkout_only=True, results=('results.csv', 'results.md')),
+    Tool('timeline_untrimmed', 'scripts/timeline_untrimmed.py', co.TIMELINE_EXPERIMENT_OPTIONS, 'Timeline experiment',
+         checkout_only=True, results=('report.md', 'report.json')),
+    Tool('benchmark_mot17_botsort', 'scripts/benchmark_mot17_botsort.py', co.MOT17_BOTSORT_OPTIONS,
+         'MOT17 tracking benchmark (public detections)', checkout_only=True, results=('report.json',)),
+    Tool('benchmark_mot17_e2e', 'scripts/benchmark_mot17_e2e.py', co.MOT17_E2E_OPTIONS, 'MOT17 end-to-end benchmark',
+         checkout_only=True, results=('report.json',)),
+    Tool('train_cat_detector', 'scripts/train_cat_detector.py', co.CAT_DETECTOR_OPTIONS, 'Cat detector training',
+         checkout_only=True, results=('report.json',)),
 )}
 
 
@@ -53,22 +78,35 @@ def build_tool_argv(cfg: ToolConfig) -> list[str]:
     return co.options_argv(cfg.spec.specs, cfg.values)
 
 
-def output_folder(cfg: ToolConfig) -> Optional[Path]:
-    key = 'out'
+def output_folder(cfg: ToolConfig, leading=()) -> Optional[Path]:
+    """Where the tool writes (and the results view reads). Relative paths are under the repository root, where every
+    tool runs. None when nothing is written: no folder chosen, or a leading word (report.py compare) that only prints."""
+    key = cfg.spec.out_key
     value = cfg.get(key)
-    return Path(value).expanduser() if value else None
+    if not value or leading:
+        return None
+    path = Path(value).expanduser()
+    path = path if path.is_absolute() else ROOT / path
+    return path.parent if key == 'checkpoint' else path
 
 
-def validate_tool(cfg: ToolConfig) -> list[str]:
+def validate_tool(cfg: ToolConfig, leading=()) -> list[str]:
     values, issues = co.coerce_values(cfg.spec.specs, cfg.values)
     if issues:
         return issues
     for opt in cfg.spec.specs:
         if opt.required and not values.get(opt.key):
             issues.append(f'{opt.label} is required.')
+    cfg = ToolConfig(cfg.tool, values)
+    if cfg.tool == 'eval_report':
+        return issues + _eval_report_issues(cfg, comparing=list(leading or []) == ['compare'])
     check = {'select_model': _select_issues, 'ensemble': _ensemble_issues, 'extract_features': _extract_issues,
-             'train_feature_head': _probe_issues, 'analyse_embeddings': _embedding_issues}[cfg.tool]
-    return issues + check(ToolConfig(cfg.tool, values))
+             'train_feature_head': _probe_issues, 'analyse_embeddings': _embedding_issues,
+             'localization_report': _localization_issues, 'abstention_fit': _abstention_fit_issues,
+             'benchmark_mot17_botsort': _mot17_issues, 'benchmark_mot17_e2e': _mot17_issues,
+             'timeline_untrimmed': _timeline_experiment_issues, 'run_motion_benchmark': _motion_issues,
+             'train_cat_detector': _cat_detector_issues}[cfg.tool]
+    return issues + check(cfg)
 
 
 def _embedding_issues(cfg: ToolConfig) -> list[str]:
@@ -514,3 +552,177 @@ def feature_sections(out_dir: Path) -> list[Section]:
     if record.exists() and (args := read_json(record, notes)) is not None:
         rows += [(key, str(args.get(key))) for key in ('model_version', 'streams', 'snippet_frames', 'cache_tokens') if key in args]
     return [Section('Feature folder', rows, notes, path=out_dir)]
+
+
+# --- G2: the Evaluate & Benchmarks page ------------------------------------------------------------------------------
+EVALUATE_TOOLS = ('localization_report', 'eval_report', 'abstention_fit', 'run_motion_benchmark', 'timeline_untrimmed',
+                  'benchmark_mot17_botsort', 'benchmark_mot17_e2e', 'train_cat_detector')
+NOT_FIT_NAMES = ('validation', 'test', 'train')  # abstention_fit.py refuses these as the calibration rows' name
+
+
+def _at_least(cfg: ToolConfig, keys, low=1) -> list[str]:
+    by = co.by_key(cfg.spec.specs)
+    return [f'{by[key].label} must be at least {low}.' for key in keys
+            if cfg.get(key) is not None and cfg.get(key) < low]
+
+
+def _positive(cfg: ToolConfig, keys) -> list[str]:
+    by = co.by_key(cfg.spec.specs)
+    return [f'{by[key].label} must be above 0.' for key in keys if cfg.get(key) is not None and not cfg.get(key) > 0]
+
+
+def _localization_issues(cfg: ToolConfig) -> list[str]:
+    issues = _exists('Ground-truth segments', cfg.get('ground_truth')) + _exists('Predicted segments', cfg.get('predictions'))
+    if not 0 < cfg.get('boundary_tiou') <= 1:
+        issues.append('The boundary-error tIoU must be above 0 and at most 1.')
+    return issues
+
+
+def _abstention_fit_issues(cfg: ToolConfig) -> list[str]:
+    issues = _exists('Run weights', cfg.get('checkpoint')) + _exists('Calibration rows', cfg.get('calib_df'))
+    checkpoint = cfg.get('checkpoint')
+    if checkpoint and Path(checkpoint).expanduser().is_file() and not (Path(checkpoint).expanduser().parent / 'cli_arguments.json').is_file():
+        issues.append("cli_arguments.json is not beside the weights: choose a DeepTune run's model_weights.pth.")
+    target = cfg.get('target_error')
+    if target is not None and not 0 < target < 1:
+        issues.append('The target error must be between 0 and 1.')
+    if not 0 < cfg.get('abstain_delta') < 1:
+        issues.append('The failure chance must be between 0 and 1.')
+    if (cfg.get('split_name') or '').strip().lower() in NOT_FIT_NAMES:
+        issues.append("The rows' name may not be validation, test or train: the rule must be fitted on rows of their own.")
+    for path in cfg.get('other_df'):
+        issues += _exists('Overlap file', path)
+    return issues + _at_least(cfg, ('batch_size',))
+
+
+def _eval_report_issues(cfg: ToolConfig, comparing: bool) -> list[str]:
+    def predictions(label, folder):
+        if not folder:
+            return [f'Choose the {label} (a folder with predictions.csv).']
+        return [] if (Path(folder).expanduser() / 'predictions.csv').is_file() else [f'No predictions.csv in the {label}: {folder}']
+    if comparing:
+        issues = predictions('first evaluation folder', cfg.get('a')) + predictions('second evaluation folder', cfg.get('b'))
+    else:
+        issues = predictions('evaluation folder', cfg.get('eval_dir'))
+        if cfg.get('fit_dir') and not cfg.get('fit_split'):
+            issues.append('The temperature-fit folder needs the name of its rows (e.g. validation).')
+    if (cfg.get('fit_split') or '').strip().lower() == 'test':
+        issues.append('The temperature may not be fitted on test rows.')
+    for key in ('test_df', 'fit_dir', 'mapping', 'train_df'):
+        issues += _exists(co.by_key(co.EVAL_REPORT_OPTIONS)[key].label, cfg.get(key))
+    return issues + _at_least(cfg, ('n_boot',))
+
+
+def _mot17_issues(cfg: ToolConfig) -> list[str]:
+    issues = _exists('MOT17 folder', cfg.get('data')) + _exists('TrackEval folder', cfg.get('trackeval'))
+    for key in ('variants', 'detectors', 'trackers'):
+        if key in co.by_key(cfg.spec.specs) and not cfg.get(key):
+            issues.append(f'Pick at least one: {co.by_key(cfg.spec.specs)[key].label}.')
+    for key in ('appearance_thresh', 'link_appearance_thresh'):
+        if key in co.by_key(cfg.spec.specs) and cfg.get(key) is not None and cfg.get(key) < 0:
+            issues.append(f'{co.by_key(cfg.spec.specs)[key].label} may not be negative.')
+    return issues + (_at_least(cfg, ('batch_size',)) if 'batch_size' in co.by_key(cfg.spec.specs) else [])
+
+
+def _timeline_experiment_issues(cfg: ToolConfig) -> list[str]:
+    issues = _at_least(cfg, ('epochs', 'batch_size', 'smooth_windows')) + _at_least(cfg, ('num_frames', 'n_classes', 'n_videos'), 2)
+    issues += _positive(cfg, ('window_sec', 'stride_sec', 'train_stride_sec', 'min_segment_sec'))
+    if cfg.get('skip_static') < 0:
+        issues.append('The still-window threshold may not be negative.')
+    return issues
+
+
+def _motion_issues(cfg: ToolConfig) -> list[str]:
+    issues = _exists('Existing benchmark folder', cfg.get('data'))
+    if cfg.get('data') and Path(cfg.get('data')).expanduser().is_dir() and not (Path(cfg.get('data')).expanduser() / 'dataset.json').is_file():
+        issues.append('The existing benchmark folder has no dataset.json: leave it blank to generate one.')
+    if cfg.get('hflip') and cfg.get('task') == 'direction':
+        issues.append('Horizontal flip is refused on the direction task: a flip changes the label.')
+    if cfg.get('added_layers') not in (1, 2):
+        issues.append('Added layers must be 1 or 2.')
+    issues += _at_least(cfg, ('n_train', 'n_test', 'n_val', 'epochs', 'batch_size', 'embed_size', 'threads'))
+    issues += _at_least(cfg, ('size', 'resize'), 16) + _at_least(cfg, ('num_frames',), 2)
+    return issues + _positive(cfg, ('lr',))
+
+
+def _cat_detector_issues(cfg: ToolConfig) -> list[str]:
+    issues = [] if cfg.get('download') or cfg.get('mirror_subset') else _exists('Oxford-IIIT Pet folder', cfg.get('data'))
+    return issues + _at_least(cfg, ('epochs', 'train_count', 'val_count', 'test_count'))
+
+
+def _scalar(value) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def json_rows(value, prefix: str = '', limit: int = 80) -> list:
+    """Nested JSON as (label, value) rows: 'a / b / c' labels, short lists of scalars joined, longer ones counted."""
+    rows = []
+
+    def walk(item, label):
+        if len(rows) >= limit:
+            return
+        if _scalar(item):
+            rows.append((label or 'value', number(item)))
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                walk(child, f'{label} / {key}' if label else str(key))
+        elif isinstance(item, list) and all(_scalar(v) for v in item):
+            rows.append((label, ', '.join(number(v) for v in item) if len(item) <= 12 else f'{len(item)} values'))
+        elif isinstance(item, list):
+            rows.append((label, f'{len(item)} entries (see the file)'))
+    walk(value, prefix)
+    return rows
+
+
+def experiments_table(experiments: dict) -> pd.DataFrame:
+    """A benchmark's {'experiments': {key: {...}}} as one row per experiment: its settings and its metrics."""
+    records = []
+    for key, entry in experiments.items():
+        record = {'experiment': key}
+        for name, value in _dict(entry).items():
+            if _scalar(value):
+                record[name] = value
+            elif isinstance(value, dict) and all(_scalar(v) for v in value.values()):
+                record.update(value)
+        records.append(record)
+    return pd.DataFrame(records)
+
+
+def _json_file_sections(path: Path, warnings: list) -> list[Section]:
+    data = read_json(path, warnings)
+    if data is None:
+        return []
+    sections, rest = [], {}
+    for key, value in data.items():
+        if key == 'experiments' and isinstance(value, dict) and value:
+            sections.append(Section(f'{path.name}: experiments', table=experiments_table(value), path=path))
+        elif isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+            sections.append(Section(f'{path.name}: {key}', table=pd.json_normalize(value).head(200), path=path))
+        else:
+            rest[key] = value
+    rows = json_rows(rest)
+    return ([Section(path.name, rows, path=path)] if rows else []) + sections
+
+
+def file_sections(folder: Path, names) -> list[Section]:
+    """What a tool left in its output folder: JSON as rows (and tables), CSV as tables, Markdown as text."""
+    folder, warnings, sections = Path(folder), [], []
+    for name in names:
+        path = folder / name
+        if not path.is_file():
+            continue
+        if path.suffix == '.json':
+            _guarded(name, path, lambda path=path: _json_file_sections(path, warnings), sections)
+        elif path.suffix == '.csv':
+            _guarded(name, path, lambda path=path: Section(name, table=pd.read_csv(path).head(200), path=path), sections)
+        else:
+            _guarded(name, path, lambda path=path: Section(name, notes=[path.read_text(encoding='utf-8', errors='replace')[:6000]],
+                                                           path=path), sections)
+    if warnings:
+        sections.append(Section('Could not read', notes=warnings))
+    return sections
+
+
+def tool_sections(tool: str, out_dir: Path) -> list[Section]:
+    """The results view of an Evaluate & Benchmarks tool."""
+    return file_sections(out_dir, TOOLS[tool].results)

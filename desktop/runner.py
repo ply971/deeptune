@@ -163,7 +163,8 @@ class RunHandle:
             _terminate_process(state.process)
 
 
-def _worker_command(script: Path, worker_sentinel: str, args: list[str]) -> Tuple[list[str], Path]:
+def _worker_command(script: Path, worker_sentinel: str, args: list[str], module: str = '',
+                    cwd: Optional[Path] = None) -> Tuple[list[str], Path]:
     """Builds the subprocess command + working directory for running
     `script` (deeptune.py, infer.py or track.py) with `args`, in either a normal
     checkout (a real python.exe handed the script's on-disk path) or a
@@ -174,10 +175,15 @@ def _worker_command(script: Path, worker_sentinel: str, args: list[str]) -> Tupl
     entry point (see the top of that file) which one to run in-process
     instead, and the executable's own install directory is used as cwd
     rather than the (source-checkout-only) script's parent.
+
+    In a checkout, `module` runs `python -m module` instead (the evaluators set up no import path of their own), and
+    `cwd` replaces the script's folder as the working directory (G2's tools all run from the repository root).
     """
     if getattr(sys, "frozen", False):
         return [sys.executable, worker_sentinel, *args], Path(sys.executable).resolve().parent
-    return [sys.executable, "-u", str(script), *args], script.parent
+    if module:
+        return [sys.executable, "-u", "-m", module, *args], cwd or ROOT
+    return [sys.executable, "-u", str(script), *args], cwd or script.parent
 
 
 def start_run(cfg: gc.RunConfig) -> RunHandle:
@@ -359,25 +365,28 @@ def start_track_run(cfg: analyse.TrackConfig) -> RunHandle:
     return handle
 
 
-def start_tool_run(cfg: tools.ToolConfig, extra: Optional[list] = None) -> RunHandle:
-    """Launch select_model.py, ensemble.py, extract_features.py or train_feature_head.py for `cfg` (G1's pages) and
-    return progress queues the GUI polls. `extra` adds flags a button sets, such as --dry_run."""
-    issues = tools.validate_tool(cfg)
+def start_tool_run(cfg: tools.ToolConfig, extra: Optional[list] = None, leading: Optional[list] = None) -> RunHandle:
+    """Launch a desktop/tools.TOOLS entry point for `cfg` (G1's pages, G2's Evaluate & Benchmarks page) and return
+    progress queues the GUI polls. `extra` adds flags a button sets, such as --dry_run; `leading` puts words first,
+    such as report.py's compare."""
+    spec = cfg.spec
+    if spec.checkout_only and getattr(sys, "frozen", False):
+        raise ValueError(f'{spec.title} runs only from a source checkout: {spec.script} is not part of the packaged app.')
+    issues = tools.validate_tool(cfg, leading)
     if issues:
         raise ValueError('\n'.join(issues))
-    out = tools.output_folder(cfg)
+    out = tools.output_folder(cfg, leading)
     if out is not None:
         out.mkdir(parents=True, exist_ok=True)
     log_q: "queue.Queue[str]" = queue.Queue(maxsize=2000)
     done_q: "queue.Queue[DoneResult]" = queue.Queue()
-    args = tool_argv(cfg, extra)
+    args = tool_argv(cfg, extra, leading)
     state = _ProcessState()
-    spec = cfg.spec
     thread = threading.Thread(
         target=_worker_process,
         args=(ROOT / spec.script, "--tool-worker", spec.title,
-              f"Starting {spec.script}. The first import (torch/transformers) can take a moment...\n",
-              args, log_q, done_q, state, cfg.tool, out),
+              f"Starting {spec.module or spec.script}. The first import (torch/transformers) can take a moment...\n",
+              args, log_q, done_q, state, spec.module or cfg.tool, out, spec.module, ROOT),
         daemon=True,
         name=f"deeptune-{cfg.tool}",
     )
@@ -386,16 +395,16 @@ def start_tool_run(cfg: tools.ToolConfig, extra: Optional[list] = None) -> RunHa
     return handle
 
 
-def tool_argv(cfg: tools.ToolConfig, extra: Optional[list] = None) -> list[str]:
+def tool_argv(cfg: tools.ToolConfig, extra: Optional[list] = None, leading: Optional[list] = None) -> list[str]:
     """A tool's argv with `extra` flags placed before a trailing remainder flag (select_model.py --deeptune_args must
-    stay last, as it takes every word after it)."""
+    stay last, as it takes every word after it), and `leading` words first (report.py reads compare there)."""
     argv = tools.build_tool_argv(cfg)
-    extra = list(extra or [])
+    extra, leading = list(extra or []), list(leading or [])
     remainder = next((opt.flag for opt in cfg.spec.specs if opt.remainder and opt.flag in argv), None)
     if remainder is None:
-        return argv + extra
+        return leading + argv + extra
     at = argv.index(remainder)
-    return argv[:at] + extra + argv[at:]
+    return leading + argv[:at] + extra + argv[at:]
 
 
 def _infer_process(
@@ -421,6 +430,8 @@ def _worker_process(
     state: _ProcessState,
     tool: str = '',
     record_dir: Optional[Path] = None,
+    module: str = '',
+    cwd: Optional[Path] = None,
 ) -> None:
     """Same subprocess/streaming/cancellation shape as _run_process, minus
     the desktop-sessions log file and deeptune-*-run-folder bookkeeping
@@ -458,7 +469,7 @@ def _worker_process(
         emit(start_message)
         # A frozen build runs every tool through one sentinel, so it also needs the tool's name; a checkout runs the script.
         frozen = getattr(sys, "frozen", False)
-        cmd, run_cwd = _worker_command(script, worker_sentinel, [tool, *args] if tool and frozen else args)
+        cmd, run_cwd = _worker_command(script, worker_sentinel, [tool, *args] if tool and frozen else args, module, cwd)
         process = subprocess.Popen(
             cmd,
             cwd=run_cwd,

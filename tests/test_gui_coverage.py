@@ -1,7 +1,8 @@
 """G1: every flag of every entry point is reachable from the desktop GUI, through what its Start button sends.
 
 For each argparse flag of deeptune.py, infer.py, select_model.py, ensemble.py, extract_features.py,
-train_feature_head.py, analyse_embeddings.py and track.py, the test builds the real UI headless, sets the flag's control (a widget, or for
+train_feature_head.py, analyse_embeddings.py and track.py, and (G2) of the three video evaluators and five benchmark
+scripts on the Evaluate & Benchmarks page, the test builds the real UI headless, sets the flag's control (a widget, or for
 the oldest controls the widgets apply_config sets) to a value that differs from the CLI default, presses the page's
 real Start handler (app.on_run_clicked, app.on_run_test_clicked, analyse_page.on_track_clicked, tool_pages.start and
 tool_pages.on_check_grid), and captures the argv the runner would launch: the subprocess functions are replaced, nothing
@@ -39,6 +40,15 @@ ALLOW_LIST: dict = {
 }
 
 
+def _script_parser(name):
+    """A scripts/ benchmark's build_parser(), loaded from its file (scripts/ is not a package)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(f'g2_{name}', REPO / 'scripts' / f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_parser()
+
+
 def _parsers():
     import analyse_embeddings
     import deeptune
@@ -48,7 +58,12 @@ def _parsers():
     import select_model
     import track
     import train_feature_head
-    return {'deeptune.py': deeptune.build_parser(), 'infer.py': infer.build_parser(), 'select_model.py': select_model.build_parser(),
+    from evaluators.video import abstention_fit, localization_report, report
+    g2 = {'localization_report.py': localization_report.build_parser(), 'report.py': report.build_parser(),
+          'abstention_fit.py': abstention_fit._parser(),
+          **{f'{name}.py': _script_parser(name) for name in ('run_motion_benchmark', 'timeline_untrimmed', 'benchmark_mot17_botsort',
+                                                             'benchmark_mot17_e2e', 'train_cat_detector')}}
+    return {**g2, 'deeptune.py': deeptune.build_parser(), 'infer.py': infer.build_parser(), 'select_model.py': select_model.build_parser(),
             'ensemble.py': ensemble.build_parser(), 'extract_features.py': extract_features.build_parser(),
             'train_feature_head.py': train_feature_head.build_parser(), 'track.py': track.get_parser(),
             'analyse_embeddings.py': analyse_embeddings.build_parser()}
@@ -58,12 +73,22 @@ PARSERS = _parsers()
 SPECS = {'deeptune.py': co.DEEPTUNE_OPTIONS, 'infer.py': co.INFER_OPTIONS, 'select_model.py': co.SELECT_OPTIONS,
          'ensemble.py': co.ENSEMBLE_OPTIONS, 'extract_features.py': co.EXTRACT_OPTIONS,
          'train_feature_head.py': co.PROBE_OPTIONS, 'track.py': co.TRACK_OPTIONS,
-         'analyse_embeddings.py': co.EMBEDDING_ANALYSIS_OPTIONS}
+         'analyse_embeddings.py': co.EMBEDDING_ANALYSIS_OPTIONS,
+         'localization_report.py': co.LOCALIZATION_OPTIONS, 'report.py': co.EVAL_REPORT_OPTIONS,
+         'abstention_fit.py': co.ABSTENTION_FIT_OPTIONS, 'run_motion_benchmark.py': co.MOTION_BENCHMARK_OPTIONS,
+         'timeline_untrimmed.py': co.TIMELINE_EXPERIMENT_OPTIONS, 'benchmark_mot17_botsort.py': co.MOT17_BOTSORT_OPTIONS,
+         'benchmark_mot17_e2e.py': co.MOT17_E2E_OPTIONS, 'train_cat_detector.py': co.CAT_DETECTOR_OPTIONS}
 PAGE_PREFIXES = {'deeptune.py': 'dt', 'infer.py': 'infer', 'select_model.py': 'sel', 'ensemble.py': 'ens',
                  'extract_features.py': 'feat', 'train_feature_head.py': 'probe', 'track.py': 'track',
-                 'analyse_embeddings.py': 'emb'}
+                 'analyse_embeddings.py': 'emb', 'localization_report.py': 'loc', 'report.py': 'evrep',
+                 'abstention_fit.py': 'absfit', 'run_motion_benchmark.py': 'motion', 'timeline_untrimmed.py': 'tlx',
+                 'benchmark_mot17_botsort.py': 'motpub', 'benchmark_mot17_e2e.py': 'mote2e', 'train_cat_detector.py': 'cat'}
 TOOL = {'select_model.py': 'select_model', 'ensemble.py': 'ensemble', 'extract_features.py': 'extract_features',
-        'train_feature_head.py': 'train_feature_head', 'analyse_embeddings.py': 'analyse_embeddings'}
+        'train_feature_head.py': 'train_feature_head', 'analyse_embeddings.py': 'analyse_embeddings',
+        'localization_report.py': 'localization_report', 'report.py': 'eval_report', 'abstention_fit.py': 'abstention_fit',
+        'run_motion_benchmark.py': 'run_motion_benchmark', 'timeline_untrimmed.py': 'timeline_untrimmed',
+        'benchmark_mot17_botsort.py': 'benchmark_mot17_botsort', 'benchmark_mot17_e2e.py': 'benchmark_mot17_e2e',
+        'train_cat_detector.py': 'train_cat_detector'}
 # deeptune.py flags that only apply to tables and time series; every other one must work in a video run.
 NOT_VIDEO = {'--type', '--continuous_cols', '--categorical_cols', '--finetuning-mode', '--time_idx_column', '--modality'}
 
@@ -102,7 +127,8 @@ def gui_value(opt: co.Opt, action) -> tuple:
                       and _convert(action, str(c)) != action.default)
         return choice, _convert(action, str(choice))
     if opt.kind == co.MULTI:
-        picked = [next(c for c in reversed(opt.choices) if c not in (opt.default or ()))]
+        unpicked = [c for c in reversed(opt.choices) if c not in (opt.default or ())]
+        picked = unpicked[:1] or [opt.choices[0]]  # every choice on by default (e.g. --variants): one alone differs
         return picked, [_convert(action, str(c)) for c in picked]
     if opt.kind in (co.INT, co.OPT_INT):
         value = (opt.default + 1) if isinstance(opt.default, int) else 3
@@ -188,8 +214,12 @@ class Studio:
 
     def _files(self):
         t = self.tmp
-        for folder in ('clips', 'images', 'features', 'videos', 'member_a', 'member_b', 'new_clips'):
+        for folder in ('clips', 'images', 'features', 'videos', 'member_a', 'member_b', 'new_clips', 'eval_a', 'eval_b',
+                       'mot17', 'trackeval', 'pets', 'motion_data'):
             (t / folder).mkdir()
+        for folder in ('eval_a', 'eval_b'):
+            pd.DataFrame({'videos': ['a.mp4'], 'labels': [0]}).to_csv(t / folder / 'predictions.csv', index=False)
+        (t / 'motion_data' / 'dataset.json').write_text('{}', encoding='utf-8')
         frame = pd.DataFrame({'videos': [f'v{i}.mp4' for i in range(40)], 'labels': [0, 1] * 20})
         for name in ('clips.parquet', 'other.parquet', 'test.parquet', 'dev.parquet'):
             frame.to_parquet(t / name)
@@ -231,6 +261,18 @@ class Studio:
             ('train_feature_head.py', 'features'): str(t / 'images'), ('train_feature_head.py', 'train_df'): str(t / 'rows.csv'),
             ('train_feature_head.py', 'val_df'): str(t / 'rows.csv'), ('train_feature_head.py', 'test_df'): str(t / 'rows.csv'),
             ('track.py', 'video_dir'): str(t / 'videos'),
+            ('localization_report.py', 'ground_truth'): str(t / 'rows.csv'),
+            ('localization_report.py', 'predictions'): str(t / 'rows.csv'),
+            ('report.py', 'eval_dir'): str(t / 'eval_a'), ('report.py', 'a'): str(t / 'eval_a'), ('report.py', 'b'): str(t / 'eval_b'),
+            ('report.py', 'test_df'): str(t / 'rows.csv'), ('report.py', 'fit_dir'): str(t / 'eval_b'),
+            ('report.py', 'mapping'): str(t / 'labels.json'), ('report.py', 'train_df'): str(t / 'rows.csv'),
+            ('abstention_fit.py', 'checkpoint'): str(self.run / 'trainval_output_x' / 'model_weights.pth'),
+            ('abstention_fit.py', 'calib_df'): str(t / 'rows.csv'),
+            ('abstention_fit.py', 'other_df'): [str(t / 'pred_a.csv'), str(t / 'pred_b.csv')],
+            ('run_motion_benchmark.py', 'data'): str(t / 'motion_data'),
+            ('benchmark_mot17_botsort.py', 'data'): str(t / 'mot17'), ('benchmark_mot17_botsort.py', 'trackeval'): str(t / 'trackeval'),
+            ('benchmark_mot17_e2e.py', 'data'): str(t / 'mot17'), ('benchmark_mot17_e2e.py', 'trackeval'): str(t / 'trackeval'),
+            ('train_cat_detector.py', 'data'): str(t / 'pets'),
         }
         if key == 'out' and entry in TOOL:  # an output folder is created when the run starts: keep it under tmp
             return str(t / f'{TOOL[entry]}_out')
@@ -330,10 +372,21 @@ class Studio:
             'train_feature_head.py': [{'features': str(t / 'features'), 'train_df': str(t / 'rows.csv'), 'val_df': str(t / 'rows.csv'),
                                        'out': str(t / 'probe')}],
             'analyse_embeddings.py': [{'embeddings': str(t / 'rows.csv'), 'out': str(t / 'embedding_analysis')}],
+            'localization_report.py': [{'ground_truth': str(t / 'rows.csv'), 'predictions': str(t / 'rows.csv'),
+                                        'out': str(t / 'localization')}],
+            'report.py': [{'eval_dir': str(t / 'eval_a')}],
+            'abstention_fit.py': [{'checkpoint': str(self.run / 'trainval_output_x' / 'model_weights.pth'),
+                                   'calib_df': str(t / 'rows.csv'), 'target_error': 0.1}],
+            'run_motion_benchmark.py': [{'task': 'periodic', 'models': ['dummy'], 'out': str(t / 'motion')}],
+            'timeline_untrimmed.py': [{'out': str(t / 'timeline')}],
+            'benchmark_mot17_botsort.py': [{'data': str(t / 'mot17'), 'trackeval': str(t / 'trackeval'), 'out': str(t / 'mot_public')}],
+            'benchmark_mot17_e2e.py': [{'data': str(t / 'mot17'), 'trackeval': str(t / 'trackeval'), 'out': str(t / 'mot_e2e')}],
+            'train_cat_detector.py': [{'data': str(t / 'pets'), 'out': str(t / 'cat')}],
         }[entry]
 
-    SELECT_PREREQUISITES = {'n_trials': {'search': 'random'}, 'bayes_startup': {'search': 'bayes'},
-                            'augmentations': {'allow_flip': True}}
+    # A flag the tool only accepts beside another setting is tried with that setting too.
+    PREREQUISITES = {('select_model.py', 'n_trials'): {'search': 'random'}, ('select_model.py', 'bayes_startup'): {'search': 'bayes'},
+                     ('select_model.py', 'augmentations'): {'allow_flip': True}, ('report.py', 'fit_dir'): {'fit_split': 'validation'}}
 
     def press_tool(self, entry, values, set_control=None, check_grid=False):
         from desktop import option_widgets as ow
@@ -480,8 +533,7 @@ def check_flag(studio, entry, action) -> str:
         return f'not launched: {why[:160]}' if argv is None else _check(entry, action, argv, expected)
     for context in studio.tool_contexts(entry):
         values = dict(context)
-        if entry == 'select_model.py':
-            values.update(studio.SELECT_PREREQUISITES.get(spec.key, {}))
+        values.update(studio.PREREQUISITES.get((entry, spec.key), {}))
         argv, why = studio.press_tool(entry, values, None if spec.hidden else set_control, check_grid=spec.hidden)
         if argv is None:
             tried.append(f'not launched: {why[:160]}')

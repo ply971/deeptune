@@ -1,5 +1,6 @@
 """G1's new pages: Model Selection (select_model.py), Ensemble (ensemble.py) and Features & Probes
-(extract_features.py, train_feature_head.py).
+(extract_features.py, train_feature_head.py), and G2's Evaluate & Benchmarks (the video evaluators and the benchmark
+scripts).
 
 Every control comes from a desktop/cli_options spec, so each flag of these scripts has a widget (checked by
 tests/test_gui_coverage.py). Each launch runs the script as a subprocess through desktop/runner.start_tool_run; this
@@ -31,11 +32,49 @@ from desktop import runner
 from desktop.runner import RunHandle, start_tool_run, tool_argv
 
 PREFIX = {'select_model': 'sel', 'ensemble': 'ens', 'extract_features': 'feat', 'train_feature_head': 'probe',
-          'analyse_embeddings': 'emb'}
+          'analyse_embeddings': 'emb', 'localization_report': 'loc', 'eval_report': 'evrep', 'abstention_fit': 'absfit',
+          'run_motion_benchmark': 'motion', 'timeline_untrimmed': 'tlx', 'benchmark_mot17_botsort': 'motpub',
+          'benchmark_mot17_e2e': 'mote2e', 'train_cat_detector': 'cat'}
 PAGE = {'select_model': 'select', 'ensemble': 'ensemble', 'extract_features': 'features', 'train_feature_head': 'features',
-        'analyse_embeddings': 'features'}
-LOG = {'select': 'select_log', 'ensemble': 'ensemble_log', 'features': 'features_log'}
-RESULTS = {'select': 'select_results_container', 'ensemble': 'ensemble_results_container', 'features': 'features_results_container'}
+        'analyse_embeddings': 'features', **{tool: 'evaluate' for tool in tools.EVALUATE_TOOLS}}
+LOG = {'select': 'select_log', 'ensemble': 'ensemble_log', 'features': 'features_log', 'evaluate': 'evaluate_log'}
+RESULTS = {'select': 'select_results_container', 'ensemble': 'ensemble_results_container', 'features': 'features_results_container',
+           'evaluate': 'evaluate_results_container'}
+
+
+# G2: the Evaluate & Benchmarks page. Cards group the tools; each tool has its own collapsible block.
+EVALUATE_GROUPS = (
+    ('SCORE FINISHED RUNS', 'Read what a run already wrote; nothing is trained (Abstention fit runs the model once on '
+                            'the calibration rows).', ('localization_report', 'eval_report', 'abstention_fit')),
+    ('BENCHMARKS AND EXPERIMENTS', 'These train models or run detectors, usually on the GPU, for minutes to hours. Close '
+                                   'other heavy programs first; lower the batch size or workers if memory runs out.',
+     ('run_motion_benchmark', 'timeline_untrimmed', 'benchmark_mot17_botsort', 'benchmark_mot17_e2e', 'train_cat_detector')),
+)
+EVALUATE_INTRO = {
+    'localization_report': 'Detection mAP at tIoU 0.1-0.9, per-class AP and boundary error of predicted segments (e.g. '
+                           'an infer.py --timeline run) against ground-truth segments.',
+    'eval_report': "Metrics with bootstrap intervals over groups, calibration and a chance row for one evaluation "
+                   "folder. Compare two: a paired test of two models' evaluations on the same test set.",
+    'abstention_fit': 'Fit a "not sure" rule for a finished run on calibration rows from groups it never saw, with a '
+                      'guarantee on the error of the answers it gives. Later Test runs use it automatically.',
+    'run_motion_benchmark': 'Synthetic motion tasks where the answer is known (direction, background shortcut, '
+                            'periodic motion, speed): compare temporal models on them.',
+    'timeline_untrimmed': 'The long-video experiment: trains a clip model on synthetic untrimmed videos, runs it as a '
+                          'timeline on held-out videos, and scores mAP against a random control and a pixel oracle.',
+    'benchmark_mot17_botsort': "MOT17 with its public detections: ByteTrack, each BoT-SORT piece in turn, and the full "
+                               "tracker, scored by TrackEval (HOTA, IDF1, MOTA). Set appearance and Re-ID here.",
+    'benchmark_mot17_e2e': "MOT17 end to end: DeepTune's own detectors (prompt 'person') and trackers on the raw "
+                           "frames, scored by TrackEval.",
+    'train_cat_detector': 'Fine-tune the detector on Oxford-IIIT Pet cat boxes (dogs as negatives); the official test '
+                          'images never choose epochs or thresholds.',
+}
+EVALUATE_BUTTON = {'localization_report': 'Score segments', 'eval_report': 'Write report', 'abstention_fit': 'Fit rule',
+                   'run_motion_benchmark': 'Run benchmark', 'timeline_untrimmed': 'Run experiment',
+                   'benchmark_mot17_botsort': 'Run benchmark', 'benchmark_mot17_e2e': 'Run benchmark',
+                   'train_cat_detector': 'Train'}
+COMMAND_TAG = {'select_model': 'select_command', 'ensemble': 'ensemble_command',
+               **{tool: f'{tool}_command' for tool in ('extract_features', 'train_feature_head', 'analyse_embeddings',
+                                                       *tools.EVALUATE_TOOLS)}}
 
 
 @dataclass
@@ -68,38 +107,39 @@ def config(tool: str) -> tools.ToolConfig:
     return tools.ToolConfig(tool, values)
 
 
-def problems(tool: str) -> list[str]:
+def problems(tool: str, leading: Optional[list] = None) -> list[str]:
     values, found = ow.read(tools.TOOLS[tool].specs, PREFIX[tool])
-    return found + tools.validate_tool(tools.ToolConfig(tool, values))
+    return found + tools.validate_tool(tools.ToolConfig(tool, values), leading)
 
 
-def command_line(tool: str, extra: Optional[list] = None) -> str:
+def command_line(tool: str, extra: Optional[list] = None, leading: Optional[list] = None) -> str:
     cfg = config(tool)
-    script = Path(gc.__file__).resolve().parents[1] / cfg.spec.script
-    return subprocess.list2cmdline([sys.executable, str(script), *tool_argv(cfg, extra)])
+    root = Path(gc.__file__).resolve().parents[1]
+    entry = ['-m', cfg.spec.module] if cfg.spec.module else [str(root / cfg.spec.script)]
+    return subprocess.list2cmdline([sys.executable, *entry, *tool_argv(cfg, extra, leading)])
 
 
 # --- launching --------------------------------------------------------------------------------------------------------
-def start(tool: str, extra: Optional[list] = None) -> bool:
+def start(tool: str, extra: Optional[list] = None, leading: Optional[list] = None) -> bool:
     page = PAGE[tool]
     if page in _running:
         return False
-    found = problems(tool)
+    found = problems(tool, leading)
     status = f'{page}_status'
     if found:
         _say(status, found[0], _colors().warning)
         return False
     cfg = config(tool)
     try:
-        handle = start_tool_run(cfg, extra)
+        handle = start_tool_run(cfg, extra, leading)
     except Exception as exc:  # noqa: BLE001 - shown to the user, as on the other pages
         _say(status, str(exc), _colors().error)
         return False
     _buffers[page].clear()
     dpg.set_value(f'{LOG[page]}_box', '')
-    _running[page] = _Run(tool, handle, time.monotonic(), tools.output_folder(cfg), dry_run='--dry_run' in (extra or []),
+    _running[page] = _Run(tool, handle, time.monotonic(), tools.output_folder(cfg, leading), dry_run='--dry_run' in (extra or []),
                           argv=tool_argv(cfg), device=runner.device())
-    _say(status, f'Running {cfg.spec.script}...', _colors().analysis)
+    _say(status, f'Running {cfg.spec.module or cfg.spec.script}...', _colors().analysis)
     _shell.set_status(f'{cfg.spec.title} in progress', _colors().analysis)
     _update_buttons()
     return True
@@ -172,7 +212,7 @@ def shutdown() -> None:
 def show_results(tool: str, out: Path) -> None:
     reader = {'select_model': tools.selection_sections, 'ensemble': tools.ensemble_sections,
               'extract_features': tools.feature_sections, 'train_feature_head': tools.probe_sections,
-              'analyse_embeddings': tools.embedding_analysis_sections}[tool]
+              'analyse_embeddings': tools.embedding_analysis_sections}.get(tool, lambda out: tools.tool_sections(tool, out))
     try:
         sections = reader(out)
     except OSError as exc:
@@ -231,6 +271,10 @@ def _update_buttons() -> None:
     for tool in ('extract_features', 'train_feature_head', 'analyse_embeddings'):
         dpg.configure_item(f'{tool}_start_button', enabled='features' not in _running)
     dpg.configure_item('features_stop_button', enabled='features' in _running)
+    for tool in tools.EVALUATE_TOOLS:
+        dpg.configure_item(f'{tool}_start_button', enabled='evaluate' not in _running)
+    dpg.configure_item('eval_report_compare_button', enabled='evaluate' not in _running)
+    dpg.configure_item('evaluate_stop_button', enabled='evaluate' in _running)
 
 
 def _select_checked() -> bool:
@@ -243,10 +287,7 @@ def _select_checked() -> bool:
 
 def on_changed(sender: Any = 0, app_data: Any = None, user_data: Any = None) -> None:
     """Any control changed: refresh the command line, the readiness text and the buttons."""
-    for tool, page, tag in (('select_model', 'select', 'select_command'), ('ensemble', 'ensemble', 'ensemble_command'),
-                            ('extract_features', 'features', 'extract_features_command'),
-                            ('train_feature_head', 'features', 'train_feature_head_command'),
-                            ('analyse_embeddings', 'features', 'analyse_embeddings_command')):
+    for tool, tag in COMMAND_TAG.items():
         try:
             dpg.set_value(tag, command_line(tool))
         except ValueError as exc:
@@ -263,6 +304,12 @@ def on_changed(sender: Any = 0, app_data: Any = None, user_data: Any = None) -> 
     if 'select' not in _running:
         _say('select_status', message, color)
     _update_buttons()
+
+
+def _results_tool() -> str:
+    """The Evaluate & Benchmarks tool picked in the results view."""
+    title = dpg.get_value('evaluate_results_tool')
+    return next((tool for tool in tools.EVALUATE_TOOLS if tools.TOOLS[tool].title == title), tools.EVALUATE_TOOLS[0])
 
 
 def _open_folder(path) -> None:
@@ -428,4 +475,45 @@ def build(shell) -> None:
                 dpg.add_button(label='Show embedding analysis', callback=on_refresh, user_data='analyse_embeddings')
             with ui.child_window(tag=RESULTS['features'], height=320, horizontal_scrollbar=True):
                 dpg.add_text('The feature folder, the probe metrics and the embedding analysis appear here.', color=colors.muted)
+
+    with ui.group(tag='page_evaluate', show=False):
+        shell.heading('Evaluate & benchmarks', 'Score finished runs (timelines, test predictions, "not sure" rules) and '
+                                               'rerun the project\'s benchmarks and experiments. One job at a time.')
+        for group, intro, names in EVALUATE_GROUPS:
+            with shell.card(group):
+                dpg.add_text(intro, color=colors.muted, wrap=850)
+                for tool in names:
+                    spec = tools.TOOLS[tool]
+                    with ui.collapsing_header(label=spec.title, default_open=False):
+                        dpg.add_text(EVALUATE_INTRO[tool], color=colors.muted, wrap=850)
+                        if spec.checkout_only and getattr(sys, 'frozen', False):
+                            dpg.add_text(f'Runs only from a source checkout: {spec.script} is not in the packaged app.',
+                                         color=colors.warning, wrap=850)
+                        ow.render(spec.specs, PREFIX[tool], on_changed, headers=False)
+                        buttons = [(f'{tool}_start_button', EVALUATE_BUTTON[tool], lambda s, a, u: start(u), tool, True)]
+                        if tool == 'eval_report':
+                            buttons.append(('eval_report_compare_button', 'Compare two (paired)',
+                                            lambda: start('eval_report', leading=['compare']), None, False))
+                        _launch_row(f'evaluate_{tool}', buttons)
+                        _command(COMMAND_TAG[tool])
+            dpg.add_spacer(height=10)
+        with shell.card('STATUS'):
+            with ui.group(horizontal=True):
+                dpg.add_button(tag='evaluate_stop_button', label='Stop', callback=lambda: stop('evaluate'), enabled=False)
+                dpg.add_text('Elapsed  00:00:00', tag='evaluate_elapsed', color=colors.muted)
+            dpg.add_text('', tag='evaluate_status', color=colors.analysis, wrap=850)
+        dpg.add_spacer(height=10)
+        _log_card('evaluate', lambda: (_running['evaluate'].out if 'evaluate' in _running else
+                                       tools.output_folder(config(_results_tool()))))
+        dpg.add_spacer(height=10)
+        with shell.card('RESULTS'):
+            with ui.group(horizontal=True):
+                dpg.add_combo(tag='evaluate_results_tool', items=[tools.TOOLS[t].title for t in tools.EVALUATE_TOOLS],
+                              default_value=tools.TOOLS[tools.EVALUATE_TOOLS[0]].title, width=360)
+                dpg.add_button(label='Show results', callback=lambda: on_refresh(user_data=_results_tool()))
+            dpg.add_text('Reads the output folder set in that tool above (Evaluation report: its evaluation folder; '
+                         'Abstention fit: the folder of the weights). Compare two prints its result in the log.',
+                         color=colors.muted, wrap=850)
+            with ui.child_window(tag=RESULTS['evaluate'], height=420, horizontal_scrollbar=True):
+                dpg.add_text('Reports, tables and benchmark scores appear here.', color=colors.muted)
     on_changed()
