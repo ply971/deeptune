@@ -125,13 +125,17 @@ def main(argv=None):
 
     import deeptune
     runs = args.out / 'runs'
-    run = next(runs.glob('deeptune-*'), None) if runs.exists() else None
+    # Reuse only a finished run (weights and embeddings written); an interrupted one is left as it is.
+    finished = [r for r in sorted(runs.glob('deeptune-*')) if list(r.glob('trainval_output_*/model_weights.pth'))
+                and list(r.glob('embed_output_*/*.parquet'))] if runs.exists() else []
+    run = finished[-1] if finished else None
     t0 = time.perf_counter()
     if run is None:
+        before = set(runs.glob('deeptune-*')) if runs.exists() else set()
         deeptune.main(['--modality', 'video', '--df', str(manifest), '--raw-data', '--out', str(runs),
                        '--model_version', args.model, '--num_epochs', str(args.epochs), '--batch_size', str(args.batch_size),
                        '--num_frames', str(args.num_frames), '--grouper', 'group', '--fixed-seed', *args.extra])
-        run = next(runs.glob('deeptune-*'))
+        run = sorted(set(runs.glob('deeptune-*')) - before)[-1]
     train_seconds = time.perf_counter() - t0
 
     test_videos = [str(data_dir / info['file']) for vid, info in meta['videos'].items() if info['split'] == 'test']
