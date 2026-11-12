@@ -293,19 +293,17 @@ def _checked_target(frame: DataFrame, name: str, target_column: str, grouper: st
 
 
 def check_repeated_videos(frame: DataFrame, grouper: str, name: str) -> None:
-    """Several rows may cut clips from one video file (start_sec/end_sec ranges) only if they all share one `grouper`
-    value; otherwise a split by that grouper, or a split with no grouper, could put one video in training and test."""
-    if not _holds_video_paths(frame):
+    """With a grouper, every clip cut from one video file (start_sec/end_sec ranges) must share one grouper value;
+    otherwise a split by that grouper puts one video in training and test while the group check passes.
+
+    Without a grouper nothing is refused here: the run warns about test videos shared with training (stdout and the
+    evaluation report), and k-fold groups repeated sources by their video, as before."""
+    if not grouper or not _holds_video_paths(frame):
         return
     keys = frame['videos'].map(lambda value: os.path.normcase(str(value)))
     repeated = keys.duplicated(keep=False)
     if not repeated.any():
         return
-    examples = sorted(set(keys[repeated]))[:2]
-    if not grouper:
-        raise ValueError(f'{name}: {keys[repeated].nunique()} video files appear on more than one row (e.g. {examples}) and '
-                         'there is no group column, so clips of one video could land in both training and test. Add a '
-                         "'group' column (for example the video name) or pass --grouper.")
     per_video = pd.DataFrame({'video': keys, 'group': frame[grouper].astype(str)})[repeated].groupby('video')['group'].nunique()
     split = per_video[per_video > 1]
     if len(split):
