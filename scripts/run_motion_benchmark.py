@@ -54,7 +54,7 @@ def task_mode(task: str) -> str:
     return "reg" if task in REGRESSION_TASKS else "cls"
 
 
-def parse_args(argv=None):
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--task", choices=TASKS, required=True)
     p.add_argument("--models", nargs="+", required=True, help="Model specs (see above).")
@@ -81,6 +81,11 @@ def parse_args(argv=None):
     p.add_argument("--resize", type=int, default=112, help="Frame side fed to 2D backbones.")
     p.add_argument("--hflip", action="store_true", help="Random clip-level horizontal flip (refused on direction tasks).")
     p.add_argument("--threads", type=int, default=4, help="torch CPU threads (keep low on a laptop).")
+    return p
+
+
+def parse_args(argv=None):
+    p = build_parser()
     args = p.parse_args(argv)
     if args.model_seed is None:
         args.model_seed = args.seed

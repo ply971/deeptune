@@ -116,7 +116,7 @@ def track_sequence(folder: Path, dets, embs, affines, args, output: Path):
     return stats
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--data', type=Path, required=True)
     parser.add_argument('--trackeval', type=Path, required=True)
@@ -126,7 +126,11 @@ def main():
     parser.add_argument('--sequences', choices=('all', 'dev', 'heldout'), default='heldout')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--device', default='auto')
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     sys.path.insert(0, str(args.trackeval.resolve()))
     for name, builtin in (('float', float), ('int', int)):
         if name not in np.__dict__:

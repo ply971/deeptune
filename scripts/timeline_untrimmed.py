@@ -89,7 +89,7 @@ def brief(record):
             'windows': record['total_windows'], 'scored_windows': record['scored_windows'], 'seconds': record['seconds']}
 
 
-def main(argv=None):
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--model', default='r3d_18', help='deeptune.py --model_version (default r3d_18).')
@@ -106,7 +106,11 @@ def main(argv=None):
     p.add_argument('--skip_static', type=float, default=0.5)
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--extra', nargs=argparse.REMAINDER, default=[], help='More deeptune.py flags.')
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
 
     from benchmarks.synthetic_motion import make_untrimmed_dataset

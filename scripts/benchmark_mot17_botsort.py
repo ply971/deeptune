@@ -191,7 +191,7 @@ def track_sequence(folder: Path, output: Path, variant: str, cache_dir: Path, em
                 predictions_sha256=sha256(output))
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--data', type=Path, required=True, help='MOT17 root with train/<seq>/{img1,det,gt}')
     parser.add_argument('--trackeval', type=Path, required=True, help='Pinned official TrackEval source checkout')
@@ -209,7 +209,11 @@ def main():
                         help="Tracker's fused-cost appearance gate (track.py --appearance_thresh)")
     parser.add_argument('--link_appearance_thresh', type=float, default=None,
                         help="Offline linker's appearance gate (track.py --link_appearance_thresh; default its 0.3)")
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     sys.path.insert(0, str(args.trackeval.resolve()))
     for name, builtin in (('float', float), ('int', int)):  # TrackEval 12c8791 uses removed NumPy aliases
         if name not in np.__dict__:

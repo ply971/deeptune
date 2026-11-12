@@ -232,7 +232,7 @@ def evaluate(model, dataset, device):
     return detection_metrics(predictions, targets)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--data', type=Path, required=True)
     p.add_argument('--out', type=Path, required=True)
@@ -247,7 +247,11 @@ def main():
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--exclude-image', action='append', default=[], metavar='ID',
                    help='Explicit unavailable image ID; logged, with no replacement or split reassignment.')
-    args = p.parse_args()
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     if args.mirror_subset:
         prepare_subset(args)
     if args.download:
