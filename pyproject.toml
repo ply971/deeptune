@@ -28,7 +28,7 @@ dependencies = {file = ["requirements.txt"]}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["desktop*", "datasets*", "handlers*", "src*", "trainers*", "evaluators*", "embed*", "autoencoders*", "inference*", "benchmarks*"]
+include = ["desktop*", "datasets*", "handlers*", "src*", "trainers*", "evaluators*", "embed*", "autoencoders*", "inference*", "benchmarks*", "analysis*"]
 namespaces = true
 
 [tool.pytest.ini_options]

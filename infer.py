@@ -68,6 +68,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--no_abstain', action='store_true',
                    help="Video classification: ignore the run's abstention.json and give every clip's prediction. By default a run fitted with --target_error says \"not sure\" in the decision column.")
 
+    # Video timeline (analysis/timeline.py).
+    t = p.add_argument_group('Video timeline', 'Slide the trained clip classifier over each video: what happens when.')
+    t.add_argument('--timeline', action='store_true',
+                   help='Video classification: score overlapping windows of each video and write timeline.csv and '
+                        'segments.json per video (plus segments.csv for all videos) instead of one prediction per video.')
+    t.add_argument('--window_sec', type=float, default=2.0, help='Timeline window length in seconds (default 2).')
+    t.add_argument('--stride_sec', type=float, default=1.0, help='Seconds between window starts (default 1).')
+    t.add_argument('--smooth_windows', type=int, default=3,
+                   help='Running-median width in windows (odd; 1 = no smoothing; default 3).')
+    t.add_argument('--min_segment_sec', type=float, default=0.0,
+                   help='Segments shorter than this are merged into a neighbour (default 0 = keep all).')
+    t.add_argument('--background_label', action='append', default=[], metavar='LABEL',
+                   help='A class that means "nothing happening"; left out of the segments. Repeatable.')
+    t.add_argument('--min_confidence', type=float, default=0.0,
+                   help='Windows whose top probability is below this are "uncertain" and left out (default 0).')
+    t.add_argument('--skip_static', type=float, default=None, metavar='THRESHOLD',
+                   help='Skip windows whose mean motion (--timeline_motion) is below THRESHOLD instead of scoring '
+                        'them (SCSampler-style; off by default). Units: mean |motion vector| (codec) or mean grey-level '
+                        'change 0-255 (framediff).')
+    t.add_argument('--timeline_motion', choices=['auto', 'codec', 'framediff'], default='auto',
+                   help='Motion signal for --skip_static (default auto: codec motion vectors, else frame differences).')
+    t.add_argument('--ground_truth', type=Path, default=None,
+                   help='CSV of video-id,t-start,t-end,label (video-id = file name without extension): also writes '
+                        'timeline_metrics.json with detection mAP at tIoU 0.1-0.9 and boundary error.')
+
     # Tabular only.
     p.add_argument('--target', default='labels')
     p.add_argument('--finetuning-mode', action='store_true', help='TabPFN only.')
@@ -167,6 +192,82 @@ def apply_recorded_video_settings(args: argparse.Namespace, argv: list[str]) -> 
     return used if recorded else {}
 
 
+TIMELINE_ONLY_FLAGS = ('window_sec', 'stride_sec', 'smooth_windows', 'min_segment_sec', 'background_label',
+                       'min_confidence', 'skip_static', 'timeline_motion', 'ground_truth')
+
+
+def check_timeline_args(args: argparse.Namespace, argv: list[str], parser: argparse.ArgumentParser) -> None:
+    """Timeline flags are validated before any model or video is loaded."""
+    given = {token.split('=', 1)[0][2:] for token in argv if token.startswith('--')}
+    if not args.timeline:
+        stray = [f'--{f}' for f in TIMELINE_ONLY_FLAGS if f in given]
+        if stray:
+            parser.error(f'{", ".join(stray)} only apply with --timeline.')
+        return
+    if args.modality != 'video' or args.ensemble:
+        parser.error('--timeline is for one trained video model (--modality video --checkpoint ...).')
+    if args.mode != 'cls':
+        parser.error('--timeline needs a classification run (--mode cls).')
+    if args.window_sec <= 0 or args.stride_sec <= 0:
+        parser.error('--window_sec and --stride_sec must be > 0.')
+    if args.stride_sec > args.window_sec:
+        parser.error('--stride_sec larger than --window_sec would leave parts of the video unscored.')
+    if args.smooth_windows < 1 or args.smooth_windows % 2 == 0:
+        parser.error('--smooth_windows must be an odd number >= 1.')
+    if args.min_segment_sec < 0:
+        parser.error('--min_segment_sec must be >= 0.')
+    if not 0 <= args.min_confidence <= 1:
+        parser.error('--min_confidence must be between 0 and 1.')
+    if args.skip_static is not None and args.skip_static < 0:
+        parser.error('--skip_static must be >= 0.')
+    if args.ground_truth is not None and not args.ground_truth.is_file():
+        parser.error(f'--ground_truth {args.ground_truth} does not exist.')
+
+
+def _run_timeline(args: argparse.Namespace, df, label_mapping) -> int:
+    """infer.py --timeline: every window goes through the run's own clip pipeline (predict_video)."""
+    import numpy as np
+
+    from analysis.timeline import run_video_timelines
+    from datasets.video_datasets import video_options_from_args
+    from inference.video import predict_video
+    if 'videos' not in df.columns or not all(isinstance(v, (str, Path)) for v in df['videos']):
+        raise SystemExit('--timeline needs video files (a folder, a single clip, or a CSV of paths), not clip bytes.')
+    index_to_name = {int(v): str(k) for k, v in (label_mapping or {}).items()}
+    class_names = [index_to_name.get(k, str(k)) for k in range(args.num_classes)]
+    unknown = sorted(set(args.background_label) - set(class_names))
+    if unknown:
+        raise SystemExit(f'--background_label {", ".join(unknown)} is not one of the classes {class_names}'
+                         + ('' if label_mapping else ' (pass --label_mapping to use class names)') + '.')
+    options = video_options_from_args(args)
+
+    def score_rows(frame):
+        result = predict_video(
+            frame, args.checkpoint, args.model_version, args.num_classes, args.added_layers, args.embed_size,
+            args.freeze_backbone, args.mode, args.use_peft, args.batch_size, args.num_frames, args.pooling,
+            label_mapping, video_options=options, with_probabilities=True, abstain=False,
+            **({} if args.lora_rank is None else {'lora_rank': args.lora_rank}))
+        return np.stack([result[f'probability_{k}'].to_numpy(dtype=float) for k in range(args.num_classes)], axis=1)
+
+    settings = {'window_sec': args.window_sec, 'stride_sec': args.stride_sec, 'smooth_windows': args.smooth_windows,
+                'min_segment_sec': args.min_segment_sec, 'background': list(args.background_label),
+                'min_confidence': args.min_confidence, 'skip_static': args.skip_static,
+                'motion_source': args.timeline_motion, 'checkpoint': str(args.checkpoint),
+                'model_version': args.model_version, 'num_frames': args.num_frames, 'pooling': args.pooling,
+                'temporal_sampling': getattr(args, 'temporal_sampling', None)}
+    record = run_video_timelines([str(v) for v in df['videos']], args.out, class_names, score_rows, settings,
+                                 backend=options.video_backend, ground_truth=args.ground_truth)
+    print(f'Wrote {sum(v["segments"] for v in record["videos"])} segment(s) for {len(record["videos"])} video(s) '
+          f'to {args.out / "segments.csv"}; per-video timelines in {args.out / "timeline"}')
+    if 'metrics' in record:
+        m = record['metrics']
+        print(f'Timeline mAP@0.5 = {m["detection_map"]["map_per_threshold"]["0.5"]:.3f}, '
+              f'avg mAP 0.1-0.7 = {m["detection_map"]["averages"]["avg_0.1_0.7"]:.3f}, '
+              f'boundary error = {m["boundary_error"]["mean_seconds"]} s')
+    print('Inference complete.')
+    return 0
+
+
 def _required_stub() -> list[str]:
     return ['--modality', 'video', '--checkpoint', '.', '--data', '.', '--out', '.']
 
@@ -188,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('--checkpoint is required unless --ensemble is given.')
     if args.allow_unverified_labels:
         parser.error('--allow_unverified_labels only applies with --ensemble.')
+    check_timeline_args(args, argv, parser)
     args.out.mkdir(parents=True, exist_ok=True)
     if args.modality == 'video':
         used = apply_recorded_video_settings(args, argv)
@@ -211,6 +313,9 @@ def main(argv: list[str] | None = None) -> int:
 
     df, has_labels = _load_new_data(args)
     print(f'Loaded {len(df)} sample(s) for inference ({"labeled" if has_labels else "unlabeled"}).')
+
+    if args.timeline:
+        return _run_timeline(args, df, label_mapping)
 
     if args.modality == 'images':
         from utils import get_model_architecture
