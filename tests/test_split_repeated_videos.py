@@ -27,9 +27,11 @@ def test_a_grouper_that_splits_a_video_is_refused(tmp_path):
         _split(tmp_path, _ranges_table(tmp_path), grouper='actor')
 
 
-def test_repeated_videos_without_any_group_column_are_refused(tmp_path):
-    with pytest.raises(ValueError, match='no group column'):
-        _split(tmp_path, _ranges_table(tmp_path).drop(columns=['group', 'actor']))
+def test_repeated_videos_without_a_grouper_are_split_by_row_as_before(tmp_path):
+    # No grouper: the run warns instead (tests/test_evaluation_pipeline_e2e.py checks the warning), so the split
+    # itself goes through.
+    paths = _split(tmp_path, _ranges_table(tmp_path).drop(columns=['group', 'actor']))
+    assert sum(len(pd.read_parquet(p)) for p in paths) == 60
 
 
 def test_grouping_by_video_keeps_every_video_in_one_split(tmp_path):

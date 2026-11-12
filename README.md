@@ -801,8 +801,8 @@ python infer.py --modality video --checkpoint runs/.../trainval_output_*/model_w
   with `evaluators/video/localization_report.py`.
 - **Training on parts of long videos.** A manifest row may name a time range with `start_sec` and
   `end_sec`, so one long video can give several labelled clips. Rows cut from the same file must share one
-  `group` (for example the video name), so the whole video stays in one split. Every split refuses a repeated
-  video file with no group column, or one whose clips have different values of the column it groups by.
+  `group` (for example the video name), so the whole video stays in one split. A split by any other column
+  (`--grouper`) refuses a video whose clips have different values of that column.
 
 `scripts/timeline_untrimmed.py` runs the whole thing on the synthetic untrimmed task (Phase 2): it trains on
 window clips cut from the training videos, runs the timeline on held-out videos and compares the model with a
