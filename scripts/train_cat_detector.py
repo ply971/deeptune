@@ -251,7 +251,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    p = build_parser()
+    args = p.parse_args(argv)
     if args.mirror_subset:
         prepare_subset(args)
     if args.download:
