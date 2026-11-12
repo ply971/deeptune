@@ -140,7 +140,7 @@ positives dropped, records, usage errors), `test_spatial_dfine.py` (stub model: 
 labels, the 80 COCO classes and synonyms, `auto`), `tests/test_desktop_dfine.py`. The tracker's old tests are unchanged and pass: without appearance
 vectors and camera motion, `ByteTracker` is the same code path.
 
-Suite results are in PROGRESS.md.
+Full CPU suite at 7181c51 (`CUDA_VISIBLE_DEVICES=-1`, `-m "not seed_study"` as in `check.ps1`, in nine chunks): **2261 passed, 5 skipped, 0 failed** (sum of `.artifacts/s3-suite/chunk-*.xml`); `pip check` clean.
 
 ## Limits
 

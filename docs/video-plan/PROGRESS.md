@@ -20,6 +20,16 @@ Keep entries short and factual. This is the handoff between sessions.
 
 ## Session log
 
+### 2026-11-12 (overnight) - S3: better tracking (BoT-SORT parts, offline repair, D-FINE) (Claude Code)
+- **User asked (asleep, autonomous):** "finish the project ... the tracking ... is not using everything and the models aren't good enough".
+- **Branch `video/S3-botsort`** (worktree `.claude/wt/S3`), commits 91d9585, 762ae64, 7181c51. Report: `docs/video-plan/reports/S3-botsort.md`.
+- Built: camera-motion compensation (`spatial/cmc.py`), appearance Re-ID with ResNet-18 or colour histograms (`spatial/reid.py`, fused cost in `spatial/track.py`), offline repair (`spatial/postprocess.py`: drop short tracks, unambiguous linking, interpolation, first box), D-FINE-L detector for the 80 COCO classes and `--detector auto` (`spatial/detect.py`), `--tracker botsort` default with every part switchable (`track.py`), GUI options + D-FINE choice + tip (`desktop/`). Without vectors/CMC the tracker is the old ByteTrack (old tests unchanged).
+- **MOT17 held-out (09,10,11,13), public detections, TrackEval:** HOTA FRCNN 46.2 -> 48.6, SDP 50.1 -> 54.1, DPM 30.3 -> 34.7; IDF1 +2.5 to +4.9; ID switches -36% to -52%. Decisions on dev (02,04,05) only. Permissive linking hurt dev IDF1 (56.6 -> 49.6), so linking is unambiguous-only.
+- **End to end (own detectors, raw frames, held-out):** old default Grounding DINO + ByteTrack HOTA 42.0 / IDF1 49.9 / MOTA 41.3 at 3.3 fps -> new default D-FINE + BoT-SORT 46.5 / 56.2 / 46.5 at 20.8 fps. BoT-SORT does not raise MOTA end to end (OWLv2 37.2 -> 31.8: gap filling extends false tracks) - documented in README.
+- Cat videos (no labels): old setup 3 IDs each; `auto` + botsort 1 ID on every frame of both.
+- **Full CPU suite at 7181c51** (`CUDA_VISIBLE_DEVICES=-1`, `-m "not seed_study"`, nine foreground chunks because background jobs were being stopped for low memory): **2261 passed, 5 skipped, 0 failed** (sum of `.artifacts/s3-suite/chunk-*.xml`). `pip check` clean. Seed-study tests not run.
+- **Not merged:** waiting for an ML Critic review (self-review V-059 on the board is not independent). Open: Re-ID is ImageNet ResNet-18, not a Re-ID-trained model (a download needs the user's OK).
+
 ### 2026-10-31 — B2 and B3 reviews; Phase 3 target changed
 - **Merged, later the same day:** B2 (569790b), B3 (cb5d761), and the pretrained + `two_stream` fix (b42c308: pretrained embeddings use RGB, and the new test fails without the fix). B2's last fix round (464d71b..c564763) and b42c308 were checked by the coordinator, with no fresh ml-critic.
 - **Full suite (CPU, `CUDA_VISIBLE_DEVICES=-1`, at 12493ed):** `1656 passed, 5 skipped, 92 warnings in 1225.02s (0:20:25)`. An earlier run was stopped by Claude Code for low system memory, with no results. `check.ps1` on the GPU is still due.
