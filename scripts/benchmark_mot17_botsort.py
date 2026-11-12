@@ -9,7 +9,8 @@ Variants (all with ByteTrack's reference thresholds, nothing tuned on MOT17):
 
 - ``bytetrack``  plain ByteTrack (must reproduce the earlier ``mot17-run01`` numbers)
 - ``cmc``        + sparse optical-flow camera-motion compensation
-- ``reid``       + ResNet-18 appearance in the fused BoT-SORT cost
+- ``reid``       + appearance in the fused BoT-SORT cost (``--reid cnn``: ImageNet ResNet-18,
+                 the default; ``--reid osnet``: OSNet-AIN person Re-ID, keys get an ``_osnet`` suffix)
 - ``post``       + offline linking (motion only), interpolation, birth boxes, min length 3
 - ``botsort``    everything: track.py's default ``--tracker botsort``
 
@@ -199,6 +200,8 @@ def main():
     parser.add_argument('--sequences', choices=('all', 'dev', 'heldout'), default='all',
                         help='all 7 videos, the 3 development videos, or the 4 held-out videos')
     parser.add_argument('--cache', type=Path, default=None, help='Where cached affines/embeddings go (default OUT/cache)')
+    parser.add_argument('--reid', choices=('cnn', 'osnet'), default='cnn',
+                        help='Appearance model for the Re-ID variants (cached per model)')
     args = parser.parse_args()
     sys.path.insert(0, str(args.trackeval.resolve()))
     for name, builtin in (('float', float), ('int', int)):  # TrackEval 12c8791 uses removed NumPy aliases
@@ -209,8 +212,8 @@ def main():
     cache_root = args.cache or args.out / 'cache'
     embedder = None
     if any(VARIANTS[v]['reid'] for v in args.variants):
-        from spatial.reid import CnnEmbedder
-        embedder = CnnEmbedder(device=args.device)
+        from spatial.reid import build_embedder
+        embedder = build_embedder(args.reid, device=args.device)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Path(__file__).resolve().parents[1],
                                        text=True).strip()
     report_path = args.out / 'report.json'
@@ -224,7 +227,8 @@ def main():
                      'Variants share videos and detections (paired comparison)'], experiments={})
     for detector in args.detectors:
         for variant in args.variants:
-            key = f'{variant}_{detector}' + ('' if args.sequences == 'all' else f'_{args.sequences}')
+            key = (f'{variant}_{detector}' + ('' if args.sequences == 'all' else f'_{args.sequences}')
+                   + ('_osnet' if args.reid == 'osnet' and VARIANTS[variant]['reid'] else ''))
             if key in report['experiments']:
                 print(f'skip {key} (done)', flush=True)
                 continue
@@ -235,7 +239,8 @@ def main():
                 print(f'Track {key}: {seq}', flush=True)
                 observations.append(track_sequence(args.data / 'train' / seq,
                                                    args.out / 'trackers' / key / 'data' / f'{seq}.txt', variant,
-                                                   cache_root / detector, embedder))
+                                                   cache_root / (detector if args.reid == 'cnn' else f'{detector}-{args.reid}'),
+                                                   embedder))
             evaluator = trackeval.Evaluator(dict(USE_PARALLEL=False, PRINT_CONFIG=False, PRINT_ONLY_COMBINED=True,
                                                  PLOT_CURVES=False, PRINT_RESULTS=False,
                                                  LOG_ON_ERROR=str(args.out / 'evaluation-errors.log')))
@@ -256,6 +261,7 @@ def main():
                            IDSW=int(combined['CLEAR']['IDSW']), FP=int(combined['CLEAR']['CLR_FP']),
                            FN=int(combined['CLEAR']['CLR_FN']))
             report['experiments'][key] = dict(variant=variant, detector=detector, sequences_set=args.sequences,
+                                              reid=embedder.describe() if VARIANTS[variant]['reid'] else None,
                                               metrics=metrics,
                                               sequences=observations)
             report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
