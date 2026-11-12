@@ -47,7 +47,7 @@ if str(ROOT) not in sys.path:
 # only happen in this worker process, never in the long-lived GUI process
 # itself. An unfrozen `python desktop/app.py` never takes this branch;
 # runner.py keeps using a real python.exe + the on-disk script path there.
-_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head")  # desktop/tools.TOOLS
+_TOOL_WORKERS = ("select_model", "ensemble", "extract_features", "train_feature_head", "analyse_embeddings")  # desktop/tools.TOOLS
 if len(sys.argv) > 1 and sys.argv[1] in ("--deeptune-worker", "--infer-worker", "--track-worker", "--tool-worker"):
     # PyInstaller's windowed bootloader doesn't reliably pick up
     # PYTHONIOENCODING for this process's stdio the way a plain python.exe
@@ -1833,7 +1833,7 @@ def _build_test_page() -> None:
             dpg.add_input_int(tag='test_batch_size_input', label='Batch size', default_value=16, width=150, min_value=1,
                               min_clamped=True)
             ow.render(co.INFER_OPTIONS, INFER, on_test_options_changed, open_sections=(co.S_TEST,),
-                      sections=(co.S_TEST, *co.OVERRIDE_SECTIONS))
+                      sections=(co.S_TEST, co.S_TIMELINE, *co.OVERRIDE_SECTIONS))
             with ui.group(tag='infer_confirm_group', show=False):
                 dpg.add_text(gc.MODEL_OVERRIDE_WARNING, color=WARNING, wrap=850)
                 dpg.add_checkbox(tag='infer_confirm_model_overrides', label='I understand these overrides change the trained '

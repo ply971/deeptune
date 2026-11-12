@@ -771,6 +771,71 @@ python infer.py --modality video --checkpoint runs/.../trainval_output_*/model_w
 
 Choose the target before seeing test results. Trying several targets on one test set and keeping the best is model selection on test. Methods: the default `selective_risk` is Learn then Test risk control (Angelopoulos et al., arXiv 2110.01052) applied to per-group losses, not conformal prediction; `silent_error` is split conformal on one score per group, and no prediction sets are built, with realised coverage from Angelopoulos & Bates (arXiv 2107.07511). Classification only for now.
 
+## Timeline: what happens when in a long video
+
+A clip classifier gives one label per clip. `infer.py --timeline` slides it over each video in
+overlapping windows and turns the result into **segments**: start, end, label, confidence.
+
+```bash
+python infer.py --modality video --checkpoint runs/.../trainval_output_*/model_weights.pth --data long_videos/ \
+    --out timeline/ --label_mapping runs/.../data_splits_*/label_mapping.json \
+    --timeline --window_sec 2 --stride_sec 1 --smooth_windows 3 --min_segment_sec 2 --background_label background
+```
+
+- **Windows.** `--window_sec` long, `--stride_sec` apart (the last window ends at the video's end). Each
+  window goes through the run's own clip pipeline (`predict_video`: the recorded sampling, frame count and
+  preprocessing), and each decodes only its own frames, so memory does not grow with video length.
+- **Smoothing.** A running median over `--smooth_windows` windows removes one-window flicker. Each window
+  owns the stretch of time nearest its centre, so segments never overlap. Equal neighbours merge; segments
+  shorter than `--min_segment_sec` join the longer neighbour. Classes named in `--background_label` (for
+  example a `background` class you trained) are left out of the segment list, and windows whose top
+  probability is below `--min_confidence` become `uncertain`.
+- **Skipping still stretches.** `--skip_static THRESHOLD` does not score windows whose mean motion
+  (`--timeline_motion`: codec motion vectors or frame differences) is below the threshold, in the spirit
+  of SCSampler (Korbar et al., ICCV 2019). They are labelled `static`.
+- **Outputs.** Per video, `timeline/<video>/timeline.csv` (one row per window: times, label, smoothed
+  and raw probability per class) and `segments.json`; for all videos, `segments.csv`
+  (`video-id,t-start,t-end,label,score`) and `timeline_run.json` (settings, windows scored, time).
+- **Scoring.** `--ground_truth gt.csv` (`video-id,t-start,t-end,label`, video-id = file name without
+  extension) adds `timeline_metrics.json`: detection mAP at tIoU 0.1 to 0.9 and boundary error, computed
+  with `evaluators/video/localization_report.py`.
+- **Training on parts of long videos.** A manifest row may name a time range with `start_sec` and
+  `end_sec`, so one long video can give several labelled clips. Rows cut from the same file must share one
+  `group` (for example the video name), so the whole video stays in one split. Every split refuses a repeated
+  video file with no group column, or one whose clips have different values of the column it groups by.
+
+`scripts/timeline_untrimmed.py` runs the whole thing on the synthetic untrimmed task (Phase 2): it trains on
+window clips cut from the training videos, runs the timeline on held-out videos and compares the model with a
+random control and a pixel oracle; results are in
+[docs/video-plan/reports/C1-timeline-unsupervised.md](docs/video-plan/reports/C1-timeline-unsupervised.md).
+In the desktop app the same settings are under **Test → Timeline: what happens when**.
+
+## Which clips look alike, and which are unusual
+
+`analyse_embeddings.py` works on a run's clip embeddings (`embed_output_*/*_embeddings.parquet`) or any table
+with numeric feature columns:
+
+```bash
+python analyse_embeddings.py --embeddings runs/.../embed_output_x/x_cls_embeddings.parquet --out analysis/
+```
+
+- **PCA** (explained variance, components for 90%) and, when there are labels, **LDA**.
+- **K-Means** (k-means++, `--n_init` restarts) for every k from `--k_min` to `--k_max`: the elbow and the
+  silhouette; the best silhouette is the suggested k. **Hierarchical** clustering (`--linkage` ward, average,
+  complete or single) at that k, with the dendrogram. With labels, ARI and NMI say how well the clusters match them.
+- **Unusual clips.** A small autoencoder is fitted on 60% of the rows (or a `--role_column` of fit/val/test);
+  a clip's anomaly score is its reconstruction error; the threshold flags about `--target_fpr` of the
+  validation clips. Rows sharing a `--group_column` value (default `group`, e.g. the source video) always
+  share a role, so the reported false-alarm rate (with a 95% interval) is on unseen groups. Labels given in
+  `--outlier_label` are never used for fitting and are scored (AUC, detection rate).
+- **Read the clusters against chance and against how the features were made.** Embeddings from a fine-tuned
+  head were trained with the labels, so high ARI/NMI there is not label-free discovery; random clusters
+  already score NMI around 0.26 with 100 classes. A silhouette that is flat across the k range does not
+  estimate the number of classes.
+- Outputs: `summary.json`, `clusters.csv` (cluster, PCA coordinates, anomaly score per clip), `anomaly.csv`,
+  `kmeans_sweep.csv`, `linkage.npy` and PNG plots. In the desktop app: **Features & probes → 3. Cluster clips
+  and find unusual ones**.
+
 ## Detect and track objects in video
 
 Describe what to find in words. No labels or training needed:

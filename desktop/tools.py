@@ -31,6 +31,7 @@ TOOLS = {tool.name: tool for tool in (
     Tool('ensemble', 'ensemble.py', co.ENSEMBLE_OPTIONS, 'Ensemble'),
     Tool('extract_features', 'extract_features.py', co.EXTRACT_OPTIONS, 'Feature extraction'),
     Tool('train_feature_head', 'train_feature_head.py', co.PROBE_OPTIONS, 'Feature probe'),
+    Tool('analyse_embeddings', 'analyse_embeddings.py', co.EMBEDDING_ANALYSIS_OPTIONS, 'Embedding analysis'),
 )}
 
 
@@ -66,8 +67,69 @@ def validate_tool(cfg: ToolConfig) -> list[str]:
         if opt.required and not values.get(opt.key):
             issues.append(f'{opt.label} is required.')
     check = {'select_model': _select_issues, 'ensemble': _ensemble_issues, 'extract_features': _extract_issues,
-             'train_feature_head': _probe_issues}[cfg.tool]
+             'train_feature_head': _probe_issues, 'analyse_embeddings': _embedding_issues}[cfg.tool]
     return issues + check(ToolConfig(cfg.tool, values))
+
+
+def _embedding_issues(cfg: ToolConfig) -> list[str]:
+    """analyse_embeddings.py's own argument checks (analysis/unsupervised.main), before anything runs."""
+    issues = _exists('Embedding table', cfg.get('embeddings'))
+    path = cfg.get('embeddings')
+    if path and Path(path).suffix.lower() not in ('.parquet', '.csv'):
+        issues.append('The embedding table must be a .parquet or .csv file.')
+    if not 2 <= cfg.get('k_min') <= cfg.get('k_max'):
+        issues.append('Cluster range: need 2 <= fewest <= most.')
+    if not 0 < cfg.get('target_fpr') < 1:
+        issues.append('The false alarm rate must be between 0 and 1.')
+    for key in ('ae_epochs', 'ae_bottleneck', 'ae_hidden', 'n_init'):
+        if cfg.get(key) < 1:
+            issues.append(f'{co.by_key(co.EMBEDDING_ANALYSIS_OPTIONS)[key].label} must be at least 1.')
+    if cfg.get('pca_components') is not None and cfg.get('pca_components') < 1:
+        issues.append('PCA components must be at least 1, or blank.')
+    if cfg.get('outlier_label') and not cfg.get('label_column'):
+        issues.append('Known outlier labels need a label column.')
+    return issues
+
+
+def embedding_analysis_sections(out_dir: Path) -> list[Section]:
+    """What analyse_embeddings.py wrote: PCA, clusters (with agreement to the labels), unusual clips."""
+    out_dir, warnings, sections = Path(out_dir), [], []
+    summary = read_json(out_dir / 'summary.json', warnings) if (out_dir / 'summary.json').exists() else None
+    if summary:
+        def overview():
+            km, agg, pca, anomaly = (_dict(summary.get(k)) for k in ('kmeans', 'agglomerative', 'pca', 'anomaly'))
+            rows = [('clips', str(summary.get('rows'))), ('dimensions', str(summary.get('dimensions'))),
+                    ('PCA: variance in the first two components', number(pca.get('first_two'))),
+                    ('PCA: components for 90% of the variance', str(pca.get('components_for_90pct'))),
+                    ('K-Means: suggested k (silhouette)', str(km.get('suggested_k_silhouette'))),
+                    ('K-Means: elbow k', str(km.get('elbow_k')))]
+            for name, block in (('K-Means', km), (f"Hierarchical ({agg.get('linkage')})", agg)):
+                agreement = _dict(block.get('agreement'))
+                if agreement:
+                    rows.append((f'{name}: agreement with labels (ARI / NMI)',
+                                 f"{number(agreement.get('ari'))} / {number(agreement.get('nmi'))}"))
+            if 'lda' in summary:
+                rows.append(('LDA: training accuracy', number(_dict(summary['lda']).get('training_accuracy'))))
+            rows += [('Unusual clips flagged', f"{anomaly.get('flagged')} (threshold {number(anomaly.get('threshold'))}, "
+                                               f"target false alarm rate {number(anomaly.get('target_fpr'))})")]
+            for key, label in (('test_false_positive_rate', 'Observed false alarm rate (test rows)'),
+                               ('detection_rate', 'Known outliers detected'), ('auc', 'Anomaly AUC (known outliers)')):
+                if key in anomaly:
+                    rows.append((label, number(anomaly[key])))
+            notes = ['Plots: ' + ', '.join(summary['plots'])] if summary.get('plots') else []
+            return Section('Embedding analysis', rows, notes, path=out_dir / 'summary.json')
+        _guarded('summary.json', out_dir / 'summary.json', overview, sections)
+    clusters = out_dir / 'clusters.csv'
+    if clusters.exists():
+        def table():
+            frame = pd.read_csv(clusters)
+            if 'anomaly_score' in frame.columns:
+                frame = frame.sort_values('anomaly_score', ascending=False)
+            return Section('Clips, most unusual first', table=frame.head(200), path=clusters)
+        _guarded('clusters.csv', clusters, table, sections)
+    if warnings:
+        sections.append(Section('Could not read', notes=warnings))
+    return sections
 
 
 def _exists(label: str, path) -> list[str]:
@@ -307,6 +369,20 @@ def inference_reports(out_dir: Path) -> list[Section]:
                                       for key, value in summary.items() if not isinstance(value, (dict, list))],
             path=out_dir / 'abstention_summary.json'), sections)
     sections += ensemble_sections(out_dir, warnings)
+    record = read_json(out_dir / 'timeline_run.json', warnings) if (out_dir / 'timeline_run.json').exists() else None
+    if record:
+        def timeline_section():
+            settings = _dict(record.get('settings'))
+            rows = [(key, str(settings[key])) for key in ('window_sec', 'stride_sec', 'smooth_windows', 'min_segment_sec',
+                                                         'background', 'min_confidence', 'skip_static') if key in settings]
+            rows += [('windows scored', f"{record.get('scored_windows')} of {record.get('total_windows')}"),
+                     ('seconds', number(record.get('seconds')))]
+            table = pd.DataFrame([{k: v.get(k) for k in ('video_id', 'duration_sec', 'windows', 'scored_windows', 'segments', 'seconds')}
+                                  for v in record.get('videos', []) if isinstance(v, dict)])
+            return Section('Timeline', rows, ['Per-video timeline.csv and segments.json are in the timeline folder; the '
+                                              'segments of all videos are listed below and in segments.csv.'],
+                           table=table if not table.empty else None, path=out_dir / 'timeline')
+        _guarded('timeline_run.json', out_dir / 'timeline_run.json', timeline_section, sections)
     if warnings:
         sections.append(Section('Could not read', notes=warnings))
     return sections

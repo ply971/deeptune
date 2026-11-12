@@ -12,7 +12,7 @@ Keep entries short and factual. This is the handoff between sessions.
 | + Param budget (A1), error estimate (A4), zero-shot detect+track (S1a) | merged with review fixes | see session log | `1e2e0ff`, `158ecdb`, `71dce3d` |
 | + Training basics (T1), Analyse Video (V1a) | merged with review fixes; GPU and real-video gate open | full suite 1191 passed, 5 skipped (CPU) | `8314d32`, `94c5ecd` |
 | 3 Temporal models | merged (B2); target reworded by the user; GPU and real-video gate open | full suite 1656 passed, 5 skipped (CPU) | `569790b` |
-| 4 Timeline + CtxPL localisation + unsupervised | not started | | |
+| 4 Timeline + CtxPL localisation + unsupervised | A + C built on `video/C1-timeline-analysis`, not merged; B (CtxPL) not started | full suite 2246 passed, 5 skipped (CPU) | `d947cab` |
 | 5 Evaluation | merged (B3); 5-fold assurance report, `check.ps1`, GPU and real-video gate open | full suite 1656 passed, 5 skipped (CPU) | `cb5d761` |
 | 6 Explainability & background reliance | not started | | |
 | 7 GUI | not started | | |
@@ -29,6 +29,18 @@ Keep entries short and factual. This is the handoff between sessions.
 - Cat videos (no labels): old setup 3 IDs each; `auto` + botsort 1 ID on every frame of both.
 - **Full CPU suite at 7181c51** (`CUDA_VISIBLE_DEVICES=-1`, `-m "not seed_study"`, nine foreground chunks because background jobs were being stopped for low memory): **2261 passed, 5 skipped, 0 failed** (sum of `.artifacts/s3-suite/chunk-*.xml`). `pip check` clean. Seed-study tests not run.
 - **Not merged:** waiting for an ML Critic review (self-review V-059 on the board is not independent). Open: Re-ID is ImageNet ResNet-18, not a Re-ID-trained model (a download needs the user's OK).
+
+### 2026-11-12 (overnight) - C1: Phase 4 Part A timeline + Part C unsupervised, with GUI (Claude Code)
+- **User asked (asleep, autonomous):** "finish the project". Wave 3 C1 done except the real-model timeline experiment; CtxPL (C2) and explainability (C3) not started.
+- **Branch `video/C1-timeline-analysis`** (worktree `.claude/wt/C1`), 363123d..d947cab. Report: `docs/video-plan/reports/C1-timeline-unsupervised.md`.
+- Built: `analysis/timeline.py` + `infer.py --timeline` (windows through the run's own `predict_video`; median smoothing; owned intervals; min segment; background labels; min confidence; `--skip_static`; `--ground_truth` -> mAP/boundary error via `localization_report`); `analysis/unsupervised.py` + `analyse_embeddings.py` (PCA/LDA, K-Means sweep with elbow + silhouette, agglomerative + linkage, ARI/NMI, autoencoder anomaly with FPR threshold); manifests may now cut several time ranges from one video if they share a `group` (Part A item 4); Test page timeline section and Features & probes card 3; GUI coverage extended (timeline flags tried with the timeline on, like deeptune prerequisites).
+- Measured: UCF101 split-1 r3d_18 test embeddings (3,783 clips, 101 classes; the 256-d features come from a head trained on UCF101 labels, so this is not label-free discovery): K-Means ARI 0.54 / NMI 0.82, Ward ARI 0.58 / NMI 0.85, chance NMI 0.26 / ARI 0.00; k swept 90-110 with a flat silhouette, so the suggested k means nothing. Anomaly false alarms on clips of unseen UCF101 groups 5.5% (43/775, 95% CI 4.0-7.4%) at a 5% target.
+- **ML Critic review V-061: merge after fixes**, all four must-fixes done: (1) blank time ranges no longer pass the repeated-video check; (2) every split path refuses repeated video files without a grouper or split across grouper values, and the group check asserts no file is in two splits; (3) autoencoder roles drawn by whole groups (`--group_column`, default `group`), with a Clopper-Pearson interval; UCF101 rerun; (4) report/README wording (trained features, chance level, flat silhouette, interval). Not done (nice-to-have): timeline script checks a reused run's settings; `--ground_truth` checked before scoring; smoothing per run of scored windows with skip-static; `_unique_ids` vs ground-truth ids.
+- **Not measured:** the trained r3d_18 timeline on the synthetic untrimmed task. Claude Code stopped it for low system memory at the start of training; not restarted. Command in the report. Only a CPU pipeline check exists (tiny model, 1 epoch).
+- **Full CPU suite at 1bdf491** (`-m "not seed_study"`, nine chunks): **2246 passed, 5 skipped, 0 failed**. `pip check` clean.
+- Decisions: `--background_label` and `--outlier_label` take several words (`nargs='+'`) so the GUI's word lists map to them.
+- Open / notes for later: timeline window embeddings (anomaly per window); automatic skip-static threshold; Part B CtxPL will reuse `segments.csv`.
+- **Not merged:** waiting for an ML Critic review (self-review V-060 on the board is not independent).
 
 ### 2026-10-31 — B2 and B3 reviews; Phase 3 target changed
 - **Merged, later the same day:** B2 (569790b), B3 (cb5d761), and the pretrained + `two_stream` fix (b42c308: pretrained embeddings use RGB, and the new test fails without the fix). B2's last fix round (464d71b..c564763) and b42c308 were checked by the coordinator, with no fresh ml-critic.

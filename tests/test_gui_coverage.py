@@ -1,7 +1,7 @@
 """G1: every flag of every entry point is reachable from the desktop GUI, through what its Start button sends.
 
 For each argparse flag of deeptune.py, infer.py, select_model.py, ensemble.py, extract_features.py,
-train_feature_head.py and track.py, the test builds the real UI headless, sets the flag's control (a widget, or for
+train_feature_head.py, analyse_embeddings.py and track.py, the test builds the real UI headless, sets the flag's control (a widget, or for
 the oldest controls the widgets apply_config sets) to a value that differs from the CLI default, presses the page's
 real Start handler (app.on_run_clicked, app.on_run_test_clicked, analyse_page.on_track_clicked, tool_pages.start and
 tool_pages.on_check_grid), and captures the argv the runner would launch: the subprocess functions are replaced, nothing
@@ -40,6 +40,7 @@ ALLOW_LIST: dict = {
 
 
 def _parsers():
+    import analyse_embeddings
     import deeptune
     import ensemble
     import extract_features
@@ -49,17 +50,20 @@ def _parsers():
     import train_feature_head
     return {'deeptune.py': deeptune.build_parser(), 'infer.py': infer.build_parser(), 'select_model.py': select_model.build_parser(),
             'ensemble.py': ensemble.build_parser(), 'extract_features.py': extract_features.build_parser(),
-            'train_feature_head.py': train_feature_head.build_parser(), 'track.py': track.get_parser()}
+            'train_feature_head.py': train_feature_head.build_parser(), 'track.py': track.get_parser(),
+            'analyse_embeddings.py': analyse_embeddings.build_parser()}
 
 
 PARSERS = _parsers()
 SPECS = {'deeptune.py': co.DEEPTUNE_OPTIONS, 'infer.py': co.INFER_OPTIONS, 'select_model.py': co.SELECT_OPTIONS,
          'ensemble.py': co.ENSEMBLE_OPTIONS, 'extract_features.py': co.EXTRACT_OPTIONS,
-         'train_feature_head.py': co.PROBE_OPTIONS, 'track.py': co.TRACK_OPTIONS}
+         'train_feature_head.py': co.PROBE_OPTIONS, 'track.py': co.TRACK_OPTIONS,
+         'analyse_embeddings.py': co.EMBEDDING_ANALYSIS_OPTIONS}
 PAGE_PREFIXES = {'deeptune.py': 'dt', 'infer.py': 'infer', 'select_model.py': 'sel', 'ensemble.py': 'ens',
-                 'extract_features.py': 'feat', 'train_feature_head.py': 'probe', 'track.py': 'track'}
+                 'extract_features.py': 'feat', 'train_feature_head.py': 'probe', 'track.py': 'track',
+                 'analyse_embeddings.py': 'emb'}
 TOOL = {'select_model.py': 'select_model', 'ensemble.py': 'ensemble', 'extract_features.py': 'extract_features',
-        'train_feature_head.py': 'train_feature_head'}
+        'train_feature_head.py': 'train_feature_head', 'analyse_embeddings.py': 'analyse_embeddings'}
 # deeptune.py flags that only apply to tables and time series; every other one must work in a video run.
 NOT_VIDEO = {'--type', '--continuous_cols', '--categorical_cols', '--finetuning-mode', '--time_idx_column', '--modality'}
 
@@ -217,12 +221,13 @@ class Studio:
         paths = {
             ('deeptune.py', 'resume'): str(t / 'last_checkpoint.pt'), ('deeptune.py', 'test_df'): str(t / 'test.parquet'),
             ('infer.py', 'ensemble'): [str(t / 'member_a'), str(t / 'member_b')],
+            ('infer.py', 'ground_truth'): str(t / 'rows.csv'), ('infer.py', 'smooth_windows'): 5,  # an existing file; an odd width
             ('select_model.py', 'df'): str(t / 'other.parquet'), ('select_model.py', 'grid'): str(t / 'grid.json'),
             ('select_model.py', 'gpu_memory_gb'): '6',
             ('ensemble.py', 'runs'): [str(t / 'member_a'), str(t / 'member_b')],
             ('ensemble.py', 'predictions'): [str(t / 'pred_a.csv'), str(t / 'pred_b.csv')],
             ('ensemble.py', 'data'): str(t / 'new_clips'), ('ensemble.py', 'label_mapping'): str(t / 'labels.json'),
-            ('extract_features.py', 'data'): str(t / 'rows.csv'),
+            ('extract_features.py', 'data'): str(t / 'rows.csv'), ('analyse_embeddings.py', 'embeddings'): str(t / 'rows.csv'),
             ('train_feature_head.py', 'features'): str(t / 'images'), ('train_feature_head.py', 'train_df'): str(t / 'rows.csv'),
             ('train_feature_head.py', 'val_df'): str(t / 'rows.csv'), ('train_feature_head.py', 'test_df'): str(t / 'rows.csv'),
             ('track.py', 'video_dir'): str(t / 'videos'),
@@ -271,6 +276,9 @@ class Studio:
         return self.captured[-1], ''
 
     # --- infer.py: the Test page, Test model ---------------------------------------------------------------------------
+    # The timeline settings only apply with the timeline on, so each is tried with it on.
+    INFER_PREREQUISITES = {key: {'timeline': True} for key in co.TIMELINE_ONLY_KEYS}
+
     def press_test(self, ensemble: bool, set_control=None):
         from desktop import option_widgets as ow
         app = self.app
@@ -321,6 +329,7 @@ class Studio:
             'extract_features.py': [{'data': str(t / 'rows.csv'), 'out': str(t / 'features')}],
             'train_feature_head.py': [{'features': str(t / 'features'), 'train_df': str(t / 'rows.csv'), 'val_df': str(t / 'rows.csv'),
                                        'out': str(t / 'probe')}],
+            'analyse_embeddings.py': [{'embeddings': str(t / 'rows.csv'), 'out': str(t / 'embedding_analysis')}],
         }[entry]
 
     SELECT_PREREQUISITES = {'n_trials': {'search': 'random'}, 'bayes_startup': {'search': 'bayes'},
@@ -445,6 +454,12 @@ def check_flag(studio, entry, action) -> str:
             tried.append(f'{modality}: {problem}')
         return '; '.join(tried) or 'no video context tried'
     if entry == 'infer.py':
+        prerequisites = studio.INFER_PREREQUISITES.get(spec.key, {}) if spec is not None else {}
+        if prerequisites:
+            options = co.by_key(co.INFER_OPTIONS)
+            only_control = set_control
+            set_control = lambda: ([set_widget(studio.dpg, 'infer', options[k], v) for k, v in prerequisites.items()],  # noqa: E731
+                                   only_control())
         for ensemble in (False, True):
             if binding is not None:
                 control, expected = binding

@@ -101,7 +101,10 @@ and screen-reader support remain limited by Dear PyGui.
   "I understand these overrides change the trained model", and the log starts with a warning. Yes/no
   settings are three-way: (recorded), on or off, so an override can also turn a recorded flag off. Any override
   is written to `overrides.json` beside the predictions and shown with the results, as are the abstention
-  summary and the ensemble record.
+  summary and the ensemble record. **Timeline: what happens when** runs `infer.py --timeline` instead: the
+  model is slid over each video in windows (length, step, smoothing, shortest segment, background classes,
+  minimum confidence, skipping still windows, an optional ground-truth CSV); the results show each segment,
+  the timeline settings and, with ground truth, mAP and boundary error.
 - **Analyse Video** - give one video to a model. See "Analyse a video" below.
   **More tracking options** under Find, track and count reaches every other `track.py` setting: a whole
   folder of videos, the detector model, each threshold (a value there replaces what the score threshold
@@ -125,7 +128,9 @@ and screen-reader support remain limited by Dear PyGui.
 - **Features & Probes** - `extract_features.py` (streams, backbone, snippets, token grid, motion, decoder)
   and `train_feature_head.py` (attentive or linear probe on the cached features, with its splits and
   hyperparameters), each with its own launch button and reproducible command; shows the feature folder and
-  the probe's test metrics.
+  the probe's test metrics. **3. Cluster clips and find unusual ones** runs `analyse_embeddings.py` on a run's
+  embeddings: PCA/LDA, K-Means and hierarchical clustering (and how well they match the labels), and an
+  autoencoder that lists the most unusual clips first.
 
 The sidebar's **Device** applies to every run started from the app: `auto` (the GPU when there is one),
 `cpu` (hides the GPU from the run with `CUDA_VISIBLE_DEVICES=-1`), or `cuda:N`. Every log starts with the device

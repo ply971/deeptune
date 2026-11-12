@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pandas as pd
 from argparse import ArgumentParser, RawTextHelpFormatter
@@ -80,6 +82,14 @@ def check_group_split(parts: dict, grouper: str, label_column: str = None, class
             if group in seen and seen[group] != name:
                 raise AssertionError(f'Group {group!r} appears in both {seen[group]} and {name}.')
             seen[group] = name
+    seen = {}
+    for name, part in parts.items():  # clips cut from one video file: never in two splits, whatever the grouper
+        if not _holds_video_paths(part):
+            continue
+        for video in pd.unique(part['videos'].map(lambda value: os.path.normcase(str(value)))):
+            if video in seen and seen[video] != name:
+                raise AssertionError(f'Video {video!r} appears in both {seen[video]} and {name}.')
+            seen[video] = name
     summary = {'strategy': 'group', 'grouper': grouper,
                'sample_counts': {name: int(len(part)) for name, part in parts.items()},
                'group_counts': {name: int(part[grouper].nunique()) for name, part in parts.items()}}
@@ -119,6 +129,7 @@ def split_dataset(train_size: float, val_size: float, test_size:float, df_path: 
         raise ValueError(f'Grouper column {grouper!r} must exist and contain no missing values.')
     if grouper == target_column:
         raise ValueError('The grouper must be different from the target column.')
+    check_repeated_videos(df, grouper, '--df')
     classification = mode == 'cls' and modality != 'timeseries'
     if classification:
         issues = classification_split_issues(df[target_column].value_counts().to_dict(),
@@ -272,12 +283,35 @@ def _checked_target(frame: DataFrame, name: str, target_column: str, grouper: st
         raise ValueError(f'Grouper column {grouper!r} must exist in {name} and contain no missing values.')
     if grouper == target_column:
         raise ValueError('The grouper must be different from the target column.')
+    check_repeated_videos(frame, grouper, name)
     if not classification:
         values = pd.to_numeric(frame[target_column], errors='coerce')
         if not np.isfinite(values.to_numpy(dtype=float)).all():
             raise ValueError(f'Regression targets in {name} must be finite numeric values.')
         frame = frame.assign(**{target_column: values})
     return frame
+
+
+def check_repeated_videos(frame: DataFrame, grouper: str, name: str) -> None:
+    """Several rows may cut clips from one video file (start_sec/end_sec ranges) only if they all share one `grouper`
+    value; otherwise a split by that grouper, or a split with no grouper, could put one video in training and test."""
+    if not _holds_video_paths(frame):
+        return
+    keys = frame['videos'].map(lambda value: os.path.normcase(str(value)))
+    repeated = keys.duplicated(keep=False)
+    if not repeated.any():
+        return
+    examples = sorted(set(keys[repeated]))[:2]
+    if not grouper:
+        raise ValueError(f'{name}: {keys[repeated].nunique()} video files appear on more than one row (e.g. {examples}) and '
+                         'there is no group column, so clips of one video could land in both training and test. Add a '
+                         "'group' column (for example the video name) or pass --grouper.")
+    per_video = pd.DataFrame({'video': keys, 'group': frame[grouper].astype(str)})[repeated].groupby('video')['group'].nunique()
+    split = per_video[per_video > 1]
+    if len(split):
+        raise ValueError(f'{name}: clips cut from one video have different {grouper!r} values (e.g. {list(split.index[:2])}), '
+                         f'so a split by {grouper!r} could put one video in two splits. Give every clip of a video the same '
+                         f'{grouper!r} value.')
 
 
 def _holds_video_paths(frame: DataFrame) -> bool:
