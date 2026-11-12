@@ -131,6 +131,24 @@ and screen-reader support remain limited by Dear PyGui.
   the probe's test metrics. **3. Cluster clips and find unusual ones** runs `analyse_embeddings.py` on a run's
   embeddings: PCA/LDA, K-Means and hierarchical clustering (and how well they match the labels), and an
   autoencoder that lists the most unusual clips first.
+- **Evaluate & Benchmarks** (G2) - one block per tool, each with every flag, its own button and its
+  reproducible command; one job at a time, with Stop, the live log and a results view that reads the chosen
+  tool's output folder.
+  - *Score finished runs*: **Localisation report** (`evaluators/video/localization_report.py`: detection mAP at
+    tIoU 0.1-0.9, per-class AP and boundary error of predicted segments against ground truth); **Evaluation
+    report** (`evaluators/video/report.py` on an `eval_output_*` folder: grouped bootstrap intervals,
+    calibration, chance row; **Compare two** sends `compare` first and prints the paired comparison in the
+    log); **Abstention fit** (`evaluators/video/abstention_fit.py`: the "not sure" rule of a finished run,
+    fitted on calibration rows from unseen groups and saved beside its weights). These run as modules from the
+    repository root, and through the app's own worker in the packaged build.
+  - *Benchmarks and experiments*: the **motion benchmark** (`scripts/run_motion_benchmark.py`), the **timeline
+    experiment** (`scripts/timeline_untrimmed.py`; put `--num_workers` / `0` under "More deeptune.py flags" if
+    the laptop runs low on memory), the **MOT17 tracking benchmark** with public detections
+    (`scripts/benchmark_mot17_botsort.py`: variants, detection sets, dev/held-out videos, Re-ID cnn / osnet /
+    color, both appearance gates), the **MOT17 end-to-end benchmark** (`scripts/benchmark_mot17_e2e.py`:
+    detectors x trackers) and **cat detector training** (`scripts/train_cat_detector.py`). These run from a
+    source checkout only (`scripts/` is not packaged; the packaged app says so instead of starting them). They
+    use the GPU for minutes to hours.
 
 The sidebar's **Device** applies to every run started from the app: `auto` (the GPU when there is one),
 `cpu` (hides the GPU from the run with `CUDA_VISIBLE_DEVICES=-1`), or `cuda:N`. Every log starts with the device
