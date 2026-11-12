@@ -217,6 +217,7 @@ class Studio:
         paths = {
             ('deeptune.py', 'resume'): str(t / 'last_checkpoint.pt'), ('deeptune.py', 'test_df'): str(t / 'test.parquet'),
             ('infer.py', 'ensemble'): [str(t / 'member_a'), str(t / 'member_b')],
+            ('infer.py', 'ground_truth'): str(t / 'rows.csv'), ('infer.py', 'smooth_windows'): 5,  # an existing file; an odd width
             ('select_model.py', 'df'): str(t / 'other.parquet'), ('select_model.py', 'grid'): str(t / 'grid.json'),
             ('select_model.py', 'gpu_memory_gb'): '6',
             ('ensemble.py', 'runs'): [str(t / 'member_a'), str(t / 'member_b')],
@@ -271,6 +272,9 @@ class Studio:
         return self.captured[-1], ''
 
     # --- infer.py: the Test page, Test model ---------------------------------------------------------------------------
+    # The timeline settings only apply with the timeline on, so each is tried with it on.
+    INFER_PREREQUISITES = {key: {'timeline': True} for key in co.TIMELINE_ONLY_KEYS}
+
     def press_test(self, ensemble: bool, set_control=None):
         from desktop import option_widgets as ow
         app = self.app
@@ -445,6 +449,12 @@ def check_flag(studio, entry, action) -> str:
             tried.append(f'{modality}: {problem}')
         return '; '.join(tried) or 'no video context tried'
     if entry == 'infer.py':
+        prerequisites = studio.INFER_PREREQUISITES.get(spec.key, {}) if spec is not None else {}
+        if prerequisites:
+            options = co.by_key(co.INFER_OPTIONS)
+            only_control = set_control
+            set_control = lambda: ([set_widget(studio.dpg, 'infer', options[k], v) for k, v in prerequisites.items()],  # noqa: E731
+                                   only_control())
         for ensemble in (False, True):
             if binding is not None:
                 control, expected = binding

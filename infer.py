@@ -79,8 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help='Running-median width in windows (odd; 1 = no smoothing; default 3).')
     t.add_argument('--min_segment_sec', type=float, default=0.0,
                    help='Segments shorter than this are merged into a neighbour (default 0 = keep all).')
-    t.add_argument('--background_label', action='append', default=[], metavar='LABEL',
-                   help='A class that means "nothing happening"; left out of the segments. Repeatable.')
+    t.add_argument('--background_label', nargs='+', default=[], metavar='LABEL',
+                   help='Classes that mean "nothing happening"; left out of the segments (e.g. --background_label background idle).')
     t.add_argument('--min_confidence', type=float, default=0.0,
                    help='Windows whose top probability is below this are "uncertain" and left out (default 0).')
     t.add_argument('--skip_static', type=float, default=None, metavar='THRESHOLD',

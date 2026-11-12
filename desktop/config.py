@@ -924,6 +924,7 @@ def validate_infer_config(cfg: InferenceConfig) -> list[str]:
                           + ', '.join(recorded + (['Answer every clip'] if values.get('no_abstain') else [])) + '.')
     elif values.get('allow_unverified_labels'):
         issues.append('"Allow unverified class indices" only applies to an ensemble.')
+    issues.extend(timeline_issues(cfg, values))
     model = model_overrides(cfg) if not ensemble else {}
     if model and not cfg.confirm_model_overrides:
         names = ', '.join(co.by_key(co.INFER_OPTIONS)[key].label for key in model)
@@ -931,6 +932,40 @@ def validate_infer_config(cfg: InferenceConfig) -> list[str]:
                       'these overrides change the trained model" to run anyway.')
     if cfg.batch_size < 1:
         issues.append('Batch size must be at least 1.')
+    return issues
+
+
+def timeline_issues(cfg: InferenceConfig, values: dict) -> list[str]:
+    """The timeline controls, checked as infer.py checks them (infer.check_timeline_args)."""
+    by = co.by_key(co.TIMELINE_OPTIONS)
+    if not values.get('timeline'):
+        set_ = [by[k].label for k in co.TIMELINE_ONLY_KEYS if not co.is_default(by[k], values.get(k, by[k].empty))]
+        return [f'{", ".join(set_)}: these only apply with "Analyse each video as a timeline".'] if set_ else []
+    issues = []
+    if values.get('ensemble'):
+        issues.append('A timeline uses one trained run, not an ensemble.')
+    if cfg.modality not in (None, 'video'):
+        issues.append('A timeline is for video runs.')
+    if (values.get('mode') or cfg.mode or 'cls') != 'cls':
+        issues.append('A timeline needs a classification run.')
+    window, stride = values.get('window_sec', 2.0), values.get('stride_sec', 1.0)
+    if window is not None and stride is not None:
+        if window <= 0 or stride <= 0:
+            issues.append('Window length and step must be above 0.')
+        elif stride > window:
+            issues.append('The step between windows must not be longer than a window, or parts of the video go unscored.')
+    smooth = values.get('smooth_windows', 3)
+    if smooth is not None and (smooth < 1 or smooth % 2 == 0):
+        issues.append('Smoothing must be an odd number of windows (1 = none).')
+    if (values.get('min_segment_sec') or 0) < 0:
+        issues.append('Shortest segment must be 0 or more.')
+    if not 0 <= (values.get('min_confidence') or 0) <= 1:
+        issues.append('Minimum confidence must be between 0 and 1.')
+    if values.get('skip_static') is not None and values['skip_static'] < 0:
+        issues.append('The still-window motion threshold must be 0 or more.')
+    truth = values.get('ground_truth')
+    if truth and not Path(truth).is_file():
+        issues.append(f'Ground-truth file not found: {truth}')
     return issues
 
 
@@ -954,6 +989,23 @@ def read_inference_results(out_dir: Path) -> InferenceResults:
             results.predictions = pd.read_csv(predictions_path, converters={'predicted_label': str, 'true_label': str})
         except (OSError, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
             results.warnings.append(f'predictions.csv: {exc}')
+    segments_path = out_dir / 'segments.csv'
+    if results.predictions is None and segments_path.exists():  # infer.py --timeline: segments instead of predictions
+        try:
+            results.predictions = pd.read_csv(segments_path, converters={'label': str, 'video-id': str})
+        except (OSError, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
+            results.warnings.append(f'segments.csv: {exc}')
+        timeline_metrics = out_dir / 'timeline_metrics.json'
+        if timeline_metrics.exists():
+            try:
+                m = json.loads(timeline_metrics.read_text(encoding='utf-8-sig'))
+                dm, be = m['detection_map'], m['boundary_error']
+                results.metrics = {**{f'mAP@tIoU {t}': v for t, v in dm['map_per_threshold'].items() if t in ('0.3', '0.5', '0.7')},
+                                   'average mAP (tIoU 0.1-0.7)': dm['averages']['avg_0.1_0.7'],
+                                   'boundary error (s, tIoU 0.5)': be['mean_seconds'],
+                                   'ground-truth segments': dm['n_ground_truth'], 'predicted segments': dm['n_predictions']}
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                results.warnings.append(f'timeline_metrics.json: {exc}')
     metrics_path = out_dir / 'inference_metrics.json'
     if metrics_path.exists():
         try:

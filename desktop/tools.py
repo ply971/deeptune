@@ -307,6 +307,20 @@ def inference_reports(out_dir: Path) -> list[Section]:
                                       for key, value in summary.items() if not isinstance(value, (dict, list))],
             path=out_dir / 'abstention_summary.json'), sections)
     sections += ensemble_sections(out_dir, warnings)
+    record = read_json(out_dir / 'timeline_run.json', warnings) if (out_dir / 'timeline_run.json').exists() else None
+    if record:
+        def timeline_section():
+            settings = _dict(record.get('settings'))
+            rows = [(key, str(settings[key])) for key in ('window_sec', 'stride_sec', 'smooth_windows', 'min_segment_sec',
+                                                         'background', 'min_confidence', 'skip_static') if key in settings]
+            rows += [('windows scored', f"{record.get('scored_windows')} of {record.get('total_windows')}"),
+                     ('seconds', number(record.get('seconds')))]
+            table = pd.DataFrame([{k: v.get(k) for k in ('video_id', 'duration_sec', 'windows', 'scored_windows', 'segments', 'seconds')}
+                                  for v in record.get('videos', []) if isinstance(v, dict)])
+            return Section('Timeline', rows, ['Per-video timeline.csv and segments.json are in the timeline folder; the '
+                                              'segments of all videos are listed below and in segments.csv.'],
+                           table=table if not table.empty else None, path=out_dir / 'timeline')
+        _guarded('timeline_run.json', out_dir / 'timeline_run.json', timeline_section, sections)
     if warnings:
         sections.append(Section('Could not read', notes=warnings))
     return sections

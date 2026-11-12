@@ -434,6 +434,32 @@ INFER_OPTIONS = (
         Opt('--history_df', LINES, 'History files (DeepAR)', 'One parquet per line.', browse='file'),
     )),
 )
+# Timeline (infer.py --timeline, analysis/timeline.py): the other timeline flags only apply when it is on.
+S_TIMELINE = 'Timeline: what happens when (long videos)'
+TIMELINE_OPTIONS = (
+    Opt('--timeline', BOOL, 'Analyse each video as a timeline', 'Video classification: slide the trained clip model over '
+        'each video in overlapping windows and write when each class happens (timeline.csv, segments.json per video, '
+        'segments.csv for all) instead of one prediction per video.', False, (), S_TIMELINE),
+    Opt('--window_sec', FLOAT, 'Window length (s)', 'Seconds per scored window; about the length of the training clips.',
+        2.0, (), S_TIMELINE),
+    Opt('--stride_sec', FLOAT, 'Step between windows (s)', 'Smaller = finer boundaries, slower. At most the window length.',
+        1.0, (), S_TIMELINE),
+    Opt('--smooth_windows', INT, 'Smoothing (windows)', 'Running median over this many windows (odd; 1 = none). '
+        'Removes one-window flicker.', 3, (), S_TIMELINE),
+    Opt('--min_segment_sec', FLOAT, 'Shortest segment (s)', 'Shorter segments are merged into a neighbour.', 0.0, (), S_TIMELINE),
+    Opt('--background_label', WORDS, 'Background classes', 'Classes that mean "nothing happening" (e.g. background idle); '
+        'left out of the segments.', (), (), S_TIMELINE),
+    Opt('--min_confidence', FLOAT, 'Minimum confidence', 'Windows whose top probability is lower are marked uncertain '
+        'and left out.', 0.0, (), S_TIMELINE),
+    Opt('--skip_static', OPT_FLOAT, 'Skip still windows below motion', 'Do not score windows whose mean motion is below '
+        'this (faster on videos with long still stretches). Blank = score every window.', None, (), S_TIMELINE),
+    Opt('--timeline_motion', CHOICE, 'Motion signal for skipping', 'codec motion vectors or frame differences.', 'auto',
+        ('auto', 'codec', 'framediff'), S_TIMELINE),
+    Opt('--ground_truth', TEXT, 'Ground-truth segments (CSV)', 'Optional: video-id,t-start,t-end,label. Adds detection '
+        'mAP and boundary error.', None, (), S_TIMELINE, browse='file'),
+)
+TIMELINE_ONLY_KEYS = tuple(opt.key for opt in TIMELINE_OPTIONS if opt.key != 'timeline')
+INFER_OPTIONS = INFER_OPTIONS + TIMELINE_OPTIONS
 # With --ensemble, infer.py refuses every other flag (infer.ENSEMBLE_FLAGS).
 INFER_ENSEMBLE_KEYS = ('accept_weights_licence', 'allow_unverified_labels', 'ensemble')
 MODEL_OVERRIDE_KEYS = tuple(opt.key for opt in INFER_OPTIONS if opt.section == S_MODEL_OVERRIDE)
