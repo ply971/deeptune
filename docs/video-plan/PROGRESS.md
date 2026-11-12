@@ -28,7 +28,7 @@ Keep entries short and factual. This is the handoff between sessions.
 - **End to end (own detectors, raw frames, held-out):** old default Grounding DINO + ByteTrack HOTA 42.0 / IDF1 49.9 / MOTA 41.3 at 3.3 fps -> new default D-FINE + BoT-SORT 46.5 / 56.2 / 46.5 at 20.8 fps. BoT-SORT does not raise MOTA end to end (OWLv2 37.2 -> 31.8: gap filling extends false tracks) - documented in README.
 - Cat videos (no labels): old setup 3 IDs each; `auto` + botsort 1 ID on every frame of both.
 - **Full CPU suite at 7181c51** (`CUDA_VISIBLE_DEVICES=-1`, `-m "not seed_study"`, nine foreground chunks because background jobs were being stopped for low memory): **2261 passed, 5 skipped, 0 failed** (sum of `.artifacts/s3-suite/chunk-*.xml`). `pip check` clean. Seed-study tests not run.
-- **Not merged:** waiting for an ML Critic review (self-review V-059 on the board is not independent). Open: Re-ID is ImageNet ResNet-18, not a Re-ID-trained model (a download needs the user's OK).
+- **Merged into `video-analysis`** after ML Critic review (V-062: merge after fixes; fixes done, see V-063) via `video/merge-S3-C1`. Full CPU suite on the merge (fb8bffd, `-m "not seed_study"`, nine chunks): **2361 passed, 5 skipped, 0 failed**; `pip check` clean. One chunk's first run had 1 failure in `test_snippet_features.py::test_rotated_motion_is_backend_independent[farneback]` (code untouched by S3/C1); it passed alone 3/3 and in the chunk rerun (339 passed): flaky under load, worth a look.
 
 ### 2026-11-12 (overnight) - C1: Phase 4 Part A timeline + Part C unsupervised, with GUI (Claude Code)
 - **User asked (asleep, autonomous):** "finish the project". Wave 3 C1 done except the real-model timeline experiment; CtxPL (C2) and explainability (C3) not started.
@@ -40,7 +40,7 @@ Keep entries short and factual. This is the handoff between sessions.
 - **Full CPU suite at 1bdf491** (`-m "not seed_study"`, nine chunks): **2246 passed, 5 skipped, 0 failed**. `pip check` clean.
 - Decisions: `--background_label` and `--outlier_label` take several words (`nargs='+'`) so the GUI's word lists map to them.
 - Open / notes for later: timeline window embeddings (anomaly per window); automatic skip-static threshold; Part B CtxPL will reuse `segments.csv`.
-- **Not merged:** waiting for an ML Critic review (self-review V-060 on the board is not independent).
+- **Merged into `video-analysis`** after ML Critic review (V-061: merge after fixes; fixes done, see V-063) via `video/merge-S3-C1`. Full CPU suite on the merge (fb8bffd, `-m "not seed_study"`, nine chunks): **2361 passed, 5 skipped, 0 failed**; `pip check` clean. One chunk's first run had 1 failure in `test_snippet_features.py::test_rotated_motion_is_backend_independent[farneback]` (code untouched by S3/C1); it passed alone 3/3 and in the chunk rerun (339 passed): flaky under load, worth a look.
 
 ### 2026-10-31 — B2 and B3 reviews; Phase 3 target changed
 - **Merged, later the same day:** B2 (569790b), B3 (cb5d761), and the pretrained + `two_stream` fix (b42c308: pretrained embeddings use RGB, and the new test fails without the fix). B2's last fix round (464d71b..c564763) and b42c308 were checked by the coordinator, with no fresh ml-critic.
