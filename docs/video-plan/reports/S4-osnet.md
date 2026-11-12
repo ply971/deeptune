@@ -1,8 +1,9 @@
 # S4: a person Re-ID model (OSNet-AIN) for tracking — no measurable gain on MOT17 dev
 
 Branch `video/S4-osnet-reid` (from `video/S3-botsort` @ c359eb3), 2026-11-12/13, after the user approved
-the download ("OK for all"). **Not merged**: the development videos show no gain, so it stays an option on
-a branch until someone decides it is worth shipping.
+the download ("OK for all"). The development videos show no gain, so no default changed. Merged on 2026-11-13
+through `video/G2-app-everything`, after the user asked for everything built so far to be in the app: `osnet`
+is an opt-in `--reid` choice only (never picked by `auto`).
 
 ## What was built
 
