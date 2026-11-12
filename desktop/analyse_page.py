@@ -673,6 +673,9 @@ def _render_tracking(results: analyse.TrackResults) -> None:
     dpg.add_text(f'{source}: {results.model}', parent=parent,
                  color=_colors().analysis, wrap=0)
     dpg.add_text(analyse.TRACKER_NOTE, parent=parent, color=_colors().muted, wrap=0)
+    hint = analyse.better_detector_hint(results.detector, [label.name for label in results.labels])
+    if hint:
+        dpg.add_text(hint, parent=parent, color=_colors().analysis, wrap=0, tag='analyse_better_detector_hint')
 
 
 # ---------------------------------------------------------------------------

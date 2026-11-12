@@ -26,8 +26,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, build_detector,
-                            check_grounding_dino_prompts, clean_prompts)
+from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, auto_detector, build_detector,
+                            check_coco_prompts, check_grounding_dino_prompts, clean_prompts)
 from spatial.track import ByteTracker
 from spatial import io as sio
 from spatial.pipeline import CMC_CHOICES
@@ -39,6 +39,7 @@ TRACK_DEFAULTS = {
     'pet_fasterrcnn': {'track_high_thresh': 0.4},
     'grounding_dino': {'track_high_thresh': 0.35},
     'owlv2': {'track_high_thresh': 0.2},
+    'dfine': {'track_high_thresh': 0.5},  # a trained closed-set detector: ByteTrack's reference value
 }
 # Fusing multiplies IoU by the box score, and confirming a new track needs the result
 # above 0.3. A zero-shot score under 0.3 could then never confirm, whatever the thresholds.
@@ -63,8 +64,10 @@ def get_parser() -> argparse.ArgumentParser:
     p.add_argument('--prompt', action='append', required=True,
                    help='Object to find, in words (e.g. "lobster"). Repeat for several objects.')
     p.add_argument('--out', type=str, required=True, help='Output folder (one sub-folder per video).')
-    p.add_argument('--detector', choices=sorted(DEFAULT_MODELS), default='grounding_dino',
-                   help='Detector backend; pet_fasterrcnn requires a local --detector_model checkpoint.')
+    p.add_argument('--detector', choices=['auto'] + sorted(DEFAULT_MODELS), default='auto',
+                   help='Detector backend. auto (default): dfine when every prompt is one of the 80 COCO classes '
+                        '(person, cat, car, ...; most accurate), else grounding_dino (any words). '
+                        'pet_fasterrcnn requires a local --detector_model checkpoint.')
     p.add_argument('--detector_model', type=str, default=None,
                    help='Hugging Face model id or local folder; default per detector: '
                    + ', '.join(f'{k}={v}' for k, v in DEFAULT_MODELS.items()) + '.')
@@ -137,6 +140,14 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
     if any(not str(p).strip() for p in args.prompt):
         parser.error('--prompt must not be blank')
     args.prompt = clean_prompts(args.prompt)
+    args.detector_requested = args.detector
+    if args.detector == 'auto':
+        args.detector = auto_detector(args.prompt)
+    if args.detector == 'dfine':
+        try:
+            check_coco_prompts(args.prompt)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.detector == 'pet_fasterrcnn':
         args.detector_model = args.detector_model or DEFAULT_MODELS[args.detector]
         if not args.detector_model or not Path(args.detector_model).is_file():

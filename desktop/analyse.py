@@ -23,8 +23,8 @@ from uuid import uuid4
 
 from evaluators.error_model import find_error_model
 from handlers.video_manifest import VIDEO_EXTENSIONS
-from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, check_grounding_dino_prompts,
-                            clean_prompts)
+from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, auto_detector, check_coco_prompts,
+                            check_grounding_dino_prompts, clean_prompts)
 from track import TRACK_DEFAULTS
 
 from . import cli_options as co
@@ -80,8 +80,20 @@ class DetectorChoice:
 DETECTORS = (
     DetectorChoice('grounding_dino', 'Grounding DINO', 0.7),
     DetectorChoice('owlv2', 'OWLv2', 0.6),
+    DetectorChoice('dfine', 'D-FINE (everyday objects, most accurate)', 0.13),
     DetectorChoice('pet_fasterrcnn', 'Trained cat detector', 0.0),
 )
+
+
+OPEN_VOCABULARY = ('grounding_dino', 'owlv2')
+
+
+def better_detector_hint(detector: str, prompts: list[str]) -> str:
+    """When every prompt is a COCO class, say that D-FINE would find them more accurately."""
+    if detector in OPEN_VOCABULARY and prompts and auto_detector(prompts) == 'dfine':
+        return (f'Tip: {", ".join(prompts)} are everyday objects that D-FINE knows; choose '
+                f'{detector_by_key("dfine").label} for more accurate, steadier tracking.')
+    return ''
 
 
 def installed_cat_checkpoint() -> Optional[Path]:
@@ -132,9 +144,16 @@ def detector_note(key: str) -> str:
     if key == 'pet_fasterrcnn':
         return 'Local cat detector: paste the best.pt checkpoint path below. Supports cat only; no download.'
     choice = detector_by_key(key)
-    total = sum(d.download_gb for d in DETECTORS)
-    note = (f'{choice.label} ({choice.model_id}, {LICENCES.get(choice.model_id, "see the model card")}). '
-            f'The model is about {choice.download_gb} GB; both detectors together are about {total:.1f} GB.')
+    if key == 'dfine':
+        note = (f'{choice.label} ({choice.model_id}, {LICENCES.get(choice.model_id, "see the model card")}). '
+                'Finds only the 80 COCO object classes (person, cat, dog, car, bus, bird, horse, chair, bottle, '
+                '...; plurals and words such as people or kitten are understood), more accurately and faster than '
+                f'Grounding DINO or OWLv2. The model is about {choice.download_gb} GB.')
+    else:
+        total = sum(d.download_gb for d in DETECTORS if d.key in OPEN_VOCABULARY)
+        note = (f'{choice.label} ({choice.model_id}, {LICENCES.get(choice.model_id, "see the model card")}). '
+                f'The model is about {choice.download_gb} GB; both open-vocabulary detectors together are about '
+                f'{total:.1f} GB.')
     if detector_is_cached(choice.model_id):
         return note + ' It is already in the local Hugging Face cache, so no download is expected.'
     return note + f' It is not in the local cache yet, so the first run downloads it to {hf_hub_cache()}.'
@@ -584,6 +603,11 @@ def validate_track_config(cfg: TrackConfig) -> list[str]:
             check_grounding_dino_prompts(cfg.prompts)
         except ValueError as exc:
             issues.append(str(exc))
+    elif cfg.detector == 'dfine':
+        try:
+            check_coco_prompts(cfg.prompts)
+        except ValueError as exc:
+            issues.append(str(exc).replace('Use --detector grounding_dino or owlv2', 'Choose Grounding DINO or OWLv2'))
     if cfg.detector not in DEFAULT_MODELS:
         issues.append(f'Unknown detector: {cfg.detector}')
     for key in ('batch_size', 'track_buffer'):
@@ -640,6 +664,7 @@ class TrackResults:
     no_tracks_message: str = ''
     error: str = ''
     trained_detector: bool = False
+    detector: str = ""  # the detector track.py actually used (track_arguments.json)
 
     @property
     def total_tracks(self) -> int:
@@ -731,6 +756,7 @@ def read_track_results(out: Path, video: Path, requested_detector: Optional[str]
     results = TrackResults(video_dir=video_dir, video=Path(video).name)
     record, _ = _read_json_object(out / 'track_arguments.json')
     results.trained_detector = bool(record and record.get('detector') == 'pet_fasterrcnn')
+    results.detector = str(record.get('detector') or '') if record else ''
     results.model, track_score, box_threshold = _detector_used(out, requested_detector)
     summary, problem = _read_json_object(video_dir / 'summary.json')
     if summary is None:
