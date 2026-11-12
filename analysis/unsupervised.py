@@ -306,7 +306,7 @@ def analyse(X: np.ndarray, labels: Optional[np.ndarray], out_dir, settings: Anal
     clean = labels is not None and len(set(labels[~outlier].tolist())) >= 2
     if clean:
         lda = lda_analysis(Z[~outlier], labels[~outlier])
-        summary['lda'] = {'explained_variance_ratio': [round(float(v), 6) for v in lda['explained_variance_ratio']],
+        summary['lda'] = {'explained_variance_ratio': [round(float(v), 6) for v in lda['explained_variance_ratio'][:20]],
                           'training_accuracy': round(lda['training_accuracy'], 6)}
 
     ks = [k for k in settings.ks if 2 <= k < n]
@@ -372,10 +372,12 @@ def _plots(out: Path, pca, lda, labels, outlier, sweep, link, score, roles, thre
         if labs is None:
             ax.scatter(proj[:, 0], y, s=10)
         else:
-            for lab in sorted(set(labs.tolist())):
+            names = sorted(set(labs.tolist()))
+            for lab in names:
                 m = labs == lab
-                ax.scatter(proj[m, 0], y[m], s=10, label=str(lab))
-            ax.legend(fontsize=7, loc='best')
+                ax.scatter(proj[m, 0], y[m], s=6 if len(names) > 12 else 10, label=str(lab))
+            if len(names) <= 12:  # a legend of 101 classes would cover the plot
+                ax.legend(fontsize=7, loc='best')
         ax.set_title(title)
         fig.tight_layout()
         fig.savefig(out / name, dpi=110)
