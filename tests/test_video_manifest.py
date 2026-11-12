@@ -33,3 +33,33 @@ def test_duplicate_videos_cannot_leak_across_dataset_splits(tmp_path):
     pd.DataFrame({'videos': ['clip.mp4', './clip.mp4'], 'labels': ['a', 'a']}).to_csv(path, index=False)
     with pytest.raises(ValueError, match='more than once'):
         read_video_manifest(path)
+
+
+def test_one_video_may_give_several_clips_as_time_ranges_of_one_group(tmp_path):
+    (tmp_path / 'long.mp4').write_bytes(b'clip')
+    path = tmp_path / 'videos.csv'
+    rows = {'videos': ['long.mp4', 'long.mp4', './long.mp4'], 'labels': ['jump', 'none', 'run'],
+            'start_sec': [0.0, 2.0, 4.0], 'end_sec': [2.0, 4.0, 6.0], 'group': ['long'] * 3}
+    pd.DataFrame(rows).to_csv(path, index=False)
+    assert len(read_video_manifest(path)) == 3
+
+
+@pytest.mark.parametrize('change,message', [
+    ({'start_sec': [0.0, 0.0], 'end_sec': [2.0, 2.0]}, 'same start_sec/end_sec'),
+    ({'group': None}, 'need a group column'),
+    ({'group': ['a', 'b']}, 'share one group'),
+    ({'start_sec': None, 'end_sec': None}, 'more than once'),
+])
+def test_repeated_videos_must_be_distinct_ranges_of_one_group(tmp_path, change, message):
+    (tmp_path / 'long.mp4').write_bytes(b'clip')
+    rows = {'videos': ['long.mp4', 'long.mp4'], 'labels': ['a', 'b'], 'start_sec': [0.0, 2.0], 'end_sec': [2.0, 4.0],
+            'group': ['g', 'g']}
+    for key, value in change.items():
+        if value is None:
+            rows.pop(key)
+        else:
+            rows[key] = value
+    path = tmp_path / 'videos.csv'
+    pd.DataFrame(rows).to_csv(path, index=False)
+    with pytest.raises(ValueError, match=message):
+        read_video_manifest(path)

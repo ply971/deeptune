@@ -25,10 +25,29 @@ def read_video_manifest(path: Path) -> pd.DataFrame:
         if clip.suffix.lower() not in VIDEO_EXTENSIONS:
             raise ValueError(f'Video list row {index + 1}: unsupported video extension: {clip.suffix}')
         paths.append(str(clip))
-    if len({os.path.normcase(value) for value in paths}) != len(paths):
-        raise ValueError('The same video appears more than once. Remove duplicates before training.')
+    keys = [os.path.normcase(value) for value in paths]
+    if len(set(keys)) != len(keys):
+        _check_repeated_videos(frame, keys)
     frame['videos'] = paths
     return frame
+
+
+def _check_repeated_videos(frame: pd.DataFrame, keys: list) -> None:
+    """A file may appear on several rows only as distinct time ranges (start_sec/end_sec: segment-level labels) of
+    one group, so all clips cut from one video stay in one split and nothing leaks from train to test."""
+    if 'start_sec' not in frame or 'end_sec' not in frame:
+        raise ValueError('The same video appears more than once. Remove duplicates before training, or give each row '
+                         'its own start_sec/end_sec range (and a group column) to cut several clips from one video.')
+    ranges = list(zip(keys, pd.to_numeric(frame['start_sec'], errors='coerce'), pd.to_numeric(frame['end_sec'], errors='coerce')))
+    if len(set(ranges)) != len(ranges):
+        raise ValueError('The same video appears more than once with the same start_sec/end_sec. Remove duplicates before training.')
+    if 'group' not in frame or frame['group'].isna().any():
+        raise ValueError('Clips cut from the same video need a group column (for example the video name), so they '
+                         'all land in the same split and the test split never sees a training video.')
+    groups = pd.DataFrame({'key': keys, 'group': frame['group'].astype(str)}).groupby('key')['group'].nunique()
+    if (groups > 1).any():
+        raise ValueError('Clips cut from the same video must share one group, or one video could be in two splits: '
+                         + ', '.join(groups[groups > 1].index[:3]))
 
 
 def load_video_manifest(path: Path, read_bytes: bool = True) -> pd.DataFrame:
