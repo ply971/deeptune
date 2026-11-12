@@ -4,6 +4,12 @@ Example::
 
     python track.py --video lobsters.mp4 --prompt lobster --out runs/lobsters --save_video
     python track.py --video_dir clips/ --prompt lobster --prompt fish --detector owlv2 --out runs/clips
+    python track.py --video cat.mp4 --prompt cat --tracker bytetrack --out runs/plain   # the old tracker
+
+The default ``--tracker botsort`` is ByteTrack plus BoT-SORT's camera-motion
+compensation and appearance (Re-ID) cost, plus offline post-processing: broken
+tracks of one object are linked again, short holes are filled by interpolation
+and one-off noise tracks are dropped (see ``spatial/postprocess.py``).
 
 Writes, per video, ``<out>/<video stem>/`` with ``detections.json``,
 ``tracks.csv`` (MOTChallenge), ``track_labels.csv``, ``summary.json`` and
@@ -20,10 +26,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, build_detector,
-                            check_grounding_dino_prompts, clean_prompts)
+from spatial.detect import (DEFAULT_MODELS, DETECTOR_DEFAULTS, LICENCES, Detector, auto_detector, build_detector,
+                            describe_auto_choice,
+                            check_coco_prompts, check_grounding_dino_prompts, clean_prompts)
 from spatial.track import ByteTracker
 from spatial import io as sio
+from spatial.pipeline import CMC_CHOICES
+from spatial.reid import REID_CHOICES, resolve_reid
 
 # Tracker thresholds per detector score scale (ByteTrack's 0.5/0.6 assume a
 # trained closed-set detector; zero-shot scores are lower).
@@ -31,10 +40,19 @@ TRACK_DEFAULTS = {
     'pet_fasterrcnn': {'track_high_thresh': 0.4},
     'grounding_dino': {'track_high_thresh': 0.35},
     'owlv2': {'track_high_thresh': 0.2},
+    'dfine': {'track_high_thresh': 0.5},  # a trained closed-set detector: ByteTrack's reference value
 }
 # Fusing multiplies IoU by the box score, and confirming a new track needs the result
 # above 0.3. A zero-shot score under 0.3 could then never confirm, whatever the thresholds.
 ZERO_SHOT_DETECTORS = frozenset(('grounding_dino', 'owlv2'))
+
+# What each --tracker turns on; any of these flags given explicitly wins.
+TRACKER_PRESETS = {
+    'botsort': {'cmc': 'sparse', 'reid': 'auto', 'link_max_gap_s': 3.0, 'interpolate_max_gap_s': 1.0,
+                'min_track_len': 3},
+    'bytetrack': {'cmc': 'none', 'reid': 'none', 'link_max_gap_s': 0.0, 'interpolate_max_gap_s': 0.0,
+                  'min_track_len': 1},
+}
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -47,8 +65,10 @@ def get_parser() -> argparse.ArgumentParser:
     p.add_argument('--prompt', action='append', required=True,
                    help='Object to find, in words (e.g. "lobster"). Repeat for several objects.')
     p.add_argument('--out', type=str, required=True, help='Output folder (one sub-folder per video).')
-    p.add_argument('--detector', choices=sorted(DEFAULT_MODELS), default='grounding_dino',
-                   help='Detector backend; pet_fasterrcnn requires a local --detector_model checkpoint.')
+    p.add_argument('--detector', choices=['auto'] + sorted(DEFAULT_MODELS), default='auto',
+                   help='Detector backend. auto (default): dfine when every prompt is one of the 80 COCO classes '
+                        '(person, cat, car, ...; most accurate), else grounding_dino (any words). '
+                        'pet_fasterrcnn requires a local --detector_model checkpoint.')
     p.add_argument('--detector_model', type=str, default=None,
                    help='Hugging Face model id or local folder; default per detector: '
                    + ', '.join(f'{k}={v}' for k, v in DEFAULT_MODELS.items()) + '.')
@@ -83,6 +103,33 @@ def get_parser() -> argparse.ArgumentParser:
                         'e.g. 0.7).')
     p.add_argument('--class_agnostic', action='store_true',
                    help='Match boxes across labels; each track takes the majority label.')
+    p.add_argument('--tracker', choices=sorted(TRACKER_PRESETS), default='botsort',
+                   help='botsort (default): ByteTrack + camera-motion compensation + appearance Re-ID + offline '
+                        'linking of broken tracks, gap filling and noise-track removal. bytetrack: plain ByteTrack '
+                        '(the tracker before 2026-11). The flags below override single parts.')
+    p.add_argument('--cmc', choices=CMC_CHOICES, default=None,
+                   help='Camera-motion compensation: sparse (optical flow on the background) or none. '
+                        'Default: from --tracker.')
+    p.add_argument('--reid', choices=REID_CHOICES, default=None,
+                   help='Appearance embedding per box: cnn (ResNet-18 ImageNet features, 45 MB download once), '
+                        'color (HSV histogram, no download), none, or auto (cnn when its weights are already '
+                        'cached, else color). Default: from --tracker.')
+    p.add_argument('--appearance_thresh', type=float, default=0.25,
+                   help='Largest appearance distance (1 - cos) / 2 that may join a box to a nearby track '
+                        '(default 0.25, as BoT-SORT).')
+    p.add_argument('--proximity_thresh', type=float, default=0.5,
+                   help='Appearance only helps when the boxes overlap with IoU >= 1 - this (default 0.5).')
+    p.add_argument('--link_max_gap_s', type=float, default=None,
+                   help='Offline: join a track that ends to one that starts up to this many seconds later when '
+                        'motion, size and appearance agree (0 = off). Default: from --tracker (botsort 3).')
+    p.add_argument('--link_appearance_thresh', type=float, default=0.3,
+                   help='Offline linking: largest appearance distance between the two ends (default 0.3).')
+    p.add_argument('--interpolate_max_gap_s', type=float, default=None,
+                   help='Offline: fill holes inside a track up to this many seconds with interpolated boxes '
+                        '(0 = off). Default: from --tracker (botsort 1).')
+    p.add_argument('--min_track_len', type=int, default=None,
+                   help='Offline: drop tracks with fewer real observations than this (1 = keep all). '
+                        'Default: from --tracker (botsort 3).')
     p.add_argument('--save_video', action='store_true', help='Also write overlay.mp4 with boxes and track IDs.')
     return p
 
@@ -94,6 +141,16 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
     if any(not str(p).strip() for p in args.prompt):
         parser.error('--prompt must not be blank')
     args.prompt = clean_prompts(args.prompt)
+    args.detector_requested = args.detector
+    if args.detector == 'auto':
+        args.detector = auto_detector(args.prompt)
+        args.detector_choice = describe_auto_choice(args.prompt)
+        print(args.detector_choice, flush=True)
+    if args.detector == 'dfine':
+        try:
+            check_coco_prompts(args.prompt)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.detector == 'pet_fasterrcnn':
         args.detector_model = args.detector_model or DEFAULT_MODELS[args.detector]
         if not args.detector_model or not Path(args.detector_model).is_file():
@@ -132,6 +189,17 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
         parser.error('--batch_size must be >= 1')
     if args.max_frames is not None and args.max_frames < 1:
         parser.error('--max_frames must be >= 1')
+    for name, value in TRACKER_PRESETS[args.tracker].items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
+    args.reid_resolved = resolve_reid(args.reid)
+    for name in ('link_max_gap_s', 'interpolate_max_gap_s'):
+        if getattr(args, name) < 0:
+            parser.error(f'--{name} must be >= 0 (0 turns it off)')
+    if args.min_track_len < 1:
+        parser.error('--min_track_len must be >= 1')
+    if not 0 <= args.link_appearance_thresh <= 1:
+        parser.error('--link_appearance_thresh must be in [0, 1]')
     try:
         ByteTracker(**tracker_kwargs(args))
     except ValueError as exc:
@@ -139,14 +207,26 @@ def resolve_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
     return args
 
 
+def post_settings(args: argparse.Namespace):
+    """Offline post-processing, or None when every part is off (plain ByteTrack output)."""
+    from spatial.postprocess import LinkSettings, PostSettings
+    if args.link_max_gap_s == 0 and args.interpolate_max_gap_s == 0 and args.min_track_len == 1:
+        return None
+    return PostSettings(link=LinkSettings(max_gap_s=args.link_max_gap_s,
+                                          appearance_thresh=args.link_appearance_thresh,
+                                          class_agnostic=args.class_agnostic),
+                        interpolate_max_gap_s=args.interpolate_max_gap_s, min_track_len=args.min_track_len)
+
+
 def tracker_kwargs(args: argparse.Namespace) -> dict:
     return {'high_thresh': args.track_high_thresh, 'low_thresh': args.track_low_thresh,
             'new_track_thresh': args.new_track_thresh, 'match_thresh': args.match_thresh,
             'track_buffer': args.track_buffer, 'class_agnostic': args.class_agnostic,
-            'fuse_score': args.detector not in ZERO_SHOT_DETECTORS}
+            'fuse_score': args.detector not in ZERO_SHOT_DETECTORS,
+            'appearance_thresh': args.appearance_thresh, 'proximity_thresh': args.proximity_thresh}
 
 
-def save_track_args(args: argparse.Namespace, out: Path, detector: Detector) -> Path:
+def save_track_args(args: argparse.Namespace, out: Path, detector: Detector, embedder=None) -> Path:
     description = detector.describe() if detector is not None else None
     licence = LICENCES.get(args.detector_model, 'see the model card')
     if args.detector == 'pet_fasterrcnn' and description:
@@ -154,6 +234,7 @@ def save_track_args(args: argparse.Namespace, out: Path, detector: Detector) -> 
     record = {**vars(args), 'tracker_settings': tracker_kwargs(args),
               'detector_resolved': description,
               'detector_licence': licence,
+              'reid_resolved_model': embedder.describe() if embedder is not None else None,
               'created': datetime.now().isoformat(timespec='seconds'),
               'python': platform.python_version(), 'command': sys.argv}
     return sio.write_json(out / 'track_arguments.json', record)
@@ -169,11 +250,11 @@ def _video_out_dirs(videos: list[Path], out: Path) -> list[Path]:
     return dirs
 
 
-def main(argv=None, detector: Detector | None = None) -> dict:
+def main(argv=None, detector: Detector | None = None, embedder=None) -> dict:
     """Run the CLI and return ``{"results", "errors"}`` (errors: video -> message).
 
     ``detector`` lets callers (tests, notebooks) pass a ready detector instead of
-    loading ``--detector`` weights. Argument problems exit through ``parser.error``.
+    loading ``--detector`` weights; ``embedder`` likewise replaces the ``--reid`` model. Argument problems exit through ``parser.error``.
     Every video is opened first, so unreadable files are reported before any
     weights load; a folder run then continues past videos that fail. Use
     :func:`cli` for the process exit code.
@@ -210,13 +291,20 @@ def main(argv=None, detector: Detector | None = None) -> dict:
         if args.detector == 'grounding_dino':
             kw['text_threshold'] = args.text_threshold
         detector = build_detector(args.detector, args.detector_model, **kw)
-    save_track_args(args, out, detector)
+    if args.reid_resolved == 'none':
+        embedder = None
+    elif readable and embedder is None:
+        from spatial.reid import build_embedder
+        embedder = build_embedder(args.reid_resolved, device=args.device)
+    save_track_args(args, out, detector, embedder)
+    post = post_settings(args)
     results = {}
     for video, vdir in zip(readable, _video_out_dirs(readable, out)):
         try:
             results[str(video)] = track_video(video, args.prompt, detector, vdir, args.every_n_frames,
                                               args.max_frames, tracker_kwargs(args), args.save_video,
-                                              cross_label_nms=args.cross_label_nms)
+                                              cross_label_nms=args.cross_label_nms, embedder=embedder,
+                                              cmc=args.cmc, emit_birth=args.tracker == 'botsort', post=post)
         except Exception as exc:  # one bad file must not stop a folder run
             if args.video:
                 raise

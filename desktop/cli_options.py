@@ -629,6 +629,25 @@ TRACK_OPTIONS = (
     Opt('--cross_label_nms', OPT_FLOAT, 'Cross-prompt merge IoU', 'Merge overlapping boxes of different prompts above this IoU, '
         'e.g. 0.7 (default off).', None, (), T_MORE),
     Opt('--class_agnostic', BOOL, 'Match boxes across labels', 'Each track takes the majority label.', False, (), T_MORE),
+    Opt('--tracker', CHOICE, 'Tracker', 'botsort (default): follows camera motion and appearance, then joins broken '
+        'tracks, fills short gaps and drops one-off boxes. bytetrack: the plain tracker used before.', 'botsort',
+        ('botsort', 'bytetrack'), T_MORE),
+    Opt('--cmc', CHOICE, 'Camera-motion compensation', 'sparse: follow a moving or shaking camera; none: off '
+        '(blank: from Tracker).', None, ('sparse', 'none'), T_MORE),
+    Opt('--reid', CHOICE, 'Appearance (Re-ID)', 'cnn: ResNet-18 features (45 MB download once); color: colour histogram; '
+        'auto: cnn if already downloaded, else color (blank: from Tracker).', None, ('auto', 'cnn', 'color', 'none'), T_MORE),
+    Opt('--appearance_thresh', FLOAT, 'Appearance threshold', 'Largest look difference that may join a nearby box to a '
+        'track (default 0.25).', 0.25, (), T_MORE),
+    Opt('--proximity_thresh', FLOAT, 'Proximity threshold', 'Appearance only helps for boxes overlapping with IoU at '
+        'least 1 minus this (default 0.5).', 0.5, (), T_MORE),
+    Opt('--link_max_gap_s', OPT_FLOAT, 'Join broken tracks (seconds)', 'Join a track that ends to one that starts up to '
+        'this many seconds later; 0 turns it off (blank: from Tracker, botsort 3).', None, (), T_MORE),
+    Opt('--link_appearance_thresh', FLOAT, 'Join: appearance threshold', 'Largest look difference between the two '
+        'pieces (default 0.3).', 0.3, (), T_MORE),
+    Opt('--interpolate_max_gap_s', OPT_FLOAT, 'Fill gaps (seconds)', 'Fill holes inside a track up to this long; 0 turns '
+        'it off (blank: from Tracker, botsort 1).', None, (), T_MORE),
+    Opt('--min_track_len', OPT_INT, 'Minimum track length', 'Drop tracks seen on fewer frames than this; 1 keeps all '
+        '(blank: from Tracker, botsort 3).', None, (), T_MORE),
 )
 
 # ---------------------------------------------------------------------------------------------------------------------

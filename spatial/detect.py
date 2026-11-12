@@ -21,6 +21,15 @@ Backends
   ``IDEA-Research/grounding-dino-tiny`` (Apache-2.0).
 - ``owlv2``: OWLv2 (Minderer et al., NeurIPS 2023), default checkpoint
   ``google/owlv2-base-patch16-ensemble`` (Apache-2.0).
+- ``dfine``: D-FINE (Peng et al., ICLR 2025), a real-time closed-set detector for
+  the 80 COCO classes, default checkpoint ``ustc-community/dfine-large-obj2coco-e25``
+  (Apache-2.0; Objects365 pre-training, COCO fine-tuning; 57.1 COCO val box AP
+  reported by its authors). Prompts must name a COCO class (``person``, ``cat``,
+  ``car``...); common synonyms and plurals are mapped (``people`` -> person,
+  ``kittens`` -> cat). Much more accurate and faster than the open-vocabulary
+  models on those classes, but it cannot find anything else.
+- ``auto`` (track.py only) picks ``dfine`` when every prompt is a COCO class and
+  ``grounding_dino`` otherwise.
 
 Both run through Hugging Face ``transformers`` processors and their official
 post-processing (``post_process_grounded_object_detection``). torch and
@@ -57,7 +66,105 @@ DEFAULT_MODELS = {
     'pet_fasterrcnn': str(Path(__file__).resolve().parents[1] / 'saved_models' / 'cat-detector' / 'best.pt'),
     'grounding_dino': 'IDEA-Research/grounding-dino-tiny',
     'owlv2': 'google/owlv2-base-patch16-ensemble',
+    'dfine': 'ustc-community/dfine-large-obj2coco-e25',
 }
+
+# The 80 COCO detection classes, in the order of the D-FINE / RT-DETR config (id2label 0..79).
+COCO_CLASSES = (
+    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+    'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+    'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+    'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+    'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+    'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+    'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors',
+    'teddy bear', 'hair drier', 'toothbrush')
+COCO_SYNONYMS = {
+    'people': 'person', 'pedestrian': 'person', 'human': 'person', 'man': 'person', 'men': 'person',
+    'woman': 'person', 'women': 'person', 'child': 'person', 'children': 'person', 'kid': 'person',
+    'player': 'person', 'kitten': 'cat', 'kitty': 'cat', 'puppy': 'dog', 'bike': 'bicycle',
+    'motorbike': 'motorcycle', 'plane': 'airplane', 'aeroplane': 'airplane', 'sofa': 'couch',
+    'television': 'tv', 'tv monitor': 'tv', 'phone': 'cell phone', 'mobile phone': 'cell phone',
+    'cellphone': 'cell phone', 'ball': 'sports ball', 'table': 'dining table', 'plant': 'potted plant',
+    'doughnut': 'donut', 'hair dryer': 'hair drier', 'fridge': 'refrigerator', 'lorry': 'truck',
+    'cattle': 'cow', 'calf': 'cow', 'lamb': 'sheep', 'pony': 'horse', 'laptop computer': 'laptop',
+    'computer mouse': 'mouse', 'necktie': 'tie', 'remote control': 'remote', 'tv remote': 'remote',
+    'computer keyboard': 'keyboard', 'paper kite': 'kite',
+}
+# COCO names that usually mean something else in a tracking prompt (a lab mouse, the kite bird, a musical keyboard,
+# a tied score...). ``auto`` sends them to the open-vocabulary detector; the unambiguous synonyms above
+# (``computer mouse``, ``necktie``...) still reach D-FINE, and ``--detector dfine`` accepts the bare words.
+AMBIGUOUS_COCO_WORDS = frozenset({'mouse', 'tie', 'remote', 'kite', 'keyboard', 'orange'})
+
+
+def coco_class(prompt: str) -> str | None:
+    """The COCO class a prompt names (case, plural and common synonyms allowed), else None."""
+    p = ' '.join(str(prompt).lower().replace('-', ' ').replace('_', ' ').split())
+    candidates = [p]
+    if p.endswith('ies'):
+        candidates.append(p[:-3] + 'y')
+    if p.endswith('es'):
+        candidates.append(p[:-2])
+    if p.endswith('s'):
+        candidates.append(p[:-1])
+    for c in candidates:
+        if c in COCO_CLASSES:
+            return c
+        if c in COCO_SYNONYMS:
+            return COCO_SYNONYMS[c]
+    return None
+
+
+def check_coco_prompts(prompts: Sequence[str]) -> dict[str, str]:
+    """``{coco class: prompt}``; ``ValueError`` if a prompt is not a COCO class or two name the same one."""
+    out: dict[str, str] = {}
+    unknown = []
+    for p in prompts:
+        c = coco_class(p)
+        if c is None:
+            unknown.append(p)
+        elif c in out:
+            raise ValueError(f'prompts {out[c]!r} and {p!r} both mean the COCO class {c!r}; keep one')
+        else:
+            out[c] = p
+    if unknown:
+        raise ValueError(f'D-FINE knows only the 80 COCO classes; not one of them: {unknown}. '
+                         'Use --detector grounding_dino or owlv2 for other words.')
+    return out
+
+
+def _is_ambiguous(prompt: str) -> bool:
+    p = ' '.join(str(prompt).lower().replace('-', ' ').replace('_', ' ').split())
+    singular = {p, p[:-1] if p.endswith('s') else p, p[:-2] if p.endswith('es') else p}
+    return bool(singular & AMBIGUOUS_COCO_WORDS)
+
+
+def auto_detector(prompts: Sequence[str]) -> str:
+    """``dfine`` when every prompt is an unambiguous COCO class (and none repeats one), else ``grounding_dino``."""
+    if any(_is_ambiguous(p) for p in prompts):
+        return 'grounding_dino'
+    try:
+        check_coco_prompts(prompts)
+        return 'dfine'
+    except ValueError:
+        return 'grounding_dino'
+
+
+def describe_auto_choice(prompts: Sequence[str]) -> str:
+    """One line saying which detector ``auto`` picked for these prompts and why (printed and recorded by track.py)."""
+    if auto_detector(prompts) == 'dfine':
+        mapping = check_coco_prompts(prompts)
+        return 'auto -> dfine: ' + ', '.join(f'{p!r} = COCO {c!r}' for c, p in mapping.items())
+    ambiguous = [p for p in prompts if _is_ambiguous(p)]
+    if ambiguous:
+        return (f'auto -> grounding_dino: {ambiguous} could mean several things (D-FINE would read them as COCO '
+                f'{sorted({coco_class(p) for p in ambiguous} - {None})}); use --detector dfine to force that')
+    try:
+        check_coco_prompts(prompts)
+    except ValueError as exc:
+        return f'auto -> grounding_dino: {exc}'
+    return 'auto -> grounding_dino'
 
 # Score scales differ a lot between the two models (OWLv2 rarely exceeds 0.5),
 # so thresholds default per backend. The tracker's high/new-track thresholds are
@@ -66,11 +173,13 @@ DETECTOR_DEFAULTS = {
     'pet_fasterrcnn': {'box_threshold': 0.15, 'text_threshold': None},
     'grounding_dino': {'box_threshold': 0.2, 'text_threshold': 0.25},
     'owlv2': {'box_threshold': 0.1, 'text_threshold': None},
+    'dfine': {'box_threshold': 0.1, 'text_threshold': None},
 }
 
 LICENCES = {
     'IDEA-Research/grounding-dino-tiny': 'Apache-2.0',
     'google/owlv2-base-patch16-ensemble': 'Apache-2.0',
+    'ustc-community/dfine-large-obj2coco-e25': 'Apache-2.0',
 }
 
 
@@ -413,7 +522,50 @@ class Owlv2Detector(_HFDetector):
         return out
 
 
-BACKENDS = {'grounding_dino': GroundingDinoDetector, 'owlv2': Owlv2Detector}
+class DFineDetector(_HFDetector):
+    """D-FINE (closed-set, 80 COCO classes) through ``transformers``.
+
+    Boxes come from the processor's ``post_process_object_detection`` (top
+    queries over all classes, scores in [0, 1]); only the classes named by the
+    prompts are kept, each labelled with the user's prompt.
+    """
+
+    name = 'dfine'
+
+    @classmethod
+    def from_pretrained(cls, model_id: str = DEFAULT_MODELS['dfine'], **kw):
+        from transformers import AutoImageProcessor, AutoModelForObjectDetection
+        kw.pop('text_threshold', None)
+        processor = AutoImageProcessor.from_pretrained(model_id)
+        model = AutoModelForObjectDetection.from_pretrained(model_id)
+        return cls(model, processor, model_id=model_id, **kw)
+
+    def __init__(self, model, processor, device='auto', box_threshold: float = 0.1,
+                 batch_size: int = 4, nms_iou=0.5, model_id=None, text_threshold=None):
+        super().__init__(model, processor, device, box_threshold, batch_size, nms_iou, model_id)
+        self.id2label = {int(k): str(v) for k, v in model.config.id2label.items()}
+
+    def _detect_batch(self, frames, prompts, frame_indices):
+        import torch
+        wanted = check_coco_prompts(prompts)
+        inputs = self._to_device(self.processor(images=frames, return_tensors='pt'))
+        with torch.inference_mode():
+            outputs = self.model(**inputs)
+        sizes = [f.shape[:2] for f in frames]
+        results = self.processor.post_process_object_detection(outputs, threshold=self.box_threshold,
+                                                                target_sizes=sizes)
+        out = []
+        for res, (h, w) in zip(results, sizes):
+            names = [self.id2label.get(int(i), '') for i in res['labels'].cpu().tolist()]
+            keep = [i for i, n in enumerate(names) if n in wanted]
+            boxes = res['boxes'].detach().float().cpu().numpy()[keep]
+            scores = res['scores'].detach().float().cpu().numpy()[keep]
+            out.append(finalize_detections(boxes, scores, [wanted[names[i]] for i in keep], w, h,
+                                           nms_iou=self.nms_iou))
+        return out
+
+
+BACKENDS = {'grounding_dino': GroundingDinoDetector, 'owlv2': Owlv2Detector, 'dfine': DFineDetector}
 
 
 def build_detector(name: str, model_id: str | None = None, **kw) -> Detector:

@@ -53,18 +53,32 @@ Differences from the reference code (all deliberate):
 - Duplicate removal (tracked vs lost, IoU > 0.85) only compares tracks of the same
   label, unless ``class_agnostic``.
 
-Extension points (documented for S3 follow-ups):
+BoT-SORT additions (Aharon, Orfaig, Bobrovsky, "BoT-SORT: Robust Associations
+Multi-Pedestrian Tracking", arXiv:2206.14651, 2022; reference code MIT,
+github.com/NirAharon/BoT-SORT), re-implemented:
 
-- **BoT-SORT camera-motion compensation**: pass ``motion_compensator`` (a callable
-  ``frame -> 2x3 affine`` mapping the previous frame onto the current one) and
-  give :meth:`ByteTracker.update` the frame. The affine is applied to the
-  predicted Kalman states (centre and velocity) before association
-  (:func:`apply_affine_to_tracks`). A real ORB/ECC estimator is not built yet.
-- **Re-ID / appearance**: :meth:`ByteTracker._distance` is the single place that
-  builds the association cost; BoT-SORT adds an embedding distance there.
-- **SAM 2 mask tracking**: every :class:`TrackOutput` carries ``mask=None``; a mask
-  propagator can take each track's first box as a prompt (see tracks.csv) and fill
-  masks per frame without changing the tracker.
+- **Camera-motion compensation**: pass ``motion_compensator`` (a callable
+  ``frame -> 2x3 affine`` mapping the previous frame onto the current one; with
+  ``uses_boxes = True`` it is called as ``(frame, detection_boxes)``, see
+  :class:`spatial.cmc.SparseFlowCMC`) and give :meth:`ByteTracker.update` the frame.
+  The affine warps the predicted Kalman states (centre and velocity) before
+  association (:func:`apply_affine_to_tracks`).
+- **Appearance (Re-ID)**: give :meth:`ByteTracker.update` one embedding per
+  detection (``embeddings``, L2-normalised rows; see :mod:`spatial.reid`). Each
+  track keeps an exponential moving average (``feat = 0.9 feat + 0.1 new``). In the
+  first association and for unconfirmed tracks the cost is BoT-SORT's
+  ``min(iou_dist, emb_dist)``, where ``emb_dist = (1 - cos) / 2`` counts only when it
+  is at most ``appearance_thresh`` (0.25) *and* the boxes are close
+  (``1 - IoU <= proximity_thresh``, 0.5); otherwise it is 1. The low-score second
+  association stays IoU-only, as in BoT-SORT. Without embeddings the tracker is
+  exactly ByteTrack.
+- Kept from ByteTrack instead of BoT-SORT: the ``(cx, cy, a, h)`` Kalman state
+  (BoT-SORT uses ``(cx, cy, w, h)``).
+
+Every :class:`TrackOutput` also reports the step and box where the track was
+born (``start_step``, ``birth_box``), so offline users can emit the first
+observation that ByteTrack withholds until a track is confirmed. ``mask=None``
+is reserved for SAM 2 mask tracking.
 """
 from __future__ import annotations
 
@@ -207,6 +221,8 @@ class Track:
     def __init__(self, box_xyxy, score: float, label: str):
         self._det_box = np.asarray(box_xyxy, dtype=np.float64)
         self.score = float(score)
+        self.birth_score = float(score)
+        self.feat_alpha = 0.9
         self.label = label
         self.label_votes: Counter = Counter({label: 1})
         self.mean = None
@@ -218,6 +234,21 @@ class Track:
         self.start_frame = 0
         self.tracklet_len = 0
         self.kalman: KalmanFilter | None = None
+        self.feat: np.ndarray | None = None       # smoothed appearance (EMA), L2-normalised
+        self.curr_feat: np.ndarray | None = None  # embedding of the last matched detection
+
+    def set_feature(self, feat, alpha: float = 0.9) -> None:
+        """Absorb one detection embedding into the EMA appearance (BoT-SORT's update)."""
+        if feat is None:
+            return
+        feat = np.asarray(feat, dtype=np.float64).reshape(-1)
+        feat = feat / max(float(np.linalg.norm(feat)), 1e-12)
+        self.curr_feat = feat
+        if self.feat is None:
+            self.feat = feat
+        else:
+            smooth = alpha * self.feat + (1 - alpha) * feat
+            self.feat = smooth / max(float(np.linalg.norm(smooth)), 1e-12)
 
     @property
     def box(self) -> np.ndarray:
@@ -252,6 +283,7 @@ class Track:
         self.is_activated = True
         self.frame_id = frame_id
         self.score = det.score
+        self.set_feature(det.curr_feat, self.feat_alpha)
         self.label_votes[det.label] += 1
         if class_agnostic:
             self.label = self.label_votes.most_common(1)[0][0]
@@ -277,6 +309,10 @@ class TrackOutput:
     score: float
     label: str
     mask: object = None  # reserved for SAM 2 mask tracking (S2/S3)
+    start_step: int = 0  # tracker step (1-based) where the track was born
+    birth_box: tuple | None = None  # the detection box that started it
+    birth_score: float | None = None
+    feat: object = None  # embedding of the detection matched at this step (None without Re-ID)
 
 
 def apply_affine_to_tracks(tracks: Sequence[Track], affine) -> None:
@@ -320,13 +356,19 @@ class ByteTracker:
         never confirm: ``track.py`` turns it off for zero-shot detectors.
     class_agnostic: ignore labels when matching (label = majority vote).
     motion_compensator: optional ``frame -> 2x3 affine`` (see module docstring).
+    appearance_thresh: largest ``(1 - cos) / 2`` appearance distance that may lower a
+        cost (BoT-SORT 0.25). Only used when :meth:`update` gets embeddings.
+    proximity_thresh: appearance only counts for pairs with ``1 - IoU`` at most this
+        (BoT-SORT 0.5).
+    feat_alpha: EMA momentum of each track's appearance (BoT-SORT 0.9).
     """
 
     def __init__(self, high_thresh: float = 0.5, low_thresh: float = 0.1,
                  new_track_thresh: float | None = None, match_thresh: float = 0.8,
                  track_buffer: int = 30, frame_rate: float = 30.0, fuse_score: bool = True,
                  class_agnostic: bool = False,
-                 motion_compensator: Callable[[np.ndarray], np.ndarray] | None = None):
+                 motion_compensator: Callable[[np.ndarray], np.ndarray] | None = None,
+                 appearance_thresh: float = 0.25, proximity_thresh: float = 0.5, feat_alpha: float = 0.9):
         if not 0 <= low_thresh <= high_thresh <= 1:
             raise ValueError(f'need 0 <= low_thresh ({low_thresh}) <= high_thresh ({high_thresh}) <= 1')
         if new_track_thresh is not None and not 0 <= new_track_thresh <= 1:
@@ -337,6 +379,15 @@ class ByteTracker:
             raise ValueError(f'track_buffer must be >= 0, got {track_buffer}')
         if not frame_rate > 0:
             raise ValueError(f'frame_rate must be > 0, got {frame_rate}')
+        if not 0 <= appearance_thresh <= 1:
+            raise ValueError(f'appearance_thresh must be in [0, 1], got {appearance_thresh}')
+        if not 0 < proximity_thresh <= 1:
+            raise ValueError(f'proximity_thresh must be in (0, 1], got {proximity_thresh}')
+        if not 0 <= feat_alpha < 1:
+            raise ValueError(f'feat_alpha must be in [0, 1), got {feat_alpha}')
+        self.appearance_thresh = float(appearance_thresh)
+        self.proximity_thresh = float(proximity_thresh)
+        self.feat_alpha = float(feat_alpha)
         self.high_thresh = float(high_thresh)
         self.low_thresh = float(low_thresh)
         self.new_track_thresh = float(high_thresh + 0.1 if new_track_thresh is None else new_track_thresh)
@@ -356,26 +407,55 @@ class ByteTracker:
         self._next_id += 1
         return self._next_id
 
-    # The single place that builds association costs (BoT-SORT adds Re-ID here).
-    def _distance(self, tracks: Sequence[Track], dets: Sequence[Track], fuse: bool) -> np.ndarray:
+    # The single place that builds association costs.
+    def _distance(self, tracks: Sequence[Track], dets: Sequence[Track], fuse: bool,
+                  appearance: bool = False) -> np.ndarray:
         if not tracks or not dets:
             return np.zeros((len(tracks), len(dets)))
         iou = iou_matrix([t.box for t in tracks], [d.box for d in dets])
+        far = (1.0 - iou) > self.proximity_thresh
         if fuse:
             iou = iou * np.array([d.score for d in dets])[None, :]
         cost = 1.0 - iou
+        if appearance:
+            cost = np.minimum(cost, self._appearance_distance(tracks, dets, far))
         if not self.class_agnostic:
             same = np.array([[t.label == d.label for d in dets] for t in tracks])
             cost = np.where(same, cost, np.inf)
         return cost
 
-    def update(self, detections: Sequence, frame: np.ndarray | None = None) -> list[TrackOutput]:
-        """Advance one step. ``detections``: objects with ``box`` (xyxy), ``score``, ``label``."""
+    def _appearance_distance(self, tracks, dets, far) -> np.ndarray:
+        """BoT-SORT's gated embedding distance: ``(1 - cos) / 2``, or 1 when it is above
+        ``appearance_thresh``, when the boxes are far apart, or when a side has no embedding."""
+        emb = np.ones((len(tracks), len(dets)))
+        ti = [i for i, t in enumerate(tracks) if t.feat is not None]
+        di = [j for j, d in enumerate(dets) if d.curr_feat is not None]
+        if ti and di:
+            tf = np.stack([tracks[i].feat for i in ti])
+            df = np.stack([dets[j].curr_feat for j in di])
+            emb[np.ix_(ti, di)] = np.clip(1.0 - tf @ df.T, 0.0, 2.0) / 2.0
+        emb[emb > self.appearance_thresh] = 1.0
+        emb[far] = 1.0
+        return emb
+
+    def update(self, detections: Sequence, frame: np.ndarray | None = None,
+               embeddings: Sequence | None = None) -> list[TrackOutput]:
+        """Advance one step. ``detections``: objects with ``box`` (xyxy), ``score``, ``label``;
+        ``embeddings``: optional appearance vector per detection (enables BoT-SORT's fused cost)."""
         self.frame_id += 1
         fid = self.frame_id
         activated, refind, lost, removed = [], [], [], []
 
+        detections = list(detections)
+        if embeddings is not None and len(embeddings) != len(detections):
+            raise ValueError(f'got {len(embeddings)} embeddings for {len(detections)} detections')
+        use_app = embeddings is not None and len(detections) > 0
         dets = [Track(d.box, d.score, d.label) for d in detections]
+        for d in dets:
+            d.feat_alpha = self.feat_alpha
+        if use_app:
+            for d, e in zip(dets, embeddings):
+                d.set_feature(e)
         high = [d for d in dets if d.score >= self.high_thresh]
         low = [d for d in dets if self.low_thresh <= d.score < self.high_thresh]
 
@@ -387,10 +467,13 @@ class ByteTracker:
         for t in pool:
             t.predict()
         if self.motion_compensator is not None and frame is not None:
-            affine = self.motion_compensator(frame)
+            if getattr(self.motion_compensator, 'uses_boxes', False):
+                affine = self.motion_compensator(frame, [d.box for d in detections])
+            else:
+                affine = self.motion_compensator(frame)
             apply_affine_to_tracks(pool, affine)
             apply_affine_to_tracks(unconfirmed, affine)
-        cost = self._distance(pool, high, self.fuse_score)
+        cost = self._distance(pool, high, self.fuse_score, use_app)
         matches, u_track, u_det = linear_assignment(cost, self.match_thresh)
         for it, idet in matches:
             t, d = pool[it], high[idet]
@@ -417,7 +500,7 @@ class ByteTracker:
 
         # Unconfirmed tracks (seen once) vs remaining high detections.
         rest = [high[i] for i in u_det]
-        cost = self._distance(unconfirmed, rest, self.fuse_score)
+        cost = self._distance(unconfirmed, rest, self.fuse_score, use_app)
         matches, u_unconf, u_det = linear_assignment(cost, 0.7)
         for it, idet in matches:
             unconfirmed[it].update(rest[idet], fid, self.class_agnostic)
@@ -449,7 +532,9 @@ class ByteTracker:
         self.removed.extend(removed)
         self.tracked, self.lost = _remove_duplicates(self.tracked, self.lost, self.class_agnostic)
 
-        return [TrackOutput(t.track_id, tuple(float(v) for v in t.box), t.score, t.label)
+        return [TrackOutput(t.track_id, tuple(float(v) for v in t.box), t.score, t.label,
+                            start_step=t.start_frame, birth_box=tuple(float(v) for v in t._det_box),
+                            birth_score=t.birth_score, feat=t.curr_feat)
                 for t in self.tracked if t.is_activated]
 
 

@@ -771,25 +771,59 @@ python infer.py --modality video --checkpoint runs/.../trainval_output_*/model_w
 
 Choose the target before seeing test results. Trying several targets on one test set and keeping the best is model selection on test. Methods: the default `selective_risk` is Learn then Test risk control (Angelopoulos et al., arXiv 2110.01052) applied to per-group losses, not conformal prediction; `silent_error` is split conformal on one score per group, and no prediction sets are built, with realised coverage from Angelopoulos & Bates (arXiv 2107.07511). Classification only for now.
 
-## Detect and track objects in video (zero-shot)
+## Detect and track objects in video
 
 Describe what to find in words. No labels or training needed:
 
 ```bash
+python track.py --video street.mp4 --prompt person --prompt car --out runs/street --save_video
 python track.py --video lobsters.mp4 --prompt lobster --out runs/lobsters --save_video
 python track.py --video_dir clips/ --prompt lobster --prompt fish --detector owlv2 --out runs/clips
 ```
 
-An open-vocabulary detector finds each prompt in each frame:
-**Grounding DINO** (`IDEA-Research/grounding-dino-tiny`, the default) or
-**OWLv2** (`google/owlv2-base-patch16-ensemble`), both Apache-2.0 and loaded
-through 🤗 `transformers`. The weights download on first use (about 0.6–0.7 GB
-each). A re-implementation of **ByteTrack** (Zhang et al., ECCV 2022) then links
-the boxes into tracks. It uses a constant-velocity Kalman filter, a Hungarian
-(IoU) match of high-score boxes, and a second match of low-score boxes, which
-keeps objects that are briefly blurred or partly hidden. Each track gets a
-stable integer ID. A lost track keeps its ID if it comes back within
-`--track_buffer` steps.
+**Detectors** (`--detector`, all Apache-2.0, loaded through 🤗 `transformers`, downloaded on first use):
+
+| `--detector` | Model | Finds | Size |
+|---|---|---|---|
+| `auto` (default) | `dfine` when every prompt is a COCO class, else `grounding_dino` | | |
+| `dfine` | D-FINE-L, Objects365 → COCO (`ustc-community/dfine-large-obj2coco-e25`) | the 80 COCO classes: person, cat, dog, car, bus, bird, horse, chair, bottle... (plurals and words like *people*, *kitten* are understood) | 0.13 GB |
+| `grounding_dino` | Grounding DINO tiny (`IDEA-Research/grounding-dino-tiny`) | any words | 0.7 GB |
+| `owlv2` | OWLv2 base (`google/owlv2-base-patch16-ensemble`) | any words | 0.6 GB |
+| `pet_fasterrcnn` | your locally fine-tuned cat detector (`--detector_model best.pt`) | cat | local |
+
+D-FINE is a trained closed-set detector, so on its 80 classes it is far more
+accurate and faster than the open-vocabulary models (see the measured results
+below); for anything else (lobster, forklift, a logo) use Grounding DINO or OWLv2.
+
+**Tracker** (`--tracker botsort`, the default). A re-implementation of
+**ByteTrack** (Zhang et al., ECCV 2022) links boxes into tracks: a
+constant-velocity Kalman filter, a Hungarian match of high-score boxes and a
+second match of low-score boxes, which keeps objects that are briefly blurred or
+partly hidden. On top of it, from **BoT-SORT** (Aharon et al., 2022):
+
+- **Camera-motion compensation** (`--cmc sparse`): optical flow on the background
+  (detection boxes masked out) estimates how the camera moved, and every
+  predicted track moves with it, so a panning or shaking camera no longer breaks tracks.
+- **Appearance (Re-ID)** (`--reid auto|cnn|color|none`): each box gets an
+  appearance vector (ResNet-18 ImageNet features, or a colour histogram when
+  those weights are not downloaded); a nearby box that looks like the track wins
+  over a slightly better-overlapping box that does not.
+
+Then, because the whole video is processed before anything is written, an
+**offline pass** (`spatial/postprocess.py`) repairs what an online tracker cannot:
+
+- tracks seen on fewer than `--min_track_len` frames (default 3) are dropped as noise;
+- a track that ends and one that starts up to `--link_max_gap_s` seconds later
+  (default 3) are **joined** when the jump fits the motion, the sizes match, they
+  look alike, and the link is unambiguous (no other candidate either way). This
+  is what stops one cat that walks behind a chair from being counted twice;
+- holes inside a track up to `--interpolate_max_gap_s` seconds (default 1) are
+  filled with interpolated boxes, and each track's first box (which ByteTrack
+  only confirms one frame later) is written too.
+
+`--tracker bytetrack` gives the previous plain tracker; every part above can
+also be switched on or off on its own. All of it is in the desktop app under
+**Analyse video → More tracking options**.
 
 Each video gets its own folder (`<out>/<video name>/`):
 
@@ -798,18 +832,19 @@ Each video gets its own folder (`<out>/<video name>/`):
 | `detections.json` | every sampled frame: `box_xyxy` (pixels), `score`, `label` |
 | `tracks.csv` | MOTChallenge format, no header: `frame,id,x,y,w,h,score,class,-1,-1` (frame is 1-based; class is the 1-based prompt index) |
 | `track_labels.csv` | `track_id,class_id,label` |
-| `summary.json` | per prompt: `count` (number of unique tracks), first/last seen (seconds), and each track's frames, duration and number of observations |
+| `summary.json` | per prompt: `count` (number of unique tracks), first/last seen (seconds), and each track's frames, duration and number of observations; `tracking` records the tracker parts used and what the offline pass did (links, dropped tracks, filled boxes) |
 | `overlay.mp4` | with `--save_video`: the video with boxes and `label #id` drawn on it |
 
 `<out>/counts.csv` lists video, label and count, and `<out>/track_arguments.json`
-records every setting used.
+records every setting used (including what `auto` resolved to).
 
 Useful options:
-- `--box_threshold`: default 0.2 for Grounding DINO, 0.1 for OWLv2.
+- `--box_threshold`: default 0.1 for D-FINE and OWLv2, 0.2 for Grounding DINO.
 - `--text_threshold`: Grounding DINO only.
 - `--every_n_frames`: detect on every n-th frame only, which is faster.
 - `--batch_size`, `--device auto|cpu|cuda`.
-- `--track_high_thresh` / `--track_low_thresh` / `--new_track_thresh`, `--track_buffer`.
+- `--track_high_thresh` / `--track_low_thresh` / `--new_track_thresh`, `--track_buffer`,
+  `--appearance_thresh`, `--proximity_thresh`, `--link_appearance_thresh`.
 - `--class_agnostic`: let one track switch between prompts and take the majority label.
 - `--cross_label_nms 0.7`: when boxes of *different* prompts overlap (Grounding DINO
   often finds one object for both "lobster" and "crab"), keep only the best-scoring
@@ -819,17 +854,60 @@ Useful options:
 Run `python track.py --help` for the full list. Bad arguments stop the run before
 any video is read or weights load (exit code 2). The exit code is 1 when any video
 fails; failed videos are listed in `<out>/errors.json`. Prompts may contain dots
-("St. Bernard"). `scripts/smoke_track.py` runs both detectors with real weights on
+("St. Bernard"). `scripts/smoke_track.py` runs the detectors with real weights on
 a generated clip.
 
-**Accuracy depends on the prompt and the footage.** Short, concrete nouns work
-best ("lobster", not "the animal on the left"). Small, blurred or unusual
-objects may be missed or confused. Two same-label objects that stay hidden
-behind each other for a long time can come back with a new ID, because
-association uses box overlap and motion only, not appearance. These results
-have not been measured yet. Detection mAP and tracking HOTA / MOTA / IDF1
-arrive with the spatial metrics task (S4). Check `overlay.mp4` before you
-trust the counts.
+### Measured tracking accuracy (MOT17)
+
+`scripts/benchmark_mot17_botsort.py` scores the trackers with the official
+TrackEval on the labelled MOT17 training videos, using the public detections
+(so only the tracker differs). Design decisions used videos 02, 04 and 05;
+the numbers below are the four **held-out** videos (09, 10, 11, 13), with ResNet-18 appearance
+(`--reid cnn`; a fresh install's `auto` uses colour histograms until those weights are downloaded, which was
+not measured). Four videos and no confidence interval: 11 of the 12 video/detection pairs improve, and one
+early run did score all seven videos before the linking rule was final (details in the report):
+
+| Public detections | Tracker | HOTA | IDF1 | MOTA | ID switches |
+|---|---|---|---|---|---|
+| FRCNN | bytetrack (old default) | 46.2 | 53.1 | 51.9 | 483 |
+| FRCNN | **botsort** (new default) | **48.6** | **55.7** | **53.2** | **310** |
+| SDP | bytetrack | 50.1 | 59.7 | 61.5 | 460 |
+| SDP | **botsort** | **54.1** | **64.6** | **64.2** | **219** |
+| DPM | bytetrack | 30.3 | 38.5 | 31.7 | 186 |
+| DPM | **botsort** | **34.7** | **43.8** | **32.9** | **108** |
+
+End to end, with DeepTune's own detectors on the raw frames of the same four videos (prompt `person`,
+settings exactly as `track.py` resolves them; `scripts/benchmark_mot17_e2e.py`):
+
+| Detector | Tracker | HOTA | DetA | AssA | IDF1 | MOTA | ID switches | Detector frames/s |
+|---|---|---|---|---|---|---|---|---|
+| Grounding DINO tiny | bytetrack (old default) | 42.0 | 38.1 | 46.7 | 49.9 | 41.3 | 137 | 3.3 |
+| Grounding DINO tiny | botsort | 43.3 | 39.6 | 47.5 | 50.6 | 40.9 | 79 | 3.3 |
+| OWLv2 base | bytetrack | 39.0 | 39.0 | 39.4 | 48.1 | 37.2 | 317 | 2.0 |
+| OWLv2 base | botsort | 41.1 | 39.5 | 43.1 | 49.6 | 31.8 | 203 | 2.0 |
+| D-FINE-L | bytetrack | 44.5 | 44.2 | 45.5 | 54.0 | 46.6 | 221 | 20.8 |
+| D-FINE-L | botsort (**new default**) | **46.5** | 45.3 | 48.2 | **56.2** | 46.5 | 179 | 20.8 |
+
+The detector matters most: D-FINE alone lifts DetA by about 6 points and runs 6x faster (RTX 5060 laptop GPU,
+batch 4; each detector with its own `track.py` defaults, not matched settings). BoT-SORT raises
+HOTA and IDF1 with every detector but not MOTA, because filling gaps also extends false tracks (most with
+OWLv2); with a noisy detector raise `--box_threshold`.
+
+Camera-motion compensation and interpolation give most of the gain; the
+full per-part ablation, the development-set decisions and the end-to-end
+detector comparison are in
+[docs/video-plan/reports/S3-botsort.md](docs/video-plan/reports/S3-botsort.md).
+On the two cat videos used earlier (no labels, so this is an observation, not a
+measurement), the old setup (trained cat detector + ByteTrack) split the one cat
+into 3 IDs in each video; `--detector auto` (D-FINE) + `botsort` tracks it as
+one ID on every frame of both.
+
+**Limits.** MOT17 is pedestrians filmed by street cameras; other objects and
+footage can behave differently. Two lookalike objects that cross while both are
+hidden can still swap IDs, and an object gone for longer than
+`--link_max_gap_s` comes back with a new ID. In crowds the joining step
+deliberately does nothing (it cannot tell who is who), so counts in crowds are
+upper bounds. Check `overlay.mp4` before you trust a count.
 
 ## Documentation
 
@@ -840,7 +918,7 @@ This software package was developed as part of work done at Medical Imaging Bioi
 
 Thanks to Xuchen for providing their parameter-efficient fine-tuned Swin implementation [SwinTransformerWithPEFT](https://github.com/XuchenGuo/SwinTransformerWithPEFT)
 
-Video tracking (`spatial/track.py`) re-implements ByteTrack (Zhang et al., "ByteTrack: Multi-Object Tracking by Associating Every Detection Box", ECCV 2022; reference code MIT). Zero-shot detection uses Grounding DINO (Liu et al., ECCV 2024) and OWLv2 (Minderer et al., NeurIPS 2023) through Hugging Face `transformers` (Apache-2.0 checkpoints).
+Video tracking (`spatial/track.py`) re-implements ByteTrack (Zhang et al., "ByteTrack: Multi-Object Tracking by Associating Every Detection Box", ECCV 2022; reference code MIT) and BoT-SORT's camera-motion compensation and fused appearance cost (Aharon, Orfaig and Bobrovsky, "BoT-SORT: Robust Associations Multi-Pedestrian Tracking", arXiv:2206.14651, 2022; reference code MIT); the offline linking follows the tracklet-association idea of StrongSORT's AFLink (Du et al., IEEE TMM 2023) with hand-written gates. Detection uses D-FINE (Peng et al., ICLR 2025), Grounding DINO (Liu et al., ECCV 2024) and OWLv2 (Minderer et al., NeurIPS 2023) through Hugging Face `transformers` (Apache-2.0 checkpoints); appearance features use torchvision's ImageNet ResNet-18 (BSD-3-Clause). MOT17 (Milan et al., 2016) and TrackEval (Luiten et al., MIT) are used for evaluation only.
 
 ## Citation
 
