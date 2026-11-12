@@ -9,8 +9,8 @@ Branch `video/C1-timeline-analysis`, from `video-analysis` @ 2fd72a4. Built over
 |---|---|---|
 | Timeline | `analysis/timeline.py` | Windows over a video of any length (`make_windows`; the last one ends at the video's end); running-median smoothing per class (`median_smooth`); each window owns the time nearest its centre, so segments partition the video (`owned_intervals`); argmax labels, merging equal neighbours, absorbing segments shorter than `min_segment_sec` into the longer neighbour, dropping background labels (`segments_from_timeline`); optional skipping of still windows from the motion curve (`static_windows`, SCSampler-style); `timeline.csv` / `segments.json` per video, `segments.csv` + `timeline_run.json` for a batch; mAP and boundary error with `evaluators/video/localization_report.py` when ground truth is given. Torch-free; the scorer is injected. |
 | CLI | `infer.py --timeline` | `--window_sec`, `--stride_sec`, `--smooth_windows`, `--min_segment_sec`, `--background_label`, `--min_confidence`, `--skip_static`, `--timeline_motion`, `--ground_truth`. Windows are DataFrame rows with `start_sec`/`end_sec`, scored by `predict_video`, so the run's recorded sampling, frame count, preprocessing, test clips and crops apply unchanged. All flags are checked before any model or video loads (exit 2); timeline flags without `--timeline` are refused. |
-| Segment-level training labels | `handlers/video_manifest.py` | A manifest may now list one file on several rows when each row is a distinct `start_sec`/`end_sec` range and all rows of a file share one `group` (so a video never spans two splits). Before, any repeated file was refused, which made Part A item 4 impossible. The old refusal still applies without ranges (its test is unchanged). |
-| Unsupervised | `analysis/unsupervised.py`, `analyse_embeddings.py` | PCA (explained variance, components for 90%), LDA when labelled, K-Means sweep (k-means++, restarts; inertia elbow + silhouette, suggested k = best silhouette), agglomerative clustering (ward/average/complete/single) with the SciPy linkage matrix, ARI/NMI against labels, and a small MLP autoencoder for anomaly scores with a threshold at the `1 - target_fpr` quantile of held-out validation scores; known outliers (`--outlier_label`) are never used for fitting and give AUC. CSV/JSON + PNG plots. |
+| Segment-level training labels | `handlers/video_manifest.py`, `handlers/split_dataset.py` | A manifest may now list one file on several rows when each row has its own finite `start_sec` < `end_sec` range and all rows of a file share one `group`. Before, any repeated file was refused, which made Part A item 4 impossible. The old refusal still applies without ranges (its test is unchanged). Every split path (train/val/test, `--cv_only`, `--test_df`) refuses repeated video files with no grouper, or whose clips have different values of the grouper in use (e.g. `--grouper actor`), and the group-split check also asserts no video file is in two splits (review V-061). |
+| Unsupervised | `analysis/unsupervised.py`, `analyse_embeddings.py` | PCA (explained variance, components for 90%), LDA when labelled, K-Means sweep (k-means++, restarts; inertia elbow + silhouette, suggested k = best silhouette), agglomerative clustering (ward/average/complete/single) with the SciPy linkage matrix, ARI/NMI against labels, and a small MLP autoencoder for anomaly scores with a threshold at the `1 - target_fpr` quantile of held-out validation scores; known outliers (`--outlier_label`) are never used for fitting and give AUC. Roles are drawn by whole `--group_column` groups (default `group` when present), and the test false-alarm rate comes with a Clopper-Pearson interval. CSV/JSON + PNG plots. |
 | GUI | `desktop/cli_options.py`, `config.py`, `tools.py`, `tool_pages.py`, `app.py` | Test page: a **Timeline** section (every flag), the same checks as `infer.py`, and a results view (segments table, mAP/boundary error, per-video windows). Features & probes page: card **3. Cluster clips and find unusual ones** (every `analyse_embeddings.py` flag), results listing the most unusual clips first. The packaged app runs it through its tool worker. The GUI still imports no torch. |
 | Experiment | `scripts/timeline_untrimmed.py` | Phase 2 untrimmed task end to end: training windows cut from the training videos only, `deeptune.py` training, `infer.py --timeline` on held-out videos, compared with a random control and a pixel oracle; skip-static; clustering of the run's test embeddings. |
 
@@ -44,21 +44,37 @@ with a pixel-reading scorer) check the segmentation itself.
 ### Clustering real clip embeddings: UCF101 split 1, r3d_18
 
 `analyse_embeddings.py` on the 3,783 test clips of the existing `ucf101-campaign03/r3d18_frozen/split1/seed42`
-run (256-dimensional embeddings, 101 classes), k from 90 to 110, 4 restarts:
+run, k from 90 to 110, 4 restarts, seed 0, fit/val/test roles drawn by UCF101 `group` (actor + scene; 707
+groups, none in two roles). Command:
+
+    python analyse_embeddings.py --embeddings <run>/embed_output_r3d_18_20261104_1824/r3d_18_cls_embeddings.parquet \
+        --out D:/DeepTuneBenchmarks/results/c1-unsupervised-ucf101-r3d18-groups --k_min 90 --k_max 110 --n_init 4 --seed 0
+
+**What the embedding is.** The 256 numbers per clip are the output of the first layer DeepTune added on top of a
+frozen Kinetics-400 r3d_18, and that layer was **trained on UCF101 split-1 training labels** (2 added layers,
+157,285 trainable parameters). So only the clustering step uses no labels; the features were shaped by the same
+101 classes the clusters are compared with. This measures how class-structured a trained embedding is, not
+label-free discovery.
 
 | | Value |
 |---|---|
-| PCA: variance in the first two components | 16.7% (44 components for 90%) |
-| K-Means: suggested k (silhouette) / elbow | 109 / 108 (the true number of classes is 101) |
-| K-Means vs labels: ARI / NMI | 0.536 / 0.821 |
-| Ward hierarchical (k = 109) vs labels: ARI / NMI | 0.586 / 0.852 |
+| PCA: variance in the first two components | 16.6% |
+| K-Means vs labels (k = 99): ARI / NMI | 0.536 / 0.819 |
+| Ward hierarchical (k = 99) vs labels: ARI / NMI | 0.581 / 0.851 |
+| Chance level (random cluster labels, k = 99, 20 draws): ARI / NMI | 0.000 / 0.259 |
 | LDA training accuracy (fitted and scored on the same clips: an upper bound, not a held-out accuracy) | 0.983 |
-| Autoencoder: false alarms on unseen test clips at a 5% target | 4.5% (34 of 756) |
+| Autoencoder: false alarms on clips of unseen groups at a 5% target | 5.5% (43 of 775; 95% Clopper-Pearson 4.0-7.4%; one seed) |
 
-The clusters recover much of the class structure without labels (NMI 0.82 to 0.85); the anomaly threshold,
-set on validation clips, keeps its false-alarm rate on unseen clips. No outliers are known in UCF101, so
-there is no detection rate here; on synthetic data with injected outliers the tests require AUC >= 0.95.
-Outputs: `D:/DeepTuneBenchmarks/results/c1-unsupervised-ucf101-r3d18/`.
+**The suggested k is not a finding.** The k range 90-110 was chosen knowing there are 101 classes, and the
+silhouette is flat across it (0.131-0.143): the suggested k was 109 in a first run with random row roles and 99
+here, where only the rows used to standardise changed. Read the ARI/NMI as "at a k near the number of classes".
+
+**False alarms.** The threshold is the 95% quantile of the validation groups' scores; on clips of groups the
+autoencoder never saw it flags 5.5%, within sampling error of the 5% target. A first run that drew roles per clip
+(so 98.7% of test clips shared a group with fitted clips) gave 4.5% (34/756); that number described new clips of
+seen actors and scenes, so it is replaced. No outliers are known in UCF101, so there is no detection rate here; on
+synthetic data with injected outliers the tests require AUC >= 0.95. Outputs:
+`D:/DeepTuneBenchmarks/results/c1-unsupervised-ucf101-r3d18-groups/`.
 
 ## Tests
 

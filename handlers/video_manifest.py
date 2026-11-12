@@ -38,7 +38,14 @@ def _check_repeated_videos(frame: pd.DataFrame, keys: list) -> None:
     if 'start_sec' not in frame or 'end_sec' not in frame:
         raise ValueError('The same video appears more than once. Remove duplicates before training, or give each row '
                          'its own start_sec/end_sec range (and a group column) to cut several clips from one video.')
-    ranges = list(zip(keys, pd.to_numeric(frame['start_sec'], errors='coerce'), pd.to_numeric(frame['end_sec'], errors='coerce')))
+    start = pd.to_numeric(frame['start_sec'], errors='coerce')
+    end = pd.to_numeric(frame['end_sec'], errors='coerce')
+    repeated = pd.Series(keys).duplicated(keep=False).to_numpy()
+    no_range = repeated & ~(start.notna() & end.notna() & (start < end)).to_numpy()
+    if no_range.any():  # a blank range is the whole video, and NaN never equals NaN, so the set below would miss it
+        raise ValueError(f'Video list row {int(no_range.argmax()) + 1}: a video that appears on several rows needs a '
+                         'start_sec and end_sec on every row (start before end).')
+    ranges = list(zip(keys, start, end))
     if len(set(ranges)) != len(ranges):
         raise ValueError('The same video appears more than once with the same start_sec/end_sec. Remove duplicates before training.')
     if 'group' not in frame or frame['group'].isna().any():

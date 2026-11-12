@@ -178,3 +178,43 @@ def test_load_embeddings_rejects_non_finite_values(tmp_path):
     frame.to_csv(path, index=False)
     with pytest.raises(ValueError, match='NaN'):
         load_embeddings(path)
+
+
+def test_roles_by_group_never_put_one_group_in_two_roles():
+    groups = np.repeat([f'g{i}' for i in range(20)], 5)             # 20 source videos x 5 clips
+    exclude = np.zeros(100, bool)
+    exclude[7] = True                                               # one known outlier inside group g1
+    roles = assign_roles(100, 0.6, 0.2, seed=1, exclude=exclude, groups=groups)
+    per_group = pd.DataFrame({'g': groups, 'r': roles}).groupby('g')['r'].nunique()
+    assert (per_group == 1).all()
+    assert (roles[groups == 'g1'] == 'test').all()                 # the outlier's whole group stays out of fitting
+    # fractions apply to the 19 groups without an outlier
+    assert (roles == 'fit').sum() == 5 * round(0.6 * 19) and (roles == 'val').sum() == 5 * round(0.2 * 19)
+    with pytest.raises(ValueError):
+        assign_roles(100, groups=groups[:50])
+
+
+def test_cli_keeps_groups_together_and_reports_the_false_alarm_interval(tmp_path):
+    X, y = blobs(k=3, per=40, dim=8, seed=2)
+    frame = pd.DataFrame(X)
+    frame.columns = [str(c) for c in frame.columns]
+    frame['label'] = y
+    frame['group'] = [f'v{i // 4}' for i in range(len(frame))]
+    path = tmp_path / 'emb.parquet'
+    frame.to_parquet(path, index=False)
+    out = tmp_path / 'out'
+    assert main(['--embeddings', str(path), '--out', str(out), '--k_max', '4', '--ae_epochs', '20', '--no_plots']) == 0
+    anomaly = json.loads((out / 'summary.json').read_text())['anomaly']
+    assert anomaly['role_unit'] == 'group' and anomaly['group_column'] == 'group'
+    k, m = anomaly['test_false_positives']
+    lo, hi = anomaly['test_false_positive_rate_ci95']
+    assert anomaly['test_false_positive_rate'] == pytest.approx(k / m) and 0 <= lo <= k / m <= hi <= 1
+    clusters = pd.read_csv(out / 'clusters.csv')
+    assert (clusters.groupby('group')['role'].nunique() == 1).all()
+    # '' turns grouping off; an unknown column is a usage error
+    assert main(['--embeddings', str(path), '--out', str(tmp_path / 'o2'), '--k_max', '3', '--ae_epochs', '5',
+                 '--no_plots', '--group_column', '']) == 0
+    assert json.loads((tmp_path / 'o2' / 'summary.json').read_text())['anomaly']['role_unit'] == 'row'
+    with pytest.raises(SystemExit) as exc:
+        main(['--embeddings', str(path), '--out', str(tmp_path / 'o3'), '--group_column', 'actor'])
+    assert exc.value.code == 2

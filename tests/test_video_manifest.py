@@ -49,6 +49,9 @@ def test_one_video_may_give_several_clips_as_time_ranges_of_one_group(tmp_path):
     ({'group': None}, 'need a group column'),
     ({'group': ['a', 'b']}, 'share one group'),
     ({'start_sec': None, 'end_sec': None}, 'more than once'),
+    ({'start_sec': [float('nan')] * 2, 'end_sec': [float('nan')] * 2}, 'needs a start_sec and end_sec'),  # blank = whole video
+    ({'start_sec': [0.0, float('nan')], 'end_sec': [2.0, float('nan')]}, 'needs a start_sec and end_sec'),
+    ({'start_sec': [0.0, 4.0], 'end_sec': [2.0, 3.0]}, 'start before end'),
 ])
 def test_repeated_videos_must_be_distinct_ranges_of_one_group(tmp_path, change, message):
     (tmp_path / 'long.mp4').write_bytes(b'clip')

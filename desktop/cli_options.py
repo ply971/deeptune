@@ -696,6 +696,9 @@ EMBEDDING_ANALYSIS_OPTIONS = (
         'autoencoder; used to report AUC and detection rate.', ()),
     Opt('--role_column', TEXT, 'Fit/val/test column', "A column saying fit, val or test per row ('train' = fit). "
         'Blank: a random 60/20/20 split.'),
+    Opt('--group_column', TEXT, 'Keep groups together', "Rows sharing a value in this column (e.g. the source video) "
+        "always share one role, so false alarms are measured on unseen groups. Default 'group' (used when the table "
+        "has it); blank for single rows.", 'group'),
     Opt('--ae_epochs', INT, 'Autoencoder epochs', '', 200),
     Opt('--ae_bottleneck', INT, 'Autoencoder bottleneck', '', 8),
     Opt('--ae_hidden', INT, 'Autoencoder hidden units', '', 64),

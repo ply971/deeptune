@@ -240,18 +240,37 @@ def auroc(scores: np.ndarray, positive: np.ndarray) -> Optional[float]:
     return float(roc_auc_score(positive, scores))
 
 
+def _clopper_pearson(k: int, n: int, alpha: float = 0.05) -> list:
+    """Exact two-sided binomial confidence interval for k successes in n trials."""
+    from scipy.stats import beta
+    lo = 0.0 if k == 0 else float(beta.ppf(alpha / 2, k, n - k + 1))
+    hi = 1.0 if k == n else float(beta.ppf(1 - alpha / 2, k + 1, n - k))
+    return [round(lo, 6), round(hi, 6)]
+
+
 def assign_roles(n: int, fit_fraction: float = 0.6, val_fraction: float = 0.2, seed: int = 0,
-                 exclude: Optional[np.ndarray] = None) -> np.ndarray:
-    """'fit' / 'val' / 'test' per row, at random; rows in ``exclude`` (known outliers) are always 'test'."""
+                 exclude: Optional[np.ndarray] = None, groups: Optional[Sequence] = None) -> np.ndarray:
+    """'fit' / 'val' / 'test' per row, at random; rows in ``exclude`` (known outliers) are always 'test'.
+
+    With ``groups`` (e.g. the source video, or UCF101's actor/scene group) whole groups are drawn, so no group has rows
+    in two roles: the threshold and the test false-alarm rate then describe new groups, not new clips of seen ones.
+    The fractions apply to groups. A group holding a known outlier goes to 'test' entirely."""
     if not (0 < fit_fraction < 1 and 0 < val_fraction < 1 and fit_fraction + val_fraction < 1 + 1e-9):
         raise ValueError('fit and val fractions must be in (0, 1) and sum to at most 1')
     roles = np.array(['test'] * n, dtype=object)
-    pool = np.flatnonzero(~exclude) if exclude is not None else np.arange(n)
+    exclude = np.zeros(n, bool) if exclude is None else np.asarray(exclude, bool)
+    if groups is None:
+        units = np.arange(n)
+    else:
+        if len(groups) != n:
+            raise ValueError('groups must have one value per row')
+        units = pd.factorize(pd.Series(list(groups)).astype(str))[0]
+    pool = np.array(sorted(set(units.tolist()) - set(units[exclude].tolist())))
     order = np.random.default_rng(seed).permutation(pool)
     n_fit = int(round(fit_fraction * len(order)))
     n_val = int(round(val_fraction * len(order)))
-    roles[order[:n_fit]] = 'fit'
-    roles[order[n_fit:n_fit + n_val]] = 'val'
+    roles[np.isin(units, order[:n_fit])] = 'fit'
+    roles[np.isin(units, order[n_fit:n_fit + n_val])] = 'val'
     return roles
 
 
@@ -270,21 +289,24 @@ class AnalysisSettings:
     val_fraction: float = 0.2
     outlier_labels: Sequence[str] = ()
     role_column: Optional[str] = None
+    group_column: Optional[str] = None
     seed: int = 0
     plots: bool = True
     autoencoder: AutoencoderSettings = field(default_factory=AutoencoderSettings)
 
 
 def analyse(X: np.ndarray, labels: Optional[np.ndarray], out_dir, settings: AnalysisSettings = AnalysisSettings(),
-            roles: Optional[np.ndarray] = None, extra: Optional[pd.DataFrame] = None) -> dict:
+            roles: Optional[np.ndarray] = None, extra: Optional[pd.DataFrame] = None,
+            groups: Optional[np.ndarray] = None) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     n = len(X)
     if n < 4:
         raise ValueError('Unsupervised analysis needs at least 4 rows.')
     outlier = np.isin(labels, list(settings.outlier_labels)) if labels is not None and settings.outlier_labels else np.zeros(n, bool)
+    role_unit = 'given' if roles is not None else ('group' if groups is not None else 'row')
     if roles is None:
-        roles = assign_roles(n, settings.fit_fraction, settings.val_fraction, settings.seed, outlier)
+        roles = assign_roles(n, settings.fit_fraction, settings.val_fraction, settings.seed, outlier, groups)
     roles = np.asarray(roles, dtype=object)
     if not set(roles) <= {'fit', 'val', 'test'}:
         raise ValueError("roles must be 'fit', 'val' or 'test'")
@@ -330,12 +352,16 @@ def analyse(X: np.ndarray, labels: Optional[np.ndarray], out_dir, settings: Anal
     threshold = fpr_threshold(score[roles == 'val'], settings.target_fpr)
     flagged = score > threshold
     anomaly = {'target_fpr': settings.target_fpr, 'threshold': threshold, 'flagged': int(flagged.sum()),
+               'role_unit': role_unit, 'group_column': settings.group_column if role_unit == 'group' else None,
                'fit_rows': int((roles == 'fit').sum()), 'val_rows': int((roles == 'val').sum()),
                'test_rows': int((roles == 'test').sum()), 'final_training_loss': round(model.losses[-1], 6)}
     test = roles == 'test'
     normal_test = test & ~outlier
     if normal_test.any():
-        anomaly['test_false_positive_rate'] = float(flagged[normal_test].mean())
+        k, m = int(flagged[normal_test].sum()), int(normal_test.sum())
+        anomaly['test_false_positive_rate'] = k / m
+        anomaly['test_false_positives'] = [k, m]
+        anomaly['test_false_positive_rate_ci95'] = _clopper_pearson(k, m)
     if outlier.any():
         anomaly['outlier_labels'] = list(settings.outlier_labels)
         anomaly['detection_rate'] = float(flagged[outlier].mean())
@@ -446,6 +472,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help='Labels of known outliers: never used to fit, scored for AUC (e.g. --outlier_label noise blank).')
     p.add_argument('--role_column', default=None,
                    help="Column saying fit/val/test per row (else: random 60/20/20 split; 'train' counts as fit).")
+    p.add_argument('--group_column', default='group',
+                   help="Rows sharing a value here (e.g. the source video) always get the same fit/val/test role, so the "
+                        "false-alarm rate is measured on unseen groups (default 'group' when the table has it; '' for "
+                        'single rows).')
     p.add_argument('--ae_epochs', type=int, default=200)
     p.add_argument('--ae_bottleneck', type=int, default=8)
     p.add_argument('--ae_hidden', type=int, default=64)
@@ -476,12 +506,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.role_column not in rest.columns:
             parser.error(f'--role_column {args.role_column} is not a column of the table.')
         roles = rest[args.role_column].astype(str).str.lower().replace({'train': 'fit', 'validation': 'val'}).to_numpy()
+    groups, group_column = None, None
+    if args.group_column and roles is None:
+        if args.group_column in rest.columns:
+            if rest[args.group_column].isna().any():
+                parser.error(f'--group_column {args.group_column} has missing values.')
+            groups, group_column = rest[args.group_column].to_numpy(), args.group_column
+        elif args.group_column != 'group':
+            parser.error(f'--group_column {args.group_column} is not a column of the table.')
     settings = AnalysisSettings(ks=tuple(range(args.k_min, args.k_max + 1)), n_init=args.n_init, linkage=args.linkage,
                                 pca_components=args.pca_components, target_fpr=args.target_fpr,
                                 outlier_labels=tuple(args.outlier_label), seed=args.seed, plots=not args.no_plots,
+                                group_column=group_column,
                                 autoencoder=AutoencoderSettings(hidden=args.ae_hidden, bottleneck=args.ae_bottleneck,
                                                                 epochs=args.ae_epochs, seed=args.seed))
-    summary = analyse(X, labels, args.out, settings, roles=roles, extra=rest)
+    summary = analyse(X, labels, args.out, settings, roles=roles, extra=rest, groups=groups)
     summary['embeddings'] = str(args.embeddings)
     summary['arguments'] = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
     (args.out / 'summary.json').write_text(json.dumps(summary, indent=2, default=float), encoding='utf-8')

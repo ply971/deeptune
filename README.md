@@ -801,7 +801,8 @@ python infer.py --modality video --checkpoint runs/.../trainval_output_*/model_w
   with `evaluators/video/localization_report.py`.
 - **Training on parts of long videos.** A manifest row may name a time range with `start_sec` and
   `end_sec`, so one long video can give several labelled clips. Rows cut from the same file must share one
-  `group` (for example the video name), so the whole video stays in one split.
+  `group` (for example the video name), so the whole video stays in one split. Every split refuses a repeated
+  video file with no group column, or one whose clips have different values of the column it groups by.
 
 `scripts/timeline_untrimmed.py` runs the whole thing on the synthetic untrimmed task (Phase 2): it trains on
 window clips cut from the training videos, runs the timeline on held-out videos and compares the model with a
@@ -823,9 +824,14 @@ python analyse_embeddings.py --embeddings runs/.../embed_output_x/x_cls_embeddin
   silhouette; the best silhouette is the suggested k. **Hierarchical** clustering (`--linkage` ward, average,
   complete or single) at that k, with the dendrogram. With labels, ARI and NMI say how well the clusters match them.
 - **Unusual clips.** A small autoencoder is fitted on 60% of the rows (or a `--role_column` of fit/val/test);
-  a clip's anomaly score is its reconstruction error; the threshold lets about `--target_fpr` of the
-  validation clips through. Labels given in `--outlier_label` are never used for fitting and are scored
-  (AUC, detection rate).
+  a clip's anomaly score is its reconstruction error; the threshold flags about `--target_fpr` of the
+  validation clips. Rows sharing a `--group_column` value (default `group`, e.g. the source video) always
+  share a role, so the reported false-alarm rate (with a 95% interval) is on unseen groups. Labels given in
+  `--outlier_label` are never used for fitting and are scored (AUC, detection rate).
+- **Read the clusters against chance and against how the features were made.** Embeddings from a fine-tuned
+  head were trained with the labels, so high ARI/NMI there is not label-free discovery; random clusters
+  already score NMI around 0.26 with 100 classes. A silhouette that is flat across the k range does not
+  estimate the number of classes.
 - Outputs: `summary.json`, `clusters.csv` (cluster, PCA coordinates, anomaly score per clip), `anomaly.csv`,
   `kmeans_sweep.csv`, `linkage.npy` and PNG plots. In the desktop app: **Features & probes → 3. Cluster clips
   and find unusual ones**.
