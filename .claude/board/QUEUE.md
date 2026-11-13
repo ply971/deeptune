@@ -262,3 +262,12 @@ Update: A1 fix round done (3ec722c, 97202c1, c7c5b02; V-025) → the Critic is r
 - Controller remains active in session 70144, supervisor PID 49416; first launcher child 39160, training worker 53608. D:/DeepTuneBenchmarks/results/ucf101-campaign03/status.json is the live state. Completed full-test jobs: 0/333 at this check; no full UCF101 accuracy is available yet. Do not describe the campaign as complete.
 - Main checks: 2192 passed, 5 skipped, 99 warnings in 2935.94s (0:48:55); benchmark-branch checks: 2094 passed, 5 skipped, 98 warnings in 2477.00s (0:41:17). Both ran CPU-only; existing tests unchanged. Runner preflight and hashed exit-receipt checks pass.
 - Background continuation remains authorised. Preserve the source-pinned benchmark worktree and all experiment checkpoints; no duplicate GPU queue or full CPU run. The whole campaign may take many days and is guarded against low disk/RAM. Next action is to read status.json / results-summary.json and active run.log, then report completed official-test metrics as they become available. Demos and Wave 3 are deferred behind this explicit user priority.
+
+### 2026-11-05 - UCF101 campaign03 paused by the user; supervisor requests (Claude Code)
+- Supervisor email (2026-11-04): (1) the DenseNet-style embedding layer on every video learner; (2) UCF101 as a test of --grouper.
+- Done on branch video/embed-layers (worktree .claude/wt/embed-layers, commits 7fdc2f4, 7b5015c; not merged): late_fusion,
+  V-JEPA 2/VideoMAE probes and train_feature_head.py probes get the --embed_size layer; infer.py rebuilds the head from the record;
+  grouped-vs-random validation study. Targeted tests pass; the full suite is still owed (first attempt killed for low memory).
+- User stopped the idle campaign03 controller (see D:/DeepTuneBenchmarks/results/ucf101-campaign03/PAUSED-BY-USER.md):
+  1/333 done (r3d18_frozen split1 seed42, 0.8364). Do not relaunch resume_full_campaign.py unchanged: it is pinned to job 1.
+- GPU now: r3d_18 feature extraction for UCF101 split 1, then the grouper study on CPU, then the full suite.
